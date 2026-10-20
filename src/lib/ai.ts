@@ -16,6 +16,7 @@ export const aiApi = {
   save: (settings: AiSettings) => invoke<void>('save_ai_settings', { settings }),
   detect: () => invoke<DetectedCli[]>('detect_ai_clis'),
   models: (baseUrl: string, apiKey: string) => invoke<AiModel[]>('list_ai_models', { baseUrl, apiKey }),
+  cliModels: (kind: ProviderKind, executable: string) => invoke<AiModel[]>('list_cli_models', { kind, executable }),
   polish: (content: string, format: FileFormat, requestId: string) => invoke<string>('polish_entry', { content, format, requestId }),
   cancel: (requestId: string) => invoke<void>('cancel_ai', { requestId }),
 }
@@ -27,6 +28,7 @@ export function useAi() {
   const defaultProvider = computed(() => settings.value.providers.find((provider) => provider.id === settings.value.defaultProviderId))
   const visible = ref(false)
   const generating = ref(false)
+  const elapsedSeconds = ref(0)
   const original = ref('')
   const result = ref('')
   const resultError = ref('')
@@ -35,6 +37,23 @@ export function useAi() {
   let settingsRevision = 0
   let pendingLoad: Promise<boolean> | undefined
   let pendingSave: Promise<boolean> | undefined
+  let progressTimer: ReturnType<typeof setInterval> | undefined
+  let progressStartedAt = 0
+
+  function stopProgress() {
+    if (progressTimer !== undefined) {
+      clearInterval(progressTimer)
+      progressTimer = undefined
+    }
+  }
+  function startProgress() {
+    stopProgress()
+    progressStartedAt = Date.now()
+    elapsedSeconds.value = 0
+    progressTimer = setInterval(() => {
+      elapsedSeconds.value = Math.floor((Date.now() - progressStartedAt) / 1000)
+    }, 1000)
+  }
 
   async function load(): Promise<boolean> {
     if (pendingSave && !(await pendingSave)) return false
@@ -68,20 +87,25 @@ export function useAi() {
   async function generate() {
     if (generating.value || !visible.value) return
     const id = crypto.randomUUID(); requestId = id
-    generating.value = true; resultError.value = ''
+    generating.value = true; resultError.value = ''; startProgress()
     try {
       const text = await aiApi.polish(original.value, activeFormat, id)
       if (requestId === id && visible.value) result.value = text
     } catch (cause) { if (requestId === id && visible.value) resultError.value = String(cause) }
-    finally { if (requestId === id) generating.value = false }
+    finally {
+      if (requestId === id) {
+        generating.value = false
+        stopProgress()
+      }
+    }
   }
   function open(content: string, format: FileFormat) {
     original.value = content; result.value = ''; activeFormat = format; resultError.value = ''; visible.value = true
     void generate()
   }
   function close() {
-    const id = requestId; requestId = ''; visible.value = false; generating.value = false
+    const id = requestId; requestId = ''; visible.value = false; generating.value = false; stopProgress()
     if (id) void aiApi.cancel(id).catch(() => {})
   }
-  return { settings, error, saving, settingsSaved, defaultProvider, visible, generating, original, result, resultError, load, save, open, generate, close }
+  return { settings, error, saving, settingsSaved, defaultProvider, visible, generating, elapsedSeconds, original, result, resultError, load, save, open, generate, close }
 }

@@ -135,6 +135,25 @@ describe('AI preview lifecycle', () => {
     await loading
     expect(ai.defaultProvider.value?.id).toBe('one')
   })
+  it('reports elapsed time while generating', async () => {
+    vi.useFakeTimers()
+    try {
+      const ai = useAi()
+      let resolve!: (text: string) => void
+      vi.spyOn(aiApi, 'polish').mockReturnValue(new Promise((done) => { resolve = done }))
+      ai.open('original', 'md')
+      vi.advanceTimersByTime(3000)
+      expect(ai.generating.value).toBe(true)
+      expect(ai.elapsedSeconds.value).toBe(3)
+      resolve('result')
+      await Promise.resolve()
+      await Promise.resolve()
+      expect(ai.generating.value).toBe(false)
+      expect(ai.elapsedSeconds.value).toBe(3)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
   it('refreshes the saved default and reports configuration read failures', async () => {
     const ai = useAi()
     vi.spyOn(aiApi, 'load')

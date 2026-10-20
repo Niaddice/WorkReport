@@ -1,10 +1,11 @@
 <script setup lang="ts">
-import { ref } from 'vue'
-import { PhArrowLeft, PhFolderOpen } from '@phosphor-icons/vue'
+import { onBeforeUnmount, onMounted, ref } from 'vue'
+import { PhArrowLeft, PhFolderOpen, PhHardDrives, PhSparkle } from '@phosphor-icons/vue'
 import { aiApi, type AiProvider, type AiSettings, type DetectedCli } from '../lib/ai'
 import type { Workspace } from '../lib/workspace'
 import { useAiSettingsDraft } from '../lib/useAiSettingsDraft'
 import ModelPicker from './ModelPicker.vue'
+import CliModelPicker from './CliModelPicker.vue'
 
 const props = defineProps<{ workspace: Workspace | null; picking: boolean; settings: AiSettings; saving: boolean; error: string; saved: boolean; save: (settings: AiSettings) => Promise<boolean> }>()
 const emit = defineEmits<{ back: []; workspace: [] }>()
@@ -16,6 +17,28 @@ const detectedOnce = ref(false)
 const localError = ref('')
 const editingId = ref('')
 const preset = ref('deepseek')
+const workspaceSection = ref<HTMLElement>()
+const aiSection = ref<HTMLElement>()
+const activeSection = ref<'workspace' | 'ai'>('workspace')
+let sectionObserver: IntersectionObserver | undefined
+function navigate(section: 'workspace' | 'ai') {
+  activeSection.value = section
+  const target = section === 'workspace' ? workspaceSection.value : aiSection.value
+  const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false
+  target?.scrollIntoView({ behavior: reduceMotion ? 'auto' : 'smooth', block: 'start' })
+}
+onMounted(() => {
+  if (!('IntersectionObserver' in window)) return
+  sectionObserver = new IntersectionObserver((entries) => {
+    const visible = entries.filter((entry) => entry.isIntersecting)
+    if (!visible.length) return
+    visible.sort((left, right) => Math.abs(left.boundingClientRect.top - 110) - Math.abs(right.boundingClientRect.top - 110))
+    activeSection.value = visible[0].target.id === 'ai-settings' ? 'ai' : 'workspace'
+  }, { rootMargin: '-100px 0px -55% 0px', threshold: 0 })
+  if (workspaceSection.value) sectionObserver.observe(workspaceSection.value)
+  if (aiSection.value) sectionObserver.observe(aiSection.value)
+})
+onBeforeUnmount(() => sectionObserver?.disconnect())
 async function detect() {
   detecting.value = true; localError.value = ''
   try { detected.value = await aiApi.detect(); detectedOnce.value = true }
@@ -40,13 +63,27 @@ function remove(id: string) {
 
 <template>
   <main class="settings-page">
-    <button class="text-action settings-back" @click="emit('back')"><PhArrowLeft :size="16" />返回首页</button>
-    <div class="settings-intro"><h1>设置</h1><p>管理工作空间与日报润色使用的 AI。</p></div>
-    <section class="settings-section" aria-labelledby="workspace-settings-title">
+    <aside class="settings-sidebar">
+      <button class="text-action settings-back" @click="emit('back')"><PhArrowLeft :size="16" />返回首页</button>
+      <div class="settings-sidebar-heading"><h1>设置</h1><p>管理工作空间与日报润色使用的 AI。</p></div>
+      <nav class="settings-nav" aria-label="设置导航">
+        <button type="button" class="settings-nav-item" :aria-current="activeSection === 'workspace' ? 'location' : undefined" @click="navigate('workspace')">
+          <span class="settings-nav-icon"><PhFolderOpen :size="18" aria-hidden="true" /></span>
+          <span class="settings-nav-copy"><strong>工作空间</strong><small>文件保存位置</small></span>
+        </button>
+        <button type="button" class="settings-nav-item" :aria-current="activeSection === 'ai' ? 'location' : undefined" @click="navigate('ai')">
+          <span class="settings-nav-icon"><PhSparkle :size="18" aria-hidden="true" /></span>
+          <span class="settings-nav-copy"><strong>AI 润色</strong><small>模型与生成偏好</small></span>
+        </button>
+      </nav>
+      <div class="settings-sidebar-note"><PhHardDrives :size="17" aria-hidden="true" /><span>日报与 AI 配置<br />只保存在本机</span></div>
+    </aside>
+    <div class="settings-content">
+    <section ref="workspaceSection" id="workspace-settings" class="settings-section" aria-labelledby="workspace-settings-title">
       <div class="settings-section-heading"><div><h2 id="workspace-settings-title">工作空间</h2><p>日报文件保存的位置</p></div><button class="text-action" :disabled="picking" @click="emit('workspace')">{{ picking ? '正在打开…' : '切换工作空间' }}</button></div>
       <div class="workspace-location"><PhFolderOpen :size="24" /><div><strong>{{ workspace?.name ?? '尚未选择工作空间' }}</strong><span>{{ workspace?.path ?? '请先选择一个本地文件夹' }}</span></div></div>
     </section>
-    <section class="settings-section" aria-labelledby="ai-settings-title">
+    <section ref="aiSection" id="ai-settings" class="settings-section" aria-labelledby="ai-settings-title">
       <div class="settings-section-heading"><div><h2 id="ai-settings-title">AI 润色</h2><p>手动选择默认 AI，选择后立即保存。</p></div><button class="text-action" :disabled="detecting || saving" @click="detect">{{ detecting ? '正在检测…' : '检测本机 CLI' }}</button></div>
       <div class="generation-preference"><label for="generation-preference">AI 生成倾向</label><p id="generation-preference-hint">描述希望的语气、篇幅和侧重点，对所有 AI 生效。留空时按原意自然润色。</p><textarea id="generation-preference" v-model="draft.generationPreference" :disabled="saving" maxlength="2000" rows="3" aria-describedby="generation-preference-hint" placeholder="例如：简洁客观，突出已完成事项和下一步计划，保留原有条目结构。" spellcheck="false"></textarea><span class="preference-count">{{ draft.generationPreference.length }} / 2000</span></div>
       <div v-if="detectedOnce" class="detected-clis">
@@ -61,12 +98,13 @@ function remove(id: string) {
           <div v-if="editingId === provider.id" class="provider-fields">
             <label>名称<input :disabled="saving" v-model="provider.name" type="text" placeholder="为这项 AI 起个名字" /></label>
             <template v-if="provider.kind === 'http'"><label>接口地址<input :disabled="saving" v-model="provider.baseUrl" type="url" placeholder="https://example.com/v1" spellcheck="false" /></label><label>API Key<input :disabled="saving" v-model="provider.apiKey" type="password" placeholder="填写 API Key，本地服务可留空" autocomplete="off" spellcheck="false" /></label><ModelPicker v-model="provider.model" :base-url="provider.baseUrl" :api-key="provider.apiKey" :disabled="saving" /><p class="field-hint">支持 Chat Completions 兼容接口，密钥保存在本机应用配置中。</p></template>
-            <template v-else><label>CLI 路径<input :disabled="saving" v-model="provider.executable" type="text" spellcheck="false" /></label><label>模型（可选）<input :disabled="saving" v-model="provider.model" type="text" placeholder="留空使用 CLI 当前默认模型" spellcheck="false" /></label><p class="field-hint">使用 CLI 已有的登录状态。首次使用前请在终端完成登录。</p></template>
+            <template v-else><label>CLI 路径<input :disabled="saving" v-model="provider.executable" type="text" spellcheck="false" /></label><CliModelPicker v-model="provider.model" :kind="provider.kind" :executable="provider.executable" :disabled="saving" /><p class="field-hint">使用 CLI 已有的登录状态。首次使用前请在终端完成登录。</p></template>
           </div>
         </article>
       </div>
       <div class="default-ai-control" v-if="draft.providers.length"><button class="text-action muted-action" :disabled="saving || !draft.defaultProviderId" @click="selectDefault(null)">暂不设置默认 AI</button><span v-if="!draft.defaultProviderId">尚未选择默认 AI</span></div><div class="ai-settings-footer"><span>只有点击“AI 润色”时，才会将当前日报发送至默认 AI。</span><button class="text-action" :disabled="saving" @click="flush">{{ saving ? '正在保存…' : '保存 AI 设置' }}</button></div>
       <p v-if="error || localError" class="settings-error" role="alert">{{ error || localError }}</p><p v-else-if="saving" class="settings-muted" role="status">正在保存 AI 设置…</p><p v-else-if="!unchanged" class="settings-muted" role="status">设置尚未保存，返回首页时会自动保存。</p><p v-else-if="saved" class="settings-success" role="status">AI 设置已保存。</p>
     </section>
+    </div>
   </main>
 </template>

@@ -59,6 +59,33 @@ failed() {
   fi
   exit "$code"
 }
+verify_macos_app() {
+  local app="$1"
+  local signature
+  STEP='校验 macOS 签名'
+  log '校验 macOS 代码签名…'
+  if ! codesign --verify --deep --strict --verbose=2 "$app" 2>&1; then
+    die 'WorkReport.app 代码签名无效；下载后会被 macOS 判为“已损坏”。请检查 bundle.macOS.signingIdentity 与构建签名。'
+  fi
+  signature="$(codesign -dv --verbose=4 "$app" 2>&1 || true)"
+  printf '%s\n' "$signature" | grep -E '^(Identifier|Authority|TeamIdentifier|Signature)=' || true
+  case "$signature" in
+    *"Authority=Developer ID Application"*)
+      if ! spctl --assess --type execute --verbose=4 "$app" 2>&1; then
+        die 'WorkReport.app 未通过 Gatekeeper 验证（可能未公证或签名不完整）；请配置 Apple 公证凭据后再发布。'
+      fi
+      log 'macOS 签名与公证校验通过。'
+      ;;
+    *"Signature=adhoc"*)
+      log '警告：macOS 安装包为 ad-hoc 签名，未经过 Apple 公证。'
+      printf '  下载后首次打开前请执行：xattr -dr com.apple.quarantine "/Applications/WorkReport.app"\n'
+      printf '  或右键选择“打开”；详见 README 的“macOS 安装与签名”。\n'
+      ;;
+    *)
+      die '无法识别 WorkReport.app 的签名类型；请使用 Developer ID 或 ad-hoc 签名。'
+      ;;
+  esac
+}
 trap cleanup EXIT
 trap failed ERR
 
@@ -98,7 +125,7 @@ fi
 STEP='检查发布环境'
 for tool in git gh npm cargo rustc; do need "$tool"; done
 case "$(uname -s)" in
-  Darwin) PLATFORM=macos; BUNDLES=app; need ditto ;;
+  Darwin) PLATFORM=macos; BUNDLES=app; need ditto; need codesign; need spctl ;;
   Linux) PLATFORM=linux; BUNDLES=deb,appimage ;;
   MINGW*|MSYS*|CYGWIN*) PLATFORM=windows; BUNDLES=nsis,msi ;;
   *) die '暂不支持当前构建平台。' ;;
@@ -244,6 +271,8 @@ NODE
     [[ -d "$APP" ]] || die '没有生成 WorkReport.app。'
     APP_VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Contents/Info.plist")"
     [[ "$APP_VERSION" == "$VERSION" ]] || die '安装包版本与发布版本不一致。'
+    verify_macos_app "$APP"
+    STEP='打包 macOS 安装包'
     ASSET="$RELEASE_DIR/WorkReport_${TAG}_macos_$(uname -m).app.zip"
     ditto -c -k --sequesterRsrc --keepParent "$APP" "$ASSET"
     ASSETS+=("$ASSET")

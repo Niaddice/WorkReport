@@ -52,7 +52,7 @@ pub struct DetectedCli {
     pub executable: String,
     pub version: String,
 }
-#[derive(Serialize)]
+#[derive(Debug, Serialize)]
 pub struct ModelInfo {
     pub id: String,
     pub name: String,
@@ -350,6 +350,119 @@ pub async fn list_models(base_url: &str, api_key: &str) -> Result<Vec<ModelInfo>
         .map_err(|_| "模型列表不是有效 JSON，可手动填写模型 ID")?;
     parse_models(&value)
 }
+fn parse_codex_models(bytes: &[u8]) -> Result<Vec<ModelInfo>, String> {
+    let value: Value = serde_json::from_slice(bytes)
+        .map_err(|_| "Codex 未返回可解析的模型列表，可手动填写模型 ID")?;
+    let models = value
+        .get("models")
+        .and_then(Value::as_array)
+        .ok_or("Codex 模型列表格式无效，可手动填写模型 ID")?;
+    let mut seen = HashSet::new();
+    let mut result = Vec::new();
+    for item in models {
+        if item.get("visibility").and_then(Value::as_str) != Some("list") {
+            continue;
+        }
+        if item.get("supported_in_api").and_then(Value::as_bool) == Some(false) {
+            continue;
+        }
+        let Some(id) = item
+            .get("slug")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|id| !id.is_empty())
+        else {
+            continue;
+        };
+        if !seen.insert(id) {
+            continue;
+        }
+        let name = item
+            .get("display_name")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+            .unwrap_or(id);
+        result.push(ModelInfo {
+            id: id.into(),
+            name: name.into(),
+        });
+    }
+    Ok(result)
+}
+fn parse_opencode_models(stdout: &str) -> Vec<ModelInfo> {
+    let mut seen = HashSet::new();
+    let mut result = Vec::new();
+    for line in stdout.lines() {
+        let id = line.trim();
+        if id.is_empty() || id.chars().any(|c| c.is_whitespace() || c == '\u{1b}') {
+            continue;
+        }
+        let Some((provider, model)) = id.split_once('/') else {
+            continue;
+        };
+        if provider.is_empty() || model.is_empty() {
+            continue;
+        }
+        let id = id.to_string();
+        if !seen.insert(id.clone()) {
+            continue;
+        }
+        result.push(ModelInfo {
+            id: id.clone(),
+            name: id,
+        });
+    }
+    result
+}
+pub async fn list_cli_models(
+    kind: &ProviderKind,
+    executable: &str,
+) -> Result<Vec<ModelInfo>, String> {
+    if *kind == ProviderKind::Claude {
+        return Err(
+            "Claude Code 不提供模型列表，请手动填写模型 ID，或留空使用 CLI 默认模型".into(),
+        );
+    }
+    if *kind == ProviderKind::Http {
+        return Err("模型接口请使用“获取模型”从 HTTP 服务读取".into());
+    }
+    if !Path::new(executable).is_absolute() || !Path::new(executable).is_file() {
+        return Err("CLI 路径无效，请重新检测或填写绝对路径".into());
+    }
+    let mut child = command(executable);
+    child
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let (name, args): (&str, &[&str]) = match kind {
+        ProviderKind::Codex => ("Codex", &["debug", "models"]),
+        ProviderKind::Opencode => ("OpenCode", &["models"]),
+        _ => return Err("该 AI 类型不支持获取模型列表".into()),
+    };
+    child.args(args);
+    let output = timeout(Duration::from_secs(30), child.output())
+        .await
+        .map_err(|_| format!("{name} 获取模型列表超时，请重试或手动填写模型 ID"))?
+        .map_err(|_| format!("无法运行 {name} 获取模型列表，请检查 CLI 路径"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "{name} 获取模型列表失败（退出码 {}），请在终端确认已登录并可正常使用，或手动填写模型 ID",
+            output
+                .status
+                .code()
+                .map(|code| code.to_string())
+                .unwrap_or_else(|| "未知".into())
+        ));
+    }
+    match kind {
+        ProviderKind::Codex => parse_codex_models(&output.stdout),
+        ProviderKind::Opencode => Ok(parse_opencode_models(&String::from_utf8_lossy(
+            &output.stdout,
+        ))),
+        _ => Err("该 AI 类型不支持获取模型列表".into()),
+    }
+}
 fn validate_preference(preference: &str) -> Result<(), String> {
     if preference.chars().count() > 2000 {
         return Err("AI 生成倾向不能超过 2000 字".into());
@@ -448,6 +561,8 @@ async fn polish_cli(
         .stderr(Stdio::piped());
     match provider.kind {
         ProviderKind::Codex => {
+            // Polishing is a short, single-turn task. Keep Codex in low-reasoning
+            // mode and skip plugins, MCP servers and hooks that add startup latency.
             child
                 .args([
                     "exec",
@@ -455,10 +570,35 @@ async fn polish_cli(
                     "read-only",
                     "--skip-git-repo-check",
                     "--ephemeral",
+                    "--ignore-rules",
                     "--color",
                     "never",
                     "-c",
                     "approval_policy=\"never\"",
+                    "-c",
+                    "model_reasoning_effort=\"low\"",
+                    "-c",
+                    "notify=[]",
+                    "-c",
+                    "mcp_servers={}",
+                    "-c",
+                    "plugins={}",
+                    "-c",
+                    "features.plugins=false",
+                    "-c",
+                    "features.remote_plugin=false",
+                    "-c",
+                    "features.browser_use=false",
+                    "-c",
+                    "features.computer_use=false",
+                    "-c",
+                    "features.apps=false",
+                    "-c",
+                    "features.multi_agent=false",
+                    "-c",
+                    "features.skill_search=false",
+                    "-c",
+                    "features.hooks=false",
                     "-c",
                     "features.shell_tool=false",
                     "-c",
@@ -868,6 +1008,156 @@ mod tests {
         assert!(prompt.contains("正式专业，保留条目结构"));
         assert!(prompt.contains("<daily_report>\n今天完成适配测试\n</daily_report>"));
         assert!(prompt.contains("保留合理的 Markdown 格式"));
+    }
+    #[test]
+    fn parses_visible_codex_models_and_skips_hidden_or_api_disabled() {
+        let value = json!({"models":[
+            {"slug":"gpt-visible","display_name":"GPT Visible","visibility":"list","supported_in_api":true},
+            {"slug":"hidden","display_name":"Hidden","visibility":"hide","supported_in_api":true},
+            {"slug":"no-api","display_name":"No API","visibility":"list","supported_in_api":false},
+            {"slug":"gpt-visible","display_name":"Duplicate","visibility":"list","supported_in_api":true},
+            {"slug":"gpt-fallback","visibility":"list","supported_in_api":true},
+            {"slug":"","display_name":"Empty","visibility":"list","supported_in_api":true}
+        ]});
+        let models = parse_codex_models(value.to_string().as_bytes()).unwrap();
+        assert_eq!(models.len(), 2);
+        assert_eq!(models[0].id, "gpt-visible");
+        assert_eq!(models[0].name, "GPT Visible");
+        assert_eq!(models[1].id, "gpt-fallback");
+        assert_eq!(models[1].name, "gpt-fallback");
+        assert!(parse_codex_models(b"not-json").is_err());
+    }
+    #[test]
+    fn parses_opencode_provider_model_lines() {
+        let models = parse_opencode_models(
+            "opencode/model-a\nanthropic/claude-model\nnot-a-model\nopencode/model-a\n\n",
+        );
+        assert_eq!(models.len(), 2);
+        assert_eq!(models[0].id, "opencode/model-a");
+        assert_eq!(models[1].id, "anthropic/claude-model");
+    }
+    #[tokio::test]
+    async fn claude_and_http_report_that_they_have_no_cli_catalog() {
+        let error = list_cli_models(&ProviderKind::Claude, "/bin/true")
+            .await
+            .unwrap_err();
+        assert!(error.contains("不提供模型列表"));
+        assert!(list_cli_models(&ProviderKind::Http, "/bin/true")
+            .await
+            .is_err());
+    }
+    #[tokio::test]
+    async fn rejects_relative_cli_paths_for_model_listing() {
+        assert!(list_cli_models(&ProviderKind::Codex, "codex")
+            .await
+            .is_err());
+    }
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn lists_visible_models_from_codex_cli() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().unwrap();
+        let executable = root.path().join("mock-codex");
+        fs::write(
+            &executable,
+            "#!/bin/sh\n[ \"$1\" = \"debug\" ] || exit 4\n[ \"$2\" = \"models\" ] || exit 4\nprintf '%s' '{\"models\":[{\"slug\":\"gpt-a\",\"display_name\":\"GPT A\",\"visibility\":\"list\",\"supported_in_api\":true},{\"slug\":\"hidden\",\"visibility\":\"hide\",\"supported_in_api\":true}]}'\n",
+        )
+        .unwrap();
+        fs::set_permissions(&executable, fs::Permissions::from_mode(0o700)).unwrap();
+        let models = list_cli_models(&ProviderKind::Codex, executable.to_str().unwrap())
+            .await
+            .unwrap();
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0].id, "gpt-a");
+        assert_eq!(models[0].name, "GPT A");
+    }
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn lists_opencode_models_from_cli() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().unwrap();
+        let executable = root.path().join("mock-opencode");
+        fs::write(
+            &executable,
+            "#!/bin/sh\n[ \"$1\" = \"models\" ] || exit 4\nprintf 'opencode/model-a\\nanthropic/model-b\\nnot-a-model\\n'\n",
+        )
+        .unwrap();
+        fs::set_permissions(&executable, fs::Permissions::from_mode(0o700)).unwrap();
+        let models = list_cli_models(&ProviderKind::Opencode, executable.to_str().unwrap())
+            .await
+            .unwrap();
+        assert_eq!(models.len(), 2);
+        assert_eq!(models[0].id, "opencode/model-a");
+        assert_eq!(models[1].id, "anthropic/model-b");
+    }
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn reports_cli_model_listing_failure_without_echoing_stderr() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().unwrap();
+        let executable = root.path().join("mock-codex");
+        fs::write(&executable, "#!/bin/sh\necho 'secret-token' >&2\nexit 7\n").unwrap();
+        fs::set_permissions(&executable, fs::Permissions::from_mode(0o700)).unwrap();
+        let error = list_cli_models(&ProviderKind::Codex, executable.to_str().unwrap())
+            .await
+            .unwrap_err();
+        assert!(error.contains("退出码 7"));
+        assert!(!error.contains("secret-token"));
+    }
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn codex_polish_uses_low_latency_flags_and_reads_last_message() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().unwrap();
+        let executable = root.path().join("mock-codex");
+        fs::write(
+            &executable,
+            r#"#!/bin/sh
+dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+printf '%s\n' "$@" > "$dir/args.txt"
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = "--output-last-message" ]; then
+    shift
+    printf '润色后的日报' > "$1"
+    break
+  fi
+  shift
+done
+"#,
+        )
+        .unwrap();
+        fs::set_permissions(&executable, fs::Permissions::from_mode(0o700)).unwrap();
+        let provider = Provider {
+            id: "mock-codex".into(),
+            name: "Mock Codex".into(),
+            kind: ProviderKind::Codex,
+            executable: executable.to_str().unwrap().into(),
+            model: String::new(),
+            base_url: String::new(),
+            api_key: String::new(),
+        };
+        let result = polish(
+            &provider,
+            "今天完成适配测试",
+            "md",
+            "",
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(result, "润色后的日报");
+        let args = fs::read_to_string(root.path().join("args.txt")).unwrap();
+        for expected in [
+            "--ignore-rules",
+            "model_reasoning_effort=\"low\"",
+            "notify=[]",
+            "mcp_servers={}",
+            "plugins={}",
+            "features.plugins=false",
+            "features.hooks=false",
+        ] {
+            assert!(args.contains(expected), "missing {expected}: {args}");
+        }
     }
     #[test]
     fn handles_text_blocks_and_empty_results() {

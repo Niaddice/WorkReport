@@ -4,20 +4,20 @@ mod workspace;
 use std::{fs, sync::Mutex};
 use tauri::{Manager, State};
 use tauri_plugin_opener::OpenerExt;
-use workspace::{Document, Entry, Format, Workspace, WorkspaceInfo};
+use workspace::{Document, Entry, Format, Preview, Workspace, WorkspaceInfo};
 
 #[derive(Default)]
 struct AppState(Mutex<Option<Workspace>>);
 
 fn with_workspace<T>(
     state: &State<'_, AppState>,
-    action: impl FnOnce(&Workspace) -> Result<T, String>,
+    action: impl FnOnce(&mut Workspace) -> Result<T, String>,
 ) -> Result<T, String> {
-    let guard = state
+    let mut guard = state
         .0
         .lock()
         .map_err(|_| "工作空间忙，请重试".to_string())?;
-    action(guard.as_ref().ok_or("请先选择工作空间")?)
+    action(guard.as_mut().ok_or("请先选择工作空间")?)
 }
 
 #[tauri::command]
@@ -32,7 +32,7 @@ fn open_workspace(
     state: State<'_, AppState>,
     path: String,
 ) -> Result<WorkspaceInfo, String> {
-    let workspace = Workspace::open(&path)?;
+    let mut workspace = Workspace::open(&path)?;
     // Validate the index before replacing the currently active workspace.
     workspace.list()?;
     let info = workspace.info();
@@ -50,6 +50,11 @@ fn open_workspace(
 #[tauri::command]
 fn list_entries(state: State<'_, AppState>) -> Result<Vec<Entry>, String> {
     with_workspace(&state, Workspace::list)
+}
+
+#[tauri::command]
+fn list_previews(state: State<'_, AppState>, dates: Vec<String>) -> Result<Vec<Preview>, String> {
+    with_workspace(&state, |workspace| workspace.previews(&dates))
 }
 
 #[tauri::command]
@@ -80,8 +85,11 @@ fn create_entry(
     state: State<'_, AppState>,
     date: String,
     format: Format,
+    content: String,
 ) -> Result<Document, String> {
-    with_workspace(&state, |workspace| workspace.create(&date, format))
+    with_workspace(&state, |workspace| {
+        workspace.create_with_content(&date, format, &content)
+    })
 }
 
 #[tauri::command]
@@ -136,6 +144,13 @@ async fn list_ai_models(base_url: String, api_key: String) -> Result<Vec<ai::Mod
     ai::list_models(&base_url, &api_key).await
 }
 #[tauri::command]
+async fn list_cli_models(
+    kind: ai::ProviderKind,
+    executable: String,
+) -> Result<Vec<ai::ModelInfo>, String> {
+    ai::list_cli_models(&kind, &executable).await
+}
+#[tauri::command]
 fn cancel_ai(state: State<'_, ai::Runtime>, request_id: String) {
     state.cancel(&request_id);
 }
@@ -179,6 +194,7 @@ pub fn run() {
             open_workspace,
             open_workspace_directory,
             list_entries,
+            list_previews,
             read_entry,
             create_entry,
             save_entry,
@@ -188,6 +204,7 @@ pub fn run() {
             save_ai_settings,
             detect_ai_clis,
             list_ai_models,
+            list_cli_models,
             cancel_ai,
             polish_entry
         ])

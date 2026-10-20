@@ -6,8 +6,8 @@ import { dateKey, lunarDay, monthDays, movePeriod, weekdays, weekDays, type View
 import { getChinaDayMeta, isWeekend } from '../lib/chinaHolidays'
 import type { Entry } from '../lib/workspace'
 
-const props = defineProps<{ selected: string; entries: Entry[]; disabled: boolean }>()
-const emit = defineEmits<{ select: [date: string]; create: [date: string] }>()
+const props = defineProps<{ selected: string; entries: Entry[]; previews: Record<string, string>; disabled: boolean }>()
+const emit = defineEmits<{ select: [date: string]; previews: [dates: string[]] }>()
 const current = ref(dayjs())
 const view = ref<ViewMode>('month')
 const modes = [{ value: 'week', label: '周' }, { value: 'month', label: '月' }, { value: 'year', label: '年' }] as const
@@ -17,6 +17,7 @@ const days = computed(() => view.value === 'week' ? weekDays(current.value) : mo
 const months = computed(() => Array.from({ length: 12 }, (_, index) => current.value.startOf('year').month(index)))
 const entryMap = computed(() => new Map([...props.entries].reverse().map((entry) => [entry.date, entry])))
 const count = computed(() => props.entries.filter((entry) => dayjs(entry.date).isSame(current.value, view.value === 'year' ? 'year' : view.value === 'week' ? 'week' : 'month')).length)
+const visibleDates = computed(() => view.value === 'year' ? [] : days.value.map(dateKey))
 const meta = (day: Dayjs) => getChinaDayMeta(day.format('YYYY-MM-DD'))
 function move(step: number) { current.value = movePeriod(current.value, view.value, step) }
 function goToday() {
@@ -25,9 +26,12 @@ function goToday() {
   emit('select', today.value)
 }
 function dayLabel(day: Dayjs) {
-  return `${day.format('YYYY年M月D日 dddd')}${entryMap.value.has(dateKey(day)) ? '，已有日报' : '，暂无日报'}，双击或按回车新增或打开`
+  return `${day.format('YYYY年M月D日 dddd')}${entryMap.value.has(dateKey(day)) ? '，已有日报' : '，暂无日报'}，点击打开或开始记录`
 }
 watch(() => props.selected, (value) => { current.value = dayjs(value) })
+watch([visibleDates, () => props.entries], () => {
+  if (visibleDates.value.length) emit('previews', visibleDates.value)
+}, { immediate: true })
 </script>
 
 <template>
@@ -57,10 +61,10 @@ watch(() => props.selected, (value) => { current.value = dayjs(value) })
           selected: dateKey(day) === selected,
           weekend: isWeekend(day.format('YYYY-MM-DD')),
           'has-entry': entryMap.has(dateKey(day)),
-        }" :disabled="disabled" :aria-label="dayLabel(day)" :aria-pressed="dateKey(day) === selected" @click="emit('select', dateKey(day))" @dblclick="emit('create', dateKey(day))" @keydown.enter.prevent="emit('create', dateKey(day))">
+        }" :disabled="disabled" :aria-label="dayLabel(day)" :aria-pressed="dateKey(day) === selected" @click="emit('select', dateKey(day))">
           <div class="day-top"><span class="day-number">{{ day.date() }}</span><span class="day-indicators"><span v-if="entryMap.has(dateKey(day))" class="entry-dot" aria-hidden="true"></span><span v-if="meta(day)" class="holiday-label" :class="meta(day)?.kind">{{ meta(day)?.kind === 'workday' ? '班' : '休' }}</span></span></div>
           <span class="lunar-label" :class="{ festival: meta(day)?.kind === 'holiday' }">{{ meta(day)?.name ?? lunarDay(day) }}</span>
-          <span v-if="entryMap.has(dateKey(day))" class="entry-preview"><PhFileText :size="13" weight="fill" /><span>{{ entryMap.get(dateKey(day))?.preview }}</span></span>
+          <span v-if="entryMap.has(dateKey(day))" class="entry-preview"><PhFileText :size="13" weight="fill" /><span>{{ previews[dateKey(day)] ?? '加载中…' }}</span></span>
         </button>
       </div>
     </div>
@@ -70,10 +74,10 @@ watch(() => props.selected, (value) => { current.value = dayjs(value) })
         <button class="mini-title" @click="current = month; view = 'month'">{{ month.format('M 月') }}</button>
         <div class="mini-weekdays"><span v-for="name in weekdays" :key="name">{{ name }}</span></div>
         <div class="mini-days">
-          <button v-for="day in monthDays(month)" :key="dateKey(day)" :disabled="disabled" :aria-label="dayLabel(day)" :aria-pressed="dateKey(day) === selected" :class="{ outside: !day.isSame(month, 'month'), selected: dateKey(day) === selected, 'is-today': dateKey(day) === today, 'has-entry': entryMap.has(dateKey(day)), weekend: isWeekend(day.format('YYYY-MM-DD')) }" @click="emit('select', dateKey(day))" @dblclick="emit('create', dateKey(day))" @keydown.enter.prevent="emit('create', dateKey(day))">{{ day.date() }}</button>
+          <button v-for="day in monthDays(month)" :key="dateKey(day)" :disabled="disabled" :aria-label="dayLabel(day)" :aria-pressed="dateKey(day) === selected" :class="{ outside: !day.isSame(month, 'month'), selected: dateKey(day) === selected, 'is-today': dateKey(day) === today, 'has-entry': entryMap.has(dateKey(day)), weekend: isWeekend(day.format('YYYY-MM-DD')) }" @click="emit('select', dateKey(day))">{{ day.date() }}</button>
         </div>
       </section>
     </div>
-    <footer class="calendar-footer"><span><PhCircle :size="8" weight="fill" />已记录日报</span><span>{{ view === 'year' ? '本年' : view === 'week' ? '本周' : '本月' }} {{ count }} 篇<span class="footer-divider">·</span>双击日期，开始记录</span></footer>
+    <footer class="calendar-footer"><span><PhCircle :size="8" weight="fill" />已记录日报</span><span>{{ view === 'year' ? '本年' : view === 'week' ? '本周' : '本月' }} {{ count }} 篇<span class="footer-divider">·</span>点击日期，开始记录</span></footer>
   </section>
 </template>

@@ -50,6 +50,18 @@ elif tool == 'npm':
                 path.write_text('local build fixture')
 elif tool in ('cargo', 'rustc'):
     pass
+elif tool == 'codesign':
+    if '--verify' in args:
+        sys.exit(1 if os.environ.get('RELEASE_TEST_FAIL_CODESIGN') else 0)
+    if '-dv' in args or '--display' in args:
+        if os.environ.get('RELEASE_TEST_ADHOC', '1') == '0':
+            print('Authority=Developer ID Application: Release Test (TEAMID)')
+        else:
+            print('Signature=adhoc')
+        sys.exit(0)
+    sys.exit(0)
+elif tool == 'spctl':
+    sys.exit(1 if os.environ.get('RELEASE_TEST_FAIL_SPCTL') else 0)
 elif tool == 'gh':
     state = json.loads(state_file.read_text()) if state_file.exists() else {}
     def save(): state_file.write_text(json.dumps(state))
@@ -112,7 +124,7 @@ class ReleaseTest(unittest.TestCase):
         self.initial_commit = self.real_git('--git-dir', str(self.remote), 'rev-parse', 'main').strip()
         tools = self.base / 'bin'
         tools.mkdir()
-        for tool in ('git', 'gh', 'npm', 'cargo', 'rustc', 'uname'):
+        for tool in ('git', 'gh', 'npm', 'cargo', 'rustc', 'uname', 'codesign', 'spctl'):
             script = tools / tool
             script.write_text(FAKE_TOOL)
             script.chmod(0o755)
@@ -231,11 +243,27 @@ class ReleaseTest(unittest.TestCase):
 
     @unittest.skipUnless(Path('/usr/libexec/PlistBuddy').exists() and shutil.which('ditto'), 'macOS packaging tools required')
     def test_macos_archive_contains_the_app_bundle(self):
-        self.run_release('0.10.0', RELEASE_TEST_PLATFORM='Darwin')
+        output = self.run_release('0.10.0', RELEASE_TEST_PLATFORM='Darwin')
+        self.assertIn('ad-hoc', output)
+        self.assertIn('xattr -dr com.apple.quarantine', output)
         import zipfile
         asset = next(Path(a) for a in self.state()['v0.10.0']['assets'] if a.endswith('.app.zip'))
         with zipfile.ZipFile(asset) as archive:
             self.assertIn('WorkReport.app/Contents/Info.plist', archive.namelist())
+
+    @unittest.skipUnless(Path('/usr/libexec/PlistBuddy').exists() and shutil.which('ditto'), 'macOS packaging tools required')
+    def test_macos_broken_signature_never_publishes(self):
+        output = self.run_release('0.12.0', success=False, RELEASE_TEST_PLATFORM='Darwin', RELEASE_TEST_FAIL_CODESIGN='1')
+        self.assertIn('代码签名无效', output)
+        self.assertEqual(self.state(), {})
+        self.assertEqual(self.real_git('--git-dir', str(self.remote), 'rev-parse', 'main').strip(), self.initial_commit)
+
+    @unittest.skipUnless(Path('/usr/libexec/PlistBuddy').exists() and shutil.which('ditto'), 'macOS packaging tools required')
+    def test_macos_unnotarized_developer_id_never_publishes(self):
+        output = self.run_release('0.13.0', success=False, RELEASE_TEST_PLATFORM='Darwin', RELEASE_TEST_ADHOC='0', RELEASE_TEST_FAIL_SPCTL='1')
+        self.assertIn('未通过 Gatekeeper', output)
+        self.assertEqual(self.state(), {})
+        self.assertEqual(self.real_git('--git-dir', str(self.remote), 'rev-parse', 'main').strip(), self.initial_commit)
 
     def test_windows_installer_assets_are_collected(self):
         self.run_release('0.11.0', RELEASE_TEST_PLATFORM='MINGW64_NT')
