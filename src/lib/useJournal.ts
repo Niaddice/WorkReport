@@ -17,8 +17,16 @@ export function useJournal() {
   const busy = ref(false)
   const saving = ref(false)
   const error = ref('')
+  const backupWarning = ref('')
+  const backupRetrying = ref(false)
   const savedAt = ref<Date | null>(null)
+  const canUndo = ref(false)
+  const canRedo = ref(false)
   const dirty = computed(() => document.value !== null && draft.value !== document.value.content)
+  const undoStack: string[] = []
+  const redoStack: string[] = []
+  const HISTORY_LIMIT = 100
+  let lastHistoryAt = 0
   let timer: ReturnType<typeof setTimeout> | undefined
   let pendingSave: Promise<boolean> | null = null
   let previewRevision = 0
@@ -39,6 +47,7 @@ export function useJournal() {
   async function refreshIndex() {
     clearPreviews()
     entries.value = await api.list()
+    try { backupWarning.value = await api.backupWarning() ?? '' } catch { /* Status cannot block reading the primary store. */ }
   }
 
   function invalidatePreview(date: string) {
@@ -54,11 +63,33 @@ export function useJournal() {
     entries.value = next
   }
 
-  function applyDocument(value: Document | null) {
+  function updateHistoryFlags() {
+    canUndo.value = undoStack.length > 0
+    canRedo.value = redoStack.length > 0
+  }
+
+  function resetHistory() {
+    undoStack.length = 0
+    redoStack.length = 0
+    lastHistoryAt = 0
+    updateHistoryFlags()
+  }
+
+  function pushUndo(value: string) {
+    if (undoStack[undoStack.length - 1] === value) return
+    undoStack.push(value)
+    if (undoStack.length > HISTORY_LIMIT) undoStack.shift()
+    redoStack.length = 0
+    updateHistoryFlags()
+  }
+
+  function applyDocument(value: Document | null, preserveHistory = false) {
     isNewDraft.value = false
     document.value = value
+    if (value) backupWarning.value = value.backupWarning ?? ''
     draft.value = value?.content ?? ''
     savedAt.value = null
+    if (!preserveHistory) resetHistory()
   }
 
   function applyDraft(date: string, format: FileFormat = 'md') {
@@ -66,6 +97,7 @@ export function useJournal() {
     document.value = emptyDocument(date, format)
     draft.value = ''
     savedAt.value = null
+    resetHistory()
   }
 
   async function loadPreviews(dates: string[]) {
@@ -98,7 +130,7 @@ export function useJournal() {
 
   async function flush(): Promise<boolean> {
     clearTimeout(timer)
-    if (pendingSave) return pendingSave
+    if (pendingSave) return pendingSave.then(success => success && dirty.value ? flush() : success)
     if (!document.value) return true
     if (isNewDraft.value && !draft.value.trim()) return true
     const task = (async () => {
@@ -108,6 +140,7 @@ export function useJournal() {
         if (isNewDraft.value && document.value) {
           const created = await api.create(document.value.date, document.value.format, draft.value)
           document.value = created
+          backupWarning.value = created.backupWarning ?? ''
           isNewDraft.value = false
           savedAt.value = new Date()
           lastSaved = created
@@ -117,6 +150,7 @@ export function useJournal() {
           const snapshot = draft.value
           const saved = await api.save(document.value.date, snapshot, document.value.revision, document.value.format)
           document.value = saved
+          backupWarning.value = saved.backupWarning ?? ''
           savedAt.value = new Date()
           lastSaved = saved
         }
@@ -141,14 +175,48 @@ export function useJournal() {
         saving.value = false
       }
     })
-    return task
+    // Preview reads can outlive the write; include any edits made during them.
+    return task.then(success => success && dirty.value ? flush() : success)
   }
 
-  function edit(content: string) {
-    draft.value = content
+  function scheduleSave() {
     clearTimeout(timer)
     // A failed save needs a deliberate retry; keep the draft intact.
     if (!error.value) timer = setTimeout(() => { void flush() }, 650)
+  }
+
+  function edit(content: string, forceHistory = false) {
+    if (!document.value || content === draft.value) return
+    const now = Date.now()
+    if (forceHistory || now - lastHistoryAt > 800) {
+      pushUndo(draft.value)
+      lastHistoryAt = now
+    }
+    draft.value = content
+    scheduleSave()
+  }
+
+  function undo(): boolean {
+    if (!document.value || !undoStack.length) return false
+    clearTimeout(timer)
+    redoStack.push(draft.value)
+    draft.value = undoStack.pop()!
+    lastHistoryAt = 0
+    updateHistoryFlags()
+    scheduleSave()
+    return true
+  }
+
+  function redo(): boolean {
+    if (!document.value || !redoStack.length) return false
+    clearTimeout(timer)
+    undoStack.push(draft.value)
+    if (undoStack.length > HISTORY_LIMIT) undoStack.shift()
+    draft.value = redoStack.pop()!
+    lastHistoryAt = 0
+    updateHistoryFlags()
+    scheduleSave()
+    return true
   }
 
   async function select(date: string): Promise<boolean> {
@@ -176,6 +244,7 @@ export function useJournal() {
       if (!(await flush())) return false
       const nextWorkspace = await api.open(path)
       workspace.value = nextWorkspace
+      backupWarning.value = ''
       // Clear the old draft immediately after the backend changes workspace.
       applyDocument(null)
       entries.value = []
@@ -222,7 +291,7 @@ export function useJournal() {
       }
       const current = document.value!
       const switched = await api.switchFormat(current.date, current.format, format, current.revision)
-      applyDocument(switched)
+      applyDocument(switched, true)
       upsertEntry(switched)
       error.value = ''
       return true
@@ -230,7 +299,24 @@ export function useJournal() {
     finally { busy.value = false }
   }
 
+  async function retryBackup(): Promise<boolean> {
+    if (!workspace.value || backupRetrying.value || busy.value) return false
+    const path = workspace.value.path
+    backupRetrying.value = true
+    try {
+      if (!(await flush())) return false
+      await api.retryBackup(path)
+      if (workspace.value?.path !== path) return false
+      backupWarning.value = ''
+      if (document.value) document.value = { ...document.value, backupWarning: undefined }
+      return true
+    } catch (cause) {
+      if (workspace.value?.path === path) backupWarning.value = `文件已保存，数据库备份未完成：${String(cause)}`
+      return false
+    } finally { backupRetrying.value = false }
+  }
+
   function dispose() { clearTimeout(timer) }
 
-  return { workspace, entries, previews, selectedDate, document, isNewDraft, draft, dirty, busy, saving, error, savedAt, edit, flush, select, open, switchFormat, reload, refresh, loadPreviews, reportError, dispose }
+  return { workspace, entries, previews, selectedDate, document, isNewDraft, draft, dirty, canUndo, canRedo, busy, saving, error, backupWarning, backupRetrying, retryBackup, savedAt, edit, undo, redo, flush, select, open, switchFormat, reload, refresh, loadPreviews, reportError, dispose }
 }

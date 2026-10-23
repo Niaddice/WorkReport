@@ -1,0 +1,9 @@
+<component name="libraryTable">
+  <library name="WorkReport_0.1.0_macos_arm64.app">
+    <CLASSES>
+      <root url="jar://$PROJECT_DIR$/src-tauri/target/release/bundle/macos/WorkReport_0.1.0_macos_arm64.app.zip!/" />
+    </CLASSES>
+    <JAVADOC />
+    <SOURCES />
+  </library>
+</component>

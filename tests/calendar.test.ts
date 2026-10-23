@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import dayjs from 'dayjs'
-import { dateKey, lunarDay, monthDays, movePeriod, weekDays } from '../src/lib/calendar'
+import { dateKey, lunarDay, monthDays, movePeriod, rangeDateKeys, weekDays } from '../src/lib/calendar'
 import { getChinaDayMeta, isWeekend } from '../src/lib/chinaHolidays'
 
 describe('preserved calendar behavior', () => {
@@ -35,5 +35,14 @@ describe('preserved calendar behavior', () => {
     expect(isWeekend('2026-10-11')).toBe(true)
     expect(isWeekend('2026-04-26')).toBe(true)
     expect(getChinaDayMeta('2027-01-01')?.name).toBe('元旦')
+  })
+
+  it('builds inclusive date keys for a range regardless of drag direction', () => {
+    expect(rangeDateKeys('20261018', '20261020')).toEqual(['20261018', '20261019', '20261020'])
+    expect(rangeDateKeys('20261020', '20261018')).toEqual(['20261018', '20261019', '20261020'])
+    expect(rangeDateKeys('20261018', '20261018')).toEqual(['20261018'])
+    expect(rangeDateKeys('', '20261018')).toEqual([])
+    expect(rangeDateKeys('20261015', '20261017')).not.toContain('20261020')
+    expect(rangeDateKeys('20261018', '20261020')).toContain('20261020')
   })
 })

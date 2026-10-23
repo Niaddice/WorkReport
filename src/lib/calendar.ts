@@ -13,6 +13,17 @@ export function monthDays(anchor: Dayjs) {
   return Array.from({ length: total }, (_, index) => start.add(index, 'day'))
 }
 
+export function rangeDateKeys(start: string, end: string) {
+  const first = dayjs(start)
+  const last = dayjs(end)
+  if (!first.isValid() || !last.isValid()) return []
+  const from = first.isAfter(last) ? last : first
+  const to = first.isAfter(last) ? first : last
+  const dates: string[] = []
+  for (let day = from; !day.isAfter(to) && dates.length < 370; day = day.add(1, 'day')) dates.push(dateKey(day))
+  return dates
+}
+
 export function weekDays(anchor: Dayjs) {
   const start = anchor.subtract((anchor.day() + 6) % 7, 'day')
   return Array.from({ length: 7 }, (_, index) => start.add(index, 'day'))

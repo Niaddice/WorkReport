@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { api, type Document } from '../src/lib/workspace'
 import { useJournal } from '../src/lib/useJournal'
 
-vi.mock('../src/lib/workspace', () => ({ api: { open: vi.fn(), list: vi.fn(), previews: vi.fn(), read: vi.fn(), create: vi.fn(), save: vi.fn(), switchFormat: vi.fn() } }))
+vi.mock('../src/lib/workspace', () => ({ api: { backupWarning: vi.fn(), retryBackup: vi.fn(), open: vi.fn(), list: vi.fn(), previews: vi.fn(), read: vi.fn(), create: vi.fn(), save: vi.fn(), switchFormat: vi.fn() } }))
 const original: Document = { date: '20261018', filename: '20261018.md', format: 'md', content: '# 日报\n', revision: 'r1' }
 
 async function setup() {
@@ -38,6 +38,49 @@ describe('workspace journal save lifecycle', () => {
     journal.dispose()
   })
 
+  it('keeps autosaving files when the database backup needs retry', async () => {
+    const journal = await setup()
+    vi.mocked(api.save).mockImplementation(async (date, content) => ({ ...original, date, content, revision: content, backupWarning: '文件已保存，数据库备份待重试' }))
+    journal.edit('first')
+    await vi.advanceTimersByTimeAsync(650)
+    expect(journal.dirty.value).toBe(false)
+    expect(journal.error.value).toBe('')
+    expect(journal.backupWarning.value).toContain('备份待重试')
+    journal.edit('second')
+    await vi.advanceTimersByTimeAsync(650)
+    expect(api.save).toHaveBeenCalledTimes(2)
+    expect(journal.document.value?.content).toBe('second')
+    expect(journal.dirty.value).toBe(false)
+    journal.dispose()
+  })
+
+  it('retries a pending backup without turning it into a journal save error', async () => {
+    const journal = await setup()
+    journal.backupWarning.value = '备份待重试'
+    journal.document.value = { ...original, backupWarning: '备份待重试' }
+    vi.mocked(api.retryBackup).mockRejectedValueOnce('数据库无法连接').mockResolvedValueOnce({})
+    expect(await journal.retryBackup()).toBe(false)
+    expect(journal.backupWarning.value).toContain('数据库无法连接')
+    expect(journal.error.value).toBe('')
+    expect(journal.dirty.value).toBe(false)
+    expect(await journal.retryBackup()).toBe(true)
+    expect(api.retryBackup).toHaveBeenLastCalledWith('/workspace')
+    expect(journal.backupWarning.value).toBe('')
+    expect(journal.document.value?.backupWarning).toBeUndefined()
+    journal.dispose()
+  })
+
+  it('keeps a disconnected database workspace accessible for settings recovery', async () => {
+    const journal = await setup()
+    vi.mocked(api.list).mockRejectedValueOnce('数据库连接失败')
+    expect(await journal.open('/workspace')).toBe(false)
+    expect(journal.workspace.value?.path).toBe('/workspace')
+    expect(journal.document.value).toBeNull()
+    expect(journal.error.value).toContain('数据库连接失败')
+    expect(journal.dirty.value).toBe(false)
+    journal.dispose()
+  })
+
   it('serializes edits made while a save is in flight', async () => {
     const journal = await setup()
     let resolveFirst!: (value: Document) => void
@@ -67,6 +110,41 @@ describe('workspace journal save lifecycle', () => {
     expect(await journal.open('/other')).toBe(false)
     expect(journal.workspace.value?.path).toBe('/workspace')
     expect(api.open).toHaveBeenCalledTimes(1)
+    journal.dispose()
+  })
+
+  it('saves typing continued during a slow calendar preview before changing date', async () => {
+    const journal = await setup()
+    let resolvePreview!: (value: []) => void
+    vi.mocked(api.previews).mockReturnValueOnce(new Promise(resolve => { resolvePreview = resolve })).mockResolvedValue([])
+    vi.mocked(api.save).mockImplementation(async (date, content) => ({ ...original, date, content, revision: content }))
+    journal.edit('first save')
+    const pending = journal.flush()
+    await Promise.resolve()
+    expect(api.previews).toHaveBeenCalledOnce()
+    journal.edit('continued typing')
+    const selecting = journal.select('20261019')
+    resolvePreview([])
+    await pending
+    expect(await selecting).toBe(true)
+    expect(api.save).toHaveBeenLastCalledWith(original.date, 'continued typing', 'first save', 'md')
+    journal.dispose()
+  })
+
+  it('does not finish the first flush while newer typing still needs saving', async () => {
+    const journal = await setup()
+    let resolvePreview!: (value: []) => void
+    vi.mocked(api.previews).mockReturnValueOnce(new Promise(resolve => { resolvePreview = resolve })).mockResolvedValue([])
+    vi.mocked(api.save).mockImplementation(async (date, content) => ({ ...original, date, content, revision: content }))
+    journal.edit('first save')
+    const pending = journal.flush()
+    await Promise.resolve()
+    expect(api.previews).toHaveBeenCalledOnce()
+    journal.edit('continued typing')
+    resolvePreview([])
+    expect(await pending).toBe(true)
+    expect(api.save).toHaveBeenLastCalledWith(original.date, 'continued typing', 'first save', 'md')
+    expect(journal.dirty.value).toBe(false)
     journal.dispose()
   })
 
@@ -185,6 +263,25 @@ describe('workspace journal save lifecycle', () => {
     resolveOld([{ date: original.date, preview: '旧预览' }])
     await old
     expect(journal.previews.value[original.date]).toBe('新预览')
+    journal.dispose()
+  })
+
+  it('undoes and redoes edits, and resets history when changing date', async () => {
+    const journal = await setup()
+    vi.mocked(api.save).mockImplementation(async (date, content) => ({ ...original, date, content, revision: 'r2' }))
+    expect(journal.canUndo.value).toBe(false)
+    journal.edit('first')
+    journal.edit('second', true)
+    expect(journal.canUndo.value).toBe(true)
+    expect(journal.undo()).toBe(true)
+    expect(journal.draft.value).toBe('first')
+    expect(journal.canRedo.value).toBe(true)
+    expect(journal.redo()).toBe(true)
+    expect(journal.draft.value).toBe('second')
+    expect(journal.canRedo.value).toBe(false)
+    expect(await journal.select('20261019')).toBe(true)
+    expect(journal.canUndo.value).toBe(false)
+    expect(journal.canRedo.value).toBe(false)
     journal.dispose()
   })
 })
