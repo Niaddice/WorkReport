@@ -6,7 +6,7 @@ export interface SelectOption {
 
 export function nextSelectOption(options: SelectOption[], current: number, direction: 1 | -1): number {
   for (let step = 1; step <= options.length; step++) {
-    const index = ((current + step * direction) % options.length + options.length) % options.length
+    const index = (((current + step * direction) % options.length) + options.length) % options.length
     if (!options[index]?.disabled) return index
   }
   return -1
@@ -20,9 +20,9 @@ export function matchSelectOption(options: SelectOption[], query: string, curren
   const normalized = query.trim().toLocaleLowerCase()
   if (!normalized) return -1
   // Repeated letters cycle through matching options, like a native select.
-  const search = [...normalized].every(character => character === normalized[0]) ? normalized[0]! : normalized
+  const search = [...normalized].every((character) => character === normalized[0]) ? normalized[0]! : normalized
   for (let step = 1; step <= options.length; step++) {
-    const index = ((current + step) % options.length + options.length) % options.length
+    const index = (((current + step) % options.length) + options.length) % options.length
     if (!options[index]?.disabled && options[index]!.label.trim().toLocaleLowerCase().startsWith(search)) return index
   }
   return -1

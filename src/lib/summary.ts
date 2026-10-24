@@ -77,50 +77,70 @@ function decodeEntities(text: string): string {
 }
 
 function htmlText(text: string): string {
-  return decodeEntities(text.replace(/<(script|style)\b[^>]*>[\s\S]*?<\/\1\s*>/gi, '')
-    .replace(/<br\s*\/?\s*>/gi, '\n').replace(/<\/(?:p|div|li|h[1-6])\s*>/gi, '\n').replace(/<[^>]*>/g, ''))
+  return decodeEntities(
+    text
+      .replace(/<(script|style)\b[^>]*>[\s\S]*?<\/\1\s*>/gi, '')
+      .replace(/<br\s*\/?\s*>/gi, '\n')
+      .replace(/<\/(?:p|div|li|h[1-6])\s*>/gi, '\n')
+      .replace(/<[^>]*>/g, ''),
+  )
 }
 
 function inlineText(tokens: Token[]): string {
-  return tokens.map(token => {
-    if (token.type === 'br') return '\n'
-    if (token.type === 'html') return htmlText((token as Tokens.HTML).text)
-    if (token.type === 'codespan') return (token as Tokens.Codespan).text
-    if (token.type === 'link' || token.type === 'image') {
-      const link = token as Tokens.Link | Tokens.Image
-      const label = 'tokens' in link && link.tokens ? inlineText(link.tokens) : decodeEntities(link.text)
-      return label === link.href || !link.href ? label : `${label} (${link.href})`
-    }
-    if ('tokens' in token && Array.isArray(token.tokens)) return inlineText(token.tokens)
-    return 'text' in token && typeof token.text === 'string' ? decodeEntities(token.text) : ''
-  }).join('')
+  return tokens
+    .map((token) => {
+      if (token.type === 'br') return '\n'
+      if (token.type === 'html') return htmlText((token as Tokens.HTML).text)
+      if (token.type === 'codespan') return (token as Tokens.Codespan).text
+      if (token.type === 'link' || token.type === 'image') {
+        const link = token as Tokens.Link | Tokens.Image
+        const label = 'tokens' in link && link.tokens ? inlineText(link.tokens) : decodeEntities(link.text)
+        return label === link.href || !link.href ? label : `${label} (${link.href})`
+      }
+      if ('tokens' in token && Array.isArray(token.tokens)) return inlineText(token.tokens)
+      return 'text' in token && typeof token.text === 'string' ? decodeEntities(token.text) : ''
+    })
+    .join('')
 }
 
 function blockText(tokens: Token[]): string {
-  return tokens.map(token => {
-    switch (token.type) {
-      case 'space': case 'hr': case 'def': return ''
-      case 'html': return htmlText((token as Tokens.HTML).text).trim()
-      case 'code': return (token as Tokens.Code).text
-      case 'blockquote': return blockText((token as Tokens.Blockquote).tokens)
-      case 'list': {
-        const list = token as Tokens.List
-        return list.items.map((item, index) => {
-          const marker = list.ordered ? `${Number(list.start) + index}. ` : '- '
-          const checkbox = item.task ? `[${item.checked ? 'x' : ' '}] ` : ''
-          const content = blockText(item.tokens)
-          return `${marker}${checkbox}${content.replace(/\n/g, '\n  ')}`
-        }).join('\n')
+  return tokens
+    .map((token) => {
+      switch (token.type) {
+        case 'space':
+        case 'hr':
+        case 'def':
+          return ''
+        case 'html':
+          return htmlText((token as Tokens.HTML).text).trim()
+        case 'code':
+          return (token as Tokens.Code).text
+        case 'blockquote':
+          return blockText((token as Tokens.Blockquote).tokens)
+        case 'list': {
+          const list = token as Tokens.List
+          return list.items
+            .map((item, index) => {
+              const marker = list.ordered ? `${Number(list.start) + index}. ` : '- '
+              const checkbox = item.task ? `[${item.checked ? 'x' : ' '}] ` : ''
+              const content = blockText(item.tokens)
+              return `${marker}${checkbox}${content.replace(/\n/g, '\n  ')}`
+            })
+            .join('\n')
+        }
+        case 'table': {
+          const table = token as Tokens.Table
+          return [table.header, ...table.rows]
+            .map((row) => row.map((cell) => inlineText(cell.tokens)).join('\t'))
+            .join('\n')
+        }
+        default:
+          if ('tokens' in token && Array.isArray(token.tokens)) return inlineText(token.tokens)
+          return 'text' in token && typeof token.text === 'string' ? decodeEntities(token.text) : ''
       }
-      case 'table': {
-        const table = token as Tokens.Table
-        return [table.header, ...table.rows].map(row => row.map(cell => inlineText(cell.tokens)).join('\t')).join('\n')
-      }
-      default:
-        if ('tokens' in token && Array.isArray(token.tokens)) return inlineText(token.tokens)
-        return 'text' in token && typeof token.text === 'string' ? decodeEntities(token.text) : ''
-    }
-  }).filter(Boolean).join('\n\n')
+    })
+    .filter(Boolean)
+    .join('\n\n')
 }
 
 /** Preserve code and readable links while removing Markdown presentation from AI results. */

@@ -8,3 +8,10 @@ test-results/
 .release/
 __pycache__/
 *.py[cod]
+
+# 仅本地使用，不随仓库发布
+release.sh
+release.command
+
+# 本地助手数据
+.workbuddy/

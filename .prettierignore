@@ -1,0 +1,7 @@
+dist/
+node_modules/
+src-tauri/target/
+src-tauri/gen/
+.release/
+package-lock.json
+TEST_REPORT.md

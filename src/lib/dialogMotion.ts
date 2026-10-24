@@ -3,7 +3,8 @@ export function createDialogMotion(getDialog: () => HTMLDialogElement | null | u
   let revision = 0
   let closeTimer: ReturnType<typeof setTimeout> | undefined
   let activeDialog: HTMLDialogElement | undefined
-  let pendingClose: { dialog: HTMLDialogElement; promise: Promise<boolean>; resolve: (closed: boolean) => void } | undefined
+  let pendingClose:
+    { dialog: HTMLDialogElement; promise: Promise<boolean>; resolve: (closed: boolean) => void } | undefined
 
   function cancelPendingClose() {
     revision += 1
@@ -42,7 +43,9 @@ export function createDialogMotion(getDialog: () => HTMLDialogElement | null | u
     activeDialog = dialog
     const closingRevision = revision
     let resolveClose!: (closed: boolean) => void
-    const completion = new Promise<boolean>(resolve => { resolveClose = resolve })
+    const completion = new Promise<boolean>((resolve) => {
+      resolveClose = resolve
+    })
     pendingClose = { dialog, promise: completion, resolve: resolveClose }
     const finish = () => {
       if (revision !== closingRevision) return
@@ -71,7 +74,7 @@ export function createDialogMotion(getDialog: () => HTMLDialogElement | null | u
     // backgrounded webview that never delivers an animation completion event.
     closeTimer = setTimeout(finish, duration + 50)
     const animations = dialog.getAnimations?.() ?? []
-    if (animations.length) void Promise.allSettled(animations.map(animation => animation.finished)).then(finish)
+    if (animations.length) void Promise.allSettled(animations.map((animation) => animation.finished)).then(finish)
     return completion
   }
 

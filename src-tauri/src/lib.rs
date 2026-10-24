@@ -2,9 +2,11 @@ mod ai;
 mod appearance;
 mod database;
 mod excel;
+mod history;
 mod holidays;
 mod settings;
 mod summary;
+mod ui;
 mod workspace;
 
 use std::{fs, sync::{Arc, Mutex}};
@@ -90,25 +92,12 @@ fn stored_settings_at(
     }
     let legacy = legacy_config_dir(app)?;
     Ok(settings::StoredSettings {
+        ui: ui::Preferences::default(),
         appearance: appearance::load(&legacy)?,
         ai: ai::load(&legacy)?,
         excel: excel::Settings::default(),
         summary: summary::Settings::default(),
         database: database::Settings::default(),
-    })
-}
-
-/// Keep the workspace selection and settings read/modify/write under the same
-/// lock, so concurrent section saves cannot overwrite one another's changes.
-fn update_settings(
-    app: &tauri::AppHandle,
-    state: &State<'_, AppState>,
-    update: impl FnOnce(&mut settings::StoredSettings) -> Result<(), String>,
-) -> Result<(), String> {
-    with_workspace(state, |workspace| {
-        let mut stored = stored_settings_at(app, workspace.root())?;
-        update(&mut stored)?;
-        settings::save(&workspace.root().join(settings::FILE_NAME), &stored)
     })
 }
 
@@ -205,6 +194,23 @@ async fn create_entry(
 }
 
 #[tauri::command]
+async fn list_entry_history(
+    state: State<'_, AppState>,
+    date: Option<String>,
+) -> Result<Vec<history::Version>, String> {
+    with_workspace(&state, |workspace| history::list(workspace.root(), date.as_deref()))
+}
+
+#[tauri::command]
+async fn read_entry_history(
+    state: State<'_, AppState>,
+    date: String,
+    id: String,
+) -> Result<String, String> {
+    with_workspace(&state, |workspace| history::read(workspace.root(), &date, &id))
+}
+
+#[tauri::command]
 async fn save_entry(
     state: State<'_, AppState>,
     date: String,
@@ -247,18 +253,6 @@ async fn load_ai_settings(app: tauri::AppHandle, state: State<'_, AppState>) -> 
 }
 
 #[tauri::command]
-async fn save_ai_settings(
-    app: tauri::AppHandle,
-    state: State<'_, AppState>,
-    settings: ai::Settings,
-) -> Result<(), String> {
-    ai::validate(&settings)?;
-    update_settings(&app, &state, |stored| {
-        stored.ai = settings;
-        Ok(())
-    })
-}
-#[tauri::command]
 async fn load_appearance_settings(app: tauri::AppHandle, state: State<'_, AppState>) -> Result<appearance::Settings, String> {
     run_optional_workspace(state.0.clone(), move |workspace| {
         if let Some(workspace) = workspace {
@@ -269,38 +263,12 @@ async fn load_appearance_settings(app: tauri::AppHandle, state: State<'_, AppSta
 }
 
 #[tauri::command]
-async fn save_appearance_settings(
-    app: tauri::AppHandle,
-    state: State<'_, AppState>,
-    settings: appearance::Settings,
-) -> Result<(), String> {
-    appearance::validate(&settings)?;
-    update_settings(&app, &state, |stored| {
-        stored.appearance = settings;
-        Ok(())
-    })
-}
-#[tauri::command]
 async fn load_summary_settings(state: State<'_, AppState>) -> Result<summary::Settings, String> {
     run_optional_workspace(state.0.clone(), |workspace| {
         let Some(workspace) = workspace else { return Ok(summary::Settings::default()); };
         let stored = settings::load(&workspace.root().join(settings::FILE_NAME))?.unwrap_or_default();
         summary::normalize_settings(workspace.root(), &stored.summary)
     }).await
-}
-
-#[tauri::command]
-async fn save_summary_settings(
-    app: tauri::AppHandle,
-    state: State<'_, AppState>,
-    settings: summary::Settings,
-) -> Result<(), String> {
-    with_workspace(&state, |workspace| {
-        let normalized = summary::normalize_settings(workspace.root(), &settings)?;
-        let mut stored = stored_settings_at(&app, workspace.root())?;
-        stored.summary = normalized;
-        settings::save(&workspace.root().join(settings::FILE_NAME), &stored)
-    })
 }
 
 #[tauri::command]
@@ -367,15 +335,23 @@ fn validate_excel_settings(
 }
 
 #[tauri::command]
-async fn save_excel_settings(
-    app: tauri::AppHandle,
+async fn load_ui_preferences(state: State<'_, AppState>) -> Result<ui::Preferences, String> {
+    with_workspace(&state, |workspace| {
+        let path = workspace.root().join(settings::FILE_NAME);
+        Ok(settings::load(&path)?.map(|stored| stored.ui).unwrap_or_default())
+    })
+}
+
+#[tauri::command]
+async fn save_ui_preferences(
     state: State<'_, AppState>,
-    settings: excel::Settings,
+    preferences: ui::Preferences,
 ) -> Result<(), String> {
-    update_settings(&app, &state, |stored| {
-        validate_excel_settings(&settings, &stored.ai)?;
-        stored.excel = settings;
-        Ok(())
+    with_workspace(&state, |workspace| {
+        let path = workspace.root().join(settings::FILE_NAME);
+        let mut stored = settings::load(&path)?.unwrap_or_default();
+        stored.ui = ui::normalize(preferences);
+        settings::save(&path, &stored)
     })
 }
 
@@ -403,6 +379,8 @@ fn save_workspace_settings_at(
     stored.database = database_settings;
     settings::save(&path, &stored)?;
     workspace.accept_database(stored.database.clone(), connection);
+    // 上限调小后立即整理历史版本，不必等到下一次写日报。
+    crate::history::enforce(workspace.root(), stored.database.history_limit_bytes);
     Ok(stored)
 }
 
@@ -825,18 +803,18 @@ pub fn run() {
             read_entry,
             create_entry,
             save_entry,
+            list_entry_history,
+            read_entry_history,
             switch_entry_format,
             copy_content,
             load_ai_settings,
-            save_ai_settings,
             load_appearance_settings,
-            save_appearance_settings,
             load_summary_settings,
-            save_summary_settings,
             open_summary_output_directory,
             export_summary,
             load_excel_settings,
-            save_excel_settings,
+            load_ui_preferences,
+            save_ui_preferences,
             save_workspace_settings,
             load_database_settings,
             test_database_connection,
@@ -1173,7 +1151,12 @@ mod excel_integration_tests {
         .err()
         .unwrap();
         assert!(error.contains("工作空间已切换"));
-        assert_eq!(fs::read_dir(root.path()).unwrap().count(), 2);
+        // `.history` 是历史版本目录，不计入工作空间可见条目。
+        let visible = fs::read_dir(root.path())
+            .unwrap()
+            .filter(|entry| !entry.as_ref().unwrap().file_name().to_string_lossy().starts_with('.'))
+            .count();
+        assert_eq!(visible, 2);
     }
 
     fn prepared_preview(

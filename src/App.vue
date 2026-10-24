@@ -5,30 +5,68 @@ import { invoke, isTauri } from '@tauri-apps/api/core'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { listen } from '@tauri-apps/api/event'
 import { open as pickDirectory } from '@tauri-apps/plugin-dialog'
-import { PhFolderOpen, PhArrowRight, PhArrowClockwise, PhGearSix, PhHouse, PhX, PhFolder, PhFileText } from '@phosphor-icons/vue'
+import { PhFolder, PhX } from '@phosphor-icons/vue'
+import AppToolbar from './components/AppToolbar.vue'
+import AppRail from './components/AppRail.vue'
+import SkinDialog from './components/SkinDialog.vue'
 import CalendarPane from './components/CalendarPane.vue'
 import JournalEditor from './components/JournalEditor.vue'
 import SettingsView from './components/SettingsView.vue'
 import AiPolishDialog from './components/AiPolishDialog.vue'
 import AiSummaryDialog from './components/AiSummaryDialog.vue'
 import RangeOverview from './components/RangeOverview.vue'
+import WorkspaceGate from './components/WorkspaceGate.vue'
+import HolidayReminder from './components/HolidayReminder.vue'
+import ConfirmDialog from './components/ConfirmDialog.vue'
+import SettingsLeaveDialog from './components/SettingsLeaveDialog.vue'
 import { api, type Document, type FileFormat } from './lib/workspace'
 import { historyShortcut } from './lib/shortcuts'
 import { useJournal } from './lib/useJournal'
 import { aiSummarySource, plainTextSummary } from './lib/summary'
 import { useAi } from './lib/ai'
-import { createDialogMotion } from './lib/dialogMotion'
+import { useSplitter } from './lib/useSplitter'
+import {
+  DEFAULT_UI_PREFERENCES,
+  normalizeUiPreferences,
+  uiPreferencesApi,
+  type LayoutModule,
+  type UiPreferences,
+} from './lib/uiPreferences'
+import type { SkinId } from './lib/skins'
 import { useAppearance } from './lib/useAppearance'
 import { sameWeekRange, useExcel } from './lib/useExcel'
 import { useSummaryOutput } from './lib/useSummaryOutput'
 import { settingsApi, type WorkspaceSettings } from './lib/settingsDraft'
-import { databaseApi, cloneDatabaseSettings, DEFAULT_DATABASE_SETTINGS, type DatabaseTransferResult } from './lib/database'
+import {
+  databaseApi,
+  cloneDatabaseSettings,
+  DEFAULT_DATABASE_SETTINGS,
+  type DatabaseTransferResult,
+} from './lib/database'
 import { dateKey } from './lib/calendar'
 import { useHolidays } from './lib/holidays'
 import { useHolidayReminder } from './lib/useHolidayReminder'
 
 const journal = useJournal()
-const { workspace, entries, previews, selectedDate, document: activeDocument, isNewDraft, draft, dirty, canUndo, canRedo, busy, saving, error, backupWarning, backupRetrying, savedAt, loadPreviews } = journal
+const {
+  workspace,
+  entries,
+  previews,
+  selectedDate,
+  document: activeDocument,
+  isNewDraft,
+  draft,
+  dirty,
+  canUndo,
+  canRedo,
+  busy,
+  saving,
+  error,
+  backupWarning,
+  backupRetrying,
+  savedAt,
+  loadPreviews,
+} = journal
 const ai = useAi()
 const appearance = useAppearance()
 const excel = useExcel()
@@ -36,7 +74,16 @@ const summaryOutput = useSummaryOutput()
 const holidays = useHolidays()
 const { state: holidayState, loading: holidayLoading, syncing: holidaySyncing, error: holidayError } = holidays
 const holidayReady = ref(false)
-const { settings: summaryOutputSettings, loading: summaryOutputLoading, saving: summaryOutputSaving, error: summaryOutputError, exporting: summaryExporting, opening: summaryDirectoryOpening, result: summaryExportResult, exportError: summaryExportError, openError: summaryDirectoryError } = summaryOutput
+const {
+  settings: summaryOutputSettings,
+  loading: summaryOutputLoading,
+  error: summaryOutputError,
+  exporting: summaryExporting,
+  opening: summaryDirectoryOpening,
+  result: summaryExportResult,
+  exportError: summaryExportError,
+  openError: summaryDirectoryError,
+} = summaryOutput
 const summaryWorkspacePath = ref('')
 const summaryDirectory = computed(() => {
   const root = summaryWorkspacePath.value.replace(/[\\/]+$/, '')
@@ -44,17 +91,47 @@ const summaryDirectory = computed(() => {
   const separator = root.includes('\\') ? '\\' : '/'
   return `${root}${separator}${summaryOutputSettings.value.outputDirectory.replace(/[\\/]/g, separator)}`
 })
-const { settings: excelSettings, loading: excelLoading, saving: excelSaving, error: excelSettingsError, preparing: excelPreparing, exporting: excelExporting, preview: excelPreview, result: excelResult, exportError: excelExportError } = excel
-const { scale: appearanceScale, loading: appearanceLoading, saving: appearanceSaving, error: appearanceError } = appearance
-watch(appearanceScale, (scale) => {
-  document.documentElement.style.setProperty('--font-scale', String(scale / 100))
-}, { immediate: true, flush: 'sync' })
+const {
+  settings: excelSettings,
+  loading: excelLoading,
+  error: excelSettingsError,
+  preparing: excelPreparing,
+  exporting: excelExporting,
+  preview: excelPreview,
+  result: excelResult,
+  exportError: excelExportError,
+} = excel
+const { scale: appearanceScale, loading: appearanceLoading, error: appearanceError } = appearance
+watch(
+  appearanceScale,
+  (scale) => {
+    document.documentElement.style.setProperty('--font-scale', String(scale / 100))
+  },
+  { immediate: true, flush: 'sync' },
+)
 // Settings live inside the workspace, so a newly opened workspace brings its own values.
 watch(workspace, (value, previous) => {
   if (!value || value.path === previous?.path) return
   void loadWorkspaceSettings(true)
 })
-const { settings: aiSettings, error: aiSettingsError, saving: aiSaving, defaultProvider, visible: aiVisible, generating, elapsedSeconds, original: aiOriginal, result: aiResult, resultError: aiResultError, summaryVisible, summaryGenerating, summaryElapsedSeconds, summaryDates, summaryResult, summaryError, summaryMode } = ai
+const {
+  settings: aiSettings,
+  error: aiSettingsError,
+  defaultProvider,
+  visible: aiVisible,
+  generating,
+  elapsedSeconds,
+  original: aiOriginal,
+  result: aiResult,
+  resultError: aiResultError,
+  summaryVisible,
+  summaryGenerating,
+  summaryElapsedSeconds,
+  summaryDates,
+  summaryResult,
+  summaryError,
+  summaryMode,
+} = ai
 watch(summaryResult, () => summaryOutput.clearExport())
 const page = ref<'home' | 'settings'>('home')
 const recent = ref<string | null>(null)
@@ -67,13 +144,23 @@ const summarySelectionDates = ref<string[]>([])
 const excelDirectoryError = ref('')
 let excelActionRevision = 0
 let summarySessionRevision = 0
-watch(summaryVisible, () => {
-  excelActionRevision++
-  requestingExcel.value = false
-  excelDirectoryError.value = ''
-  excel.clearExport()
-}, { flush: 'sync' })
-watch(summaryVisible, () => { summarySessionRevision++ }, { flush: 'sync' })
+watch(
+  summaryVisible,
+  () => {
+    excelActionRevision++
+    requestingExcel.value = false
+    excelDirectoryError.value = ''
+    excel.clearExport()
+  },
+  { flush: 'sync' },
+)
+watch(
+  summaryVisible,
+  () => {
+    summarySessionRevision++
+  },
+  { flush: 'sync' },
+)
 const refreshRevision = ref(0)
 const settingsView = ref<InstanceType<typeof SettingsView>>()
 const databaseSettings = ref(cloneDatabaseSettings(DEFAULT_DATABASE_SETTINGS))
@@ -82,23 +169,42 @@ const settingsDatabaseError = ref('')
 const databaseActivity = ref(false)
 const storageRefreshing = ref(false)
 const databaseBusy = computed(() => databaseActivity.value || storageRefreshing.value || backupRetrying.value)
-const storageMode = computed(() => !databaseSettings.value.enabled ? 'files' : databaseSettings.value.mode)
+const storageMode = computed(() => (!databaseSettings.value.enabled ? 'files' : databaseSettings.value.mode))
 
-const workspaceSettings = computed<WorkspaceSettings>(() => ({ appearance: { scale: appearanceScale.value }, ai: aiSettings.value, excel: excelSettings.value, summary: summaryOutputSettings.value, database: databaseSettings.value }))
+// 新建日报沿用「数据存储」里选定的默认格式；已有日报不受影响。
+watch(
+  () => databaseSettings.value.defaultFormat,
+  (format) => journal.setDefaultFormat(format),
+  { immediate: true },
+)
+
+const workspaceSettings = computed<WorkspaceSettings>(() => ({
+  appearance: { scale: appearanceScale.value },
+  ai: aiSettings.value,
+  excel: excelSettings.value,
+  summary: summaryOutputSettings.value,
+  database: databaseSettings.value,
+}))
 const settingsReading = ref(false)
 const settingsSaving = ref(false)
 const settingsReady = ref(false)
 const settingsError = ref('')
-const settingsLoading = computed(() => settingsReading.value || appearanceLoading.value || excelLoading.value || summaryOutputLoading.value || databaseLoading.value)
+const settingsLoading = computed(
+  () =>
+    settingsReading.value ||
+    appearanceLoading.value ||
+    excelLoading.value ||
+    summaryOutputLoading.value ||
+    databaseLoading.value,
+)
 let settingsLoadRevision = 0
 type SettingsExit = 'home' | 'workspace' | 'close'
-const settingsLeaveDialog = ref<HTMLDialogElement>()
-const settingsLeaveMotion = createDialogMotion(() => settingsLeaveDialog.value)
+const settingsLeaveDialog = ref<InstanceType<typeof SettingsLeaveDialog>>()
+const skinDialog = ref<InstanceType<typeof SkinDialog>>()
 const pendingSettingsExit = ref<SettingsExit | null>(null)
 const settingsLeaveBusy = ref(false)
 const settingsLeaveError = ref('')
-const modal = ref<HTMLDialogElement>()
-const modalMotion = createDialogMotion(() => modal.value)
+const confirmDialog = ref<InstanceType<typeof ConfirmDialog>>()
 const modalKind = ref<'reload' | 'format' | 'restore'>('format')
 const targetFormat = ref<FileFormat>('md')
 const editor = ref<InstanceType<typeof JournalEditor>>()
@@ -106,16 +212,148 @@ const editorPreview = ref(false)
 const polishDialog = ref<InstanceType<typeof AiPolishDialog>>()
 const calendar = ref<InstanceType<typeof CalendarPane>>()
 const layoutEl = ref<HTMLElement>()
-const calendarWidth = ref<number | null>(null)
-const resizing = ref(false)
+const { resizing, layoutStyle, startSplitterResize, onSplitterKeydown, resetSplitterWidth } = useSplitter(layoutEl)
+const uiPreferences = ref<UiPreferences>(normalizeUiPreferences(DEFAULT_UI_PREFERENCES))
+const showSplitter = computed(() => uiPreferences.value.axis === 'row' && uiPreferences.value.order[0] === 'calendar')
+function paneOrder(module: LayoutModule) {
+  if (uiPreferences.value.axis === 'column') return uiPreferences.value.order.indexOf(module) + 1
+  if (uiPreferences.value.order[0] === 'calendar') return module === 'calendar' ? 1 : 3
+  return module === 'editor' ? 1 : 2
+}
+const layoutDragging = ref<LayoutModule | null>(null)
+const layoutDropZone = ref<LayoutDropZone | null>(null)
+const layoutZones = [
+  { id: 'left', label: '移到左侧' },
+  { id: 'right', label: '移到右侧' },
+  { id: 'top', label: '移到上方' },
+  { id: 'bottom', label: '移到下方' },
+] as const
+type LayoutDropZone = (typeof layoutZones)[number]['id']
+const LAYOUT_LONG_PRESS_MS = 450
+let layoutPressTimer: ReturnType<typeof setTimeout> | undefined
+let layoutPressOrigin: { x: number; y: number } | null = null
+
+watch(
+  () => workspace.value?.path,
+  (path) => {
+    if (!path) {
+      uiPreferences.value = normalizeUiPreferences(DEFAULT_UI_PREFERENCES)
+      document.documentElement.dataset.skin = uiPreferences.value.skin
+      return
+    }
+    void uiPreferencesApi
+      .load()
+      .then((preferences) => {
+        uiPreferences.value = normalizeUiPreferences(preferences)
+        document.documentElement.dataset.skin = uiPreferences.value.skin
+      })
+      .catch(() => {
+        uiPreferences.value = normalizeUiPreferences(DEFAULT_UI_PREFERENCES)
+        document.documentElement.dataset.skin = uiPreferences.value.skin
+      })
+  },
+)
+
+function cancelLayoutPress() {
+  clearTimeout(layoutPressTimer)
+  layoutPressTimer = undefined
+  layoutPressOrigin = null
+}
+function endLayoutDrag() {
+  layoutDragging.value = null
+  layoutDropZone.value = null
+  document.body.classList.remove('is-layout-dragging')
+}
+function layoutZoneAt(x: number, y: number): LayoutDropZone | null {
+  const rect = layoutEl.value?.getBoundingClientRect()
+  if (!rect || x < rect.left || x > rect.right || y < rect.top || y > rect.bottom) return null
+  const dx = (x - rect.left) / rect.width - 0.5
+  const dy = (y - rect.top) / rect.height - 0.5
+  if (Math.abs(dx) > Math.abs(dy)) return dx < 0 ? 'left' : 'right'
+  return dy < 0 ? 'top' : 'bottom'
+}
+function onLayoutPointerDown(event: PointerEvent) {
+  if (page.value !== 'home' || busy.value || event.button !== 0) return
+  const target = event.target as HTMLElement | null
+  if (!target || target.closest('button, a, input, textarea, select, [contenteditable="true"]')) return
+  const pane = target.closest('.calendar-panel, .editor-panel')
+  if (!pane || !target.closest('.calendar-toolbar, .editor-heading')) return
+  const module: LayoutModule = pane.classList.contains('calendar-panel') ? 'calendar' : 'editor'
+  layoutPressOrigin = { x: event.clientX, y: event.clientY }
+  clearTimeout(layoutPressTimer)
+  layoutPressTimer = setTimeout(() => {
+    layoutPressTimer = undefined
+    layoutDragging.value = module
+    layoutDropZone.value = null
+    document.body.classList.add('is-layout-dragging')
+  }, LAYOUT_LONG_PRESS_MS)
+}
+function onLayoutPointerMove(event: PointerEvent) {
+  if (layoutPressTimer && layoutPressOrigin) {
+    const moved = Math.hypot(event.clientX - layoutPressOrigin.x, event.clientY - layoutPressOrigin.y)
+    if (moved > 8) cancelLayoutPress()
+  }
+  if (layoutDragging.value) layoutDropZone.value = layoutZoneAt(event.clientX, event.clientY)
+}
+function applyLayoutDrop() {
+  const module = layoutDragging.value
+  const zone = layoutDropZone.value
+  endLayoutDrag()
+  if (!module || !zone) return
+  const other: LayoutModule = module === 'calendar' ? 'editor' : 'calendar'
+  const axis: UiPreferences['axis'] = zone === 'left' || zone === 'right' ? 'row' : 'column'
+  const order: LayoutModule[] = zone === 'left' || zone === 'top' ? [module, other] : [other, module]
+  if (axis === uiPreferences.value.axis && order[0] === uiPreferences.value.order[0]) return
+  uiPreferences.value = { ...uiPreferences.value, axis, order }
+  void uiPreferencesApi.save(uiPreferences.value).catch((cause) => {
+    error.value = `保存界面布局失败：${String(cause)}`
+  })
+}
+function onLayoutPointerUp() {
+  if (layoutDragging.value) applyLayoutDrop()
+  else cancelLayoutPress()
+}
+function onLayoutKeyDown(event: KeyboardEvent) {
+  if (event.key !== 'Escape' || !layoutDragging.value) return
+  cancelLayoutPress()
+  endLayoutDrag()
+}
+function openSkinDialog() {
+  skinDialog.value?.open()
+}
+function closeSkinDialog() {
+  void skinDialog.value?.close()
+}
+function applySkin(id: SkinId) {
+  uiPreferences.value = { ...uiPreferences.value, skin: id }
+  document.documentElement.dataset.skin = id
+  void uiPreferencesApi.save(uiPreferences.value).catch((cause) => {
+    error.value = `保存皮肤失败：${String(cause)}`
+  })
+}
+async function openSummaryFromRail() {
+  await requestSummary([journal.selectedDate.value])
+}
+async function openExcelFromRail() {
+  const base = dayjs(journal.selectedDate.value)
+  const start = base.subtract((base.day() + 6) % 7, 'day')
+  const dates = Array.from({ length: 7 }, (_, index) => start.add(index, 'day').format('YYYYMMDD'))
+  await requestSummary(dates)
+  if (summaryVisible.value) await requestExcelExport()
+}
+function openHistoryFromRail() {
+  editor.value?.openHistory()
+}
 const rangeDates = ref<string[]>([])
 const rangeDocuments = ref<Document[]>([])
 const rangeLoading = ref(false)
 const rangeError = ref('')
 const excelBlockedReason = computed(() => {
-  if (!sameWeekRange(summarySelectionDates.value)) return '仅支持同一周内的日期范围（周一至周日），包括没有日报的所选日期。'
+  if (!sameWeekRange(summarySelectionDates.value))
+    return '仅支持同一周内的日期范围（周一至周日），包括没有日报的所选日期。'
   if (!defaultProvider.value) return '请先在设置中配置并选择默认 AI。'
-  if (!excelSettings.value.templatePath || !excelSettings.value.prompt.trim() || !excelSettings.value.outputDirectory) return '请先完成 Excel 输出设置。'
+  if (!excelSettings.value.templatePath || !excelSettings.value.prompt.trim() || !excelSettings.value.outputDirectory)
+    return '请先完成 Excel 输出设置。'
   return ''
 })
 let rangeRevision = 0
@@ -123,15 +361,38 @@ const isMac = /Mac|iPhone|iPad|iPod/.test(navigator.platform || navigator.userAg
 const now = ref(dayjs())
 const today = computed(() => dateKey(now.value))
 const holidayDate = computed(() => now.value.format('YYYY-MM-DD'))
-const { visible: holidayReminderVisible, dismiss: dismissHolidayReminder } = useHolidayReminder(holidayState, holidayDate, holidayReady)
+const { visible: holidayReminderVisible, dismiss: dismissHolidayReminder } = useHolidayReminder(
+  holidayState,
+  holidayDate,
+  holidayReady,
+)
 const holidayCurrentFailure = computed(() => {
-  const record = holidayState.value.years.find(item => item.year === now.value.year())
-  return holidayState.value.failures.some(item => item.year === now.value.year()
-    && (!record || Date.parse(item.attemptedAt) >= Date.parse(record.syncedAt)))
+  const record = holidayState.value.years.find((item) => item.year === now.value.year())
+  return holidayState.value.failures.some(
+    (item) =>
+      item.year === now.value.year() && (!record || Date.parse(item.attemptedAt) >= Date.parse(record.syncedAt)),
+  )
 })
+const holidayReminderText = computed(
+  () =>
+    `${now.value.year()} 年放假信息${holidayCurrentFailure.value ? '上次同步失败' : '尚未同步成功'}，请手动同步到日历。`,
+)
+const holidayReminderDisabled = computed(
+  () =>
+    busy.value ||
+    picking.value ||
+    settingsSaving.value ||
+    settingsReading.value ||
+    databaseBusy.value ||
+    settingsLeaveBusy.value ||
+    aiVisible.value ||
+    summaryVisible.value ||
+    summaryExporting.value ||
+    excelBusy.value,
+)
 const nativeApp = isTauri()
 const recentName = computed(() => recent.value?.split(/[\\/]/).filter(Boolean).at(-1))
-const greeting = computed(() => now.value.hour() < 12 ? '上午好' : now.value.hour() < 18 ? '下午好' : '晚上好')
+const greeting = computed(() => (now.value.hour() < 12 ? '上午好' : now.value.hour() < 18 ? '下午好' : '晚上好'))
 const documentKey = computed(() => `${workspace.value?.path ?? ''}/${selectedDate.value}`)
 const backups = ref<Record<string, string>>({})
 const canRestore = computed(() => backups.value[documentKey.value] !== undefined)
@@ -140,15 +401,21 @@ let unlistenClose: (() => void) | undefined
 let unlistenHistory: (() => void) | undefined
 let historyMenuAvailable = false
 let clockTimer: ReturnType<typeof setInterval> | undefined
-const CALENDAR_MIN_WIDTH = 420
-const EDITOR_MIN_WIDTH = 340
-let layoutObserver: ResizeObserver | undefined
-let splitterStartX = 0
-let splitterStartWidth = 0
-const layoutStyle = computed(() => calendarWidth.value === null ? undefined : { '--calendar-width': `${calendarWidth.value}px` })
 
 async function navigate(target: 'home' | 'settings') {
-  if (busy.value || picking.value || settingsSaving.value || settingsReading.value || databaseBusy.value || settingsLeaveBusy.value || aiVisible.value || summaryExporting.value || excelBusy.value || page.value === target) return
+  if (
+    busy.value ||
+    picking.value ||
+    settingsSaving.value ||
+    settingsReading.value ||
+    databaseBusy.value ||
+    settingsLeaveBusy.value ||
+    aiVisible.value ||
+    summaryExporting.value ||
+    excelBusy.value ||
+    page.value === target
+  )
+    return
   if (target === 'home' && requestSettingsExit('home')) return
   if (!(await journal.flush())) return
   page.value = target
@@ -164,20 +431,36 @@ async function openHolidaySettings() {
 }
 async function loadWorkspaceSettings(reload: boolean): Promise<boolean> {
   const revision = ++settingsLoadRevision
-  settingsReading.value = true; settingsReady.value = false; settingsError.value = ''
+  settingsReading.value = true
+  settingsReady.value = false
+  settingsError.value = ''
   const results = await Promise.all([
-    reload ? appearance.reload() : appearance.load(), reload ? ai.reload() : ai.load(),
-    reload ? excel.reload() : excel.load(), reload ? summaryOutput.reload() : summaryOutput.load(), loadDatabaseSettings(),
+    reload ? appearance.reload() : appearance.load(),
+    reload ? ai.reload() : ai.load(),
+    reload ? excel.reload() : excel.load(),
+    reload ? summaryOutput.reload() : summaryOutput.load(),
+    loadDatabaseSettings(),
   ])
   if (revision !== settingsLoadRevision) return false
   settingsReading.value = false
   settingsReady.value = results.every(Boolean)
-  if (!settingsReady.value) settingsError.value = [appearanceError.value, aiSettingsError.value, excelSettingsError.value, summaryOutputError.value, settingsDatabaseError.value].filter(Boolean).join('；') || '读取设置失败，请重新进入设置后重试。'
+  if (!settingsReady.value)
+    settingsError.value =
+      [
+        appearanceError.value,
+        aiSettingsError.value,
+        excelSettingsError.value,
+        summaryOutputError.value,
+        settingsDatabaseError.value,
+      ]
+        .filter(Boolean)
+        .join('；') || '读取设置失败，请重新进入设置后重试。'
   return settingsReady.value
 }
 async function loadDatabaseSettings(): Promise<boolean> {
   const path = workspace.value?.path
-  databaseLoading.value = true; settingsDatabaseError.value = ''
+  databaseLoading.value = true
+  settingsDatabaseError.value = ''
   try {
     const stored = nativeApp ? await databaseApi.load() : cloneDatabaseSettings(DEFAULT_DATABASE_SETTINGS)
     if (workspace.value?.path !== path) return false
@@ -186,7 +469,9 @@ async function loadDatabaseSettings(): Promise<boolean> {
   } catch (cause) {
     if (workspace.value?.path === path) settingsDatabaseError.value = `读取数据库设置失败：${String(cause)}`
     return false
-  } finally { if (workspace.value?.path === path) databaseLoading.value = false }
+  } finally {
+    if (workspace.value?.path === path) databaseLoading.value = false
+  }
 }
 async function onDatabaseTransferred(result: DatabaseTransferResult) {
   storageRefreshing.value = true
@@ -194,17 +479,27 @@ async function onDatabaseTransferred(result: DatabaseTransferResult) {
     databaseSettings.value = cloneDatabaseSettings(result.settings)
     await nextTick()
     settingsView.value?.reset()
-    clearRange(); calendar.value?.clearRange()
+    clearRange()
+    calendar.value?.clearRange()
     await journal.reload()
-  } finally { storageRefreshing.value = false }
+  } finally {
+    storageRefreshing.value = false
+  }
 }
 async function saveWorkspaceSettings(value: WorkspaceSettings): Promise<boolean> {
   if (settingsSaving.value || databaseBusy.value) return false
-  if (!workspace.value || !settingsReady.value) { settingsError.value = '请先打开工作空间并完整读取设置后重试。'; return false }
+  if (!workspace.value || !settingsReady.value) {
+    settingsError.value = '请先打开工作空间并完整读取设置后重试。'
+    return false
+  }
   const path = workspace.value.path
-  settingsSaving.value = true; settingsError.value = ''
+  settingsSaving.value = true
+  settingsError.value = ''
   try {
-    if (!(await journal.flush())) { settingsError.value = '请先保存当前日报，再更改存储设置。'; return false }
+    if (!(await journal.flush())) {
+      settingsError.value = '请先保存当前日报，再更改存储设置。'
+      return false
+    }
     const storageChanged = JSON.stringify(value.database) !== JSON.stringify(databaseSettings.value)
     const stored = await settingsApi.save(path, value)
     if (workspace.value?.path !== path) return false
@@ -214,30 +509,37 @@ async function saveWorkspaceSettings(value: WorkspaceSettings): Promise<boolean>
     summaryOutput.acceptSaved(stored.summary)
     databaseSettings.value = cloneDatabaseSettings(stored.database)
     if (storageChanged) {
-      clearRange(); calendar.value?.clearRange()
+      clearRange()
+      calendar.value?.clearRange()
       await journal.reload()
     }
     return true
-  } catch (cause) { settingsError.value = `保存设置失败：${String(cause)}`; return false }
-  finally { settingsSaving.value = false }
+  } catch (cause) {
+    settingsError.value = `保存设置失败：${String(cause)}`
+    return false
+  } finally {
+    settingsSaving.value = false
+  }
 }
 function requestSettingsExit(action: SettingsExit): boolean {
   if (page.value !== 'settings' || !settingsView.value || settingsView.value.unchanged) return false
   if (!pendingSettingsExit.value) {
     pendingSettingsExit.value = action
     settingsLeaveError.value = ''
-    settingsLeaveMotion.open()
+    settingsLeaveDialog.value?.open()
   }
   return true
 }
 function cancelSettingsExit() {
   if (settingsLeaveBusy.value || settingsSaving.value) return
-  pendingSettingsExit.value = null; settingsLeaveError.value = ''
-  void settingsLeaveMotion.close()
+  pendingSettingsExit.value = null
+  settingsLeaveError.value = ''
+  void settingsLeaveDialog.value?.close()
 }
 async function finishSettingsExit(save: boolean) {
   if (!pendingSettingsExit.value || settingsLeaveBusy.value || settingsSaving.value) return
-  settingsLeaveBusy.value = true; settingsLeaveError.value = ''
+  settingsLeaveBusy.value = true
+  settingsLeaveError.value = ''
   const action = pendingSettingsExit.value
   try {
     if (save && !(await settingsView.value?.save())) {
@@ -246,45 +548,76 @@ async function finishSettingsExit(save: boolean) {
     }
     if (!save) settingsView.value?.reset()
     pendingSettingsExit.value = null
-    if (!(await settingsLeaveMotion.close())) return
+    const closing = settingsLeaveDialog.value?.close() ?? Promise.resolve(true)
+    if (!(await closing)) return
     if (action === 'workspace') await performChooseWorkspace()
     else if (action === 'close') await closeWindow()
     else if (await journal.flush()) page.value = 'home'
-  } finally { settingsLeaveBusy.value = false }
+  } finally {
+    settingsLeaveBusy.value = false
+  }
 }
 async function closeWindow() {
   if (excelExporting.value) return
-  rangeRevision++; ai.close(); ai.closeSummary(); await excel.cancel()
+  rangeRevision++
+  ai.close()
+  ai.closeSummary()
+  await excel.cancel()
   if (await journal.flush()) await getCurrentWindow().destroy()
 }
 async function openWorkspaceDirectory() {
   if (!workspace.value || openingDirectory.value) return
   openingDirectory.value = true
-  try { await api.openDirectory() }
-  catch (cause) { journal.reportError(cause) }
-  finally { openingDirectory.value = false }
+  try {
+    await api.openDirectory()
+  } catch (cause) {
+    journal.reportError(cause)
+  } finally {
+    openingDirectory.value = false
+  }
 }
 async function chooseWorkspace() {
-  if (picking.value || busy.value || settingsSaving.value || settingsReading.value || databaseBusy.value || settingsLeaveBusy.value || summaryExporting.value || excelBusy.value) return
+  if (
+    picking.value ||
+    busy.value ||
+    settingsSaving.value ||
+    settingsReading.value ||
+    databaseBusy.value ||
+    settingsLeaveBusy.value ||
+    summaryExporting.value ||
+    excelBusy.value
+  )
+    return
   if (requestSettingsExit('workspace')) return
   await performChooseWorkspace()
 }
 async function performChooseWorkspace() {
-  if (!nativeApp) { journal.reportError('请在 Tauri 桌面应用中选择本地文件夹。使用 npm run app:dev 启动。'); return }
+  if (!nativeApp) {
+    journal.reportError('请在 Tauri 桌面应用中选择本地文件夹。使用 npm run app:dev 启动。')
+    return
+  }
   if (!(await journal.flush())) return
   picking.value = true
   try {
-    const path = await pickDirectory({ directory: true, multiple: false, title: '选择 WorkReport 工作空间', defaultPath: workspace.value?.path ?? recent.value ?? undefined })
-    if (typeof path === 'string' && await journal.open(path)) {
+    const path = await pickDirectory({
+      directory: true,
+      multiple: false,
+      title: '选择 WorkReport 工作空间',
+      defaultPath: workspace.value?.path ?? recent.value ?? undefined,
+    })
+    if (typeof path === 'string' && (await journal.open(path))) {
       calendar.value?.clearRange()
       clearRange()
       recent.value = workspace.value?.path ?? path
     }
-  } catch (cause) { journal.reportError(cause) }
-  finally { picking.value = false }
+  } catch (cause) {
+    journal.reportError(cause)
+  } finally {
+    picking.value = false
+  }
 }
 function showConfirmation() {
-  modalMotion.open()
+  confirmDialog.value?.open()
 }
 async function selectDate(date: string) {
   if (excelBusy.value) return
@@ -295,18 +628,43 @@ async function requestFormat(format: FileFormat) {
     if (await journal.switchFormat(format)) editor.value?.focus()
     return
   }
-  targetFormat.value = format; modalKind.value = 'format'; showConfirmation()
+  targetFormat.value = format
+  modalKind.value = 'format'
+  showConfirmation()
 }
-function requestReload() { modalKind.value = 'reload'; showConfirmation() }
-function requestRestore() { modalKind.value = 'restore'; showConfirmation() }
+function requestReload() {
+  modalKind.value = 'reload'
+  showConfirmation()
+}
+function requestRestore() {
+  modalKind.value = 'restore'
+  showConfirmation()
+}
 async function confirmModal() {
   if (modalKind.value === 'format') {
-    if (await journal.switchFormat(targetFormat.value) && await modalMotion.close()) editor.value?.focus()
+    if (await journal.switchFormat(targetFormat.value)) {
+      await confirmDialog.value?.close()
+      editor.value?.focus()
+    }
   } else if (modalKind.value === 'restore') {
     const original = backups.value[documentKey.value]
-    if (original !== undefined) { journal.edit(original); if (!(await journal.flush())) return; delete backups.value[documentKey.value] }
-    modalMotion.close()
-  } else { await journal.reload(); modalMotion.close() }
+    if (original !== undefined) {
+      journal.edit(original)
+      if (!(await journal.flush())) return
+      delete backups.value[documentKey.value]
+    }
+    void confirmDialog.value?.close()
+  } else {
+    await journal.reload()
+    void confirmDialog.value?.close()
+  }
+}
+function cancelConfirm() {
+  if (!busy.value) void confirmDialog.value?.close()
+}
+function onAiResultEdit(value: string) {
+  aiResult.value = value
+  aiResultError.value = ''
 }
 async function requestAi() {
   if (requestingAi.value || !activeDocument.value || busy.value || summaryVisible.value || excelBusy.value) return
@@ -317,14 +675,25 @@ async function requestAi() {
     if (documentKey.value !== sourceKey || page.value !== 'home') return
     const loaded = await ai.load()
     if (documentKey.value !== sourceKey || page.value !== 'home') return
-    if (!loaded) { journal.reportError(`无法读取 AI 设置：${aiSettingsError.value}`); return }
-    if (!defaultProvider.value) { await navigate('settings'); return }
-    if (!draft.value.trim()) { journal.reportError('请先写下日报内容，再使用 AI 润色。'); return }
+    if (!loaded) {
+      journal.reportError(`无法读取 AI 设置：${aiSettingsError.value}`)
+      return
+    }
+    if (!defaultProvider.value) {
+      await navigate('settings')
+      return
+    }
+    if (!draft.value.trim()) {
+      journal.reportError('请先写下日报内容，再使用 AI 润色。')
+      return
+    }
     if (!(await journal.flush())) return
     if (documentKey.value !== sourceKey || page.value !== 'home' || !activeDocument.value) return
     aiDocumentKey = documentKey.value
     ai.open(draft.value, activeDocument.value.format)
-  } finally { requestingAi.value = false }
+  } finally {
+    requestingAi.value = false
+  }
 }
 function clearRange() {
   excel.clearExport()
@@ -340,7 +709,10 @@ function closeRangeView() {
 }
 async function loadRange(dates: string[]) {
   if (excelBusy.value) return
-  if (!dates.length) { clearRange(); return }
+  if (!dates.length) {
+    clearRange()
+    return
+  }
   const revision = ++rangeRevision
   excel.clearExport()
   rangeDates.value = [...dates].sort()
@@ -348,9 +720,12 @@ async function loadRange(dates: string[]) {
   rangeError.value = ''
   rangeLoading.value = true
   try {
-    if (!(await journal.flush()) && revision === rangeRevision) rangeError.value = '当前草稿保存失败，合并视图可能不是最新内容。'
+    if (!(await journal.flush()) && revision === rangeRevision)
+      rangeError.value = '当前草稿保存失败，合并视图可能不是最新内容。'
     if (revision !== rangeRevision) return
-    const selected = entries.value.filter((entry) => dates.includes(entry.date)).sort((left, right) => right.date.localeCompare(left.date))
+    const selected = entries.value
+      .filter((entry) => dates.includes(entry.date))
+      .sort((left, right) => right.date.localeCompare(left.date))
     if (!selected.length) return
     const documents = await Promise.all(selected.map((entry) => api.read(entry.date, entry.format)))
     if (revision !== rangeRevision) return
@@ -374,7 +749,15 @@ function performHistory(action: 'undo' | 'redo') {
     document.execCommand(action)
     return
   }
-  if (page.value !== 'home' || busy.value || aiVisible.value || summaryVisible.value || rangeDates.value.length || document.querySelector('dialog[open]')) return
+  if (
+    page.value !== 'home' ||
+    busy.value ||
+    aiVisible.value ||
+    summaryVisible.value ||
+    rangeDates.value.length ||
+    document.querySelector('dialog[open]')
+  )
+    return
   if (action === 'undo') journal.undo()
   else journal.redo()
 }
@@ -382,9 +765,23 @@ function onHistoryKeydown(event: KeyboardEvent) {
   // On macOS the native Edit menu owns the key equivalents and forwards them
   // through the `history-action` event instead of dispatching keydown here.
   if (isMac && nativeApp && historyMenuAvailable) return
-  if (page.value !== 'home' || busy.value || aiVisible.value || summaryVisible.value || rangeDates.value.length || document.querySelector('dialog[open]')) return
+  if (
+    page.value !== 'home' ||
+    busy.value ||
+    aiVisible.value ||
+    summaryVisible.value ||
+    rangeDates.value.length ||
+    document.querySelector('dialog[open]')
+  )
+    return
   const target = event.target
-  if (target instanceof HTMLElement && target !== document.body && target.closest('input, textarea, [contenteditable="true"]') && !target.closest('.markdown-editor')) return
+  if (
+    target instanceof HTMLElement &&
+    target !== document.body &&
+    target.closest('input, textarea, [contenteditable="true"]') &&
+    !target.closest('.markdown-editor')
+  )
+    return
   const action = historyShortcut(event, isMac)
   if (!action) return
   event.preventDefault()
@@ -398,23 +795,52 @@ async function requestSummary(dates: string[]) {
   try {
     if (!(await journal.flush())) return
     if (workspace.value?.path !== workspacePath || page.value !== 'home' || selectionRevision !== rangeRevision) return
-    const selected = entries.value.filter((entry) => dates.includes(entry.date)).sort((left, right) => left.date.localeCompare(right.date))
-    if (!selected.length) { journal.reportError('所选日期还没有日报，无法生成总结。'); return }
+    const selected = entries.value
+      .filter((entry) => dates.includes(entry.date))
+      .sort((left, right) => left.date.localeCompare(right.date))
+    if (!selected.length) {
+      journal.reportError('所选日期还没有日报，无法生成总结。')
+      return
+    }
     const documents = await Promise.all(selected.map((entry) => api.read(entry.date, entry.format)))
     if (workspace.value?.path !== workspacePath || page.value !== 'home' || selectionRevision !== rangeRevision) return
-    if (!documents.some((document) => document.content.trim())) { journal.reportError('所选日报没有可总结的内容。'); return }
+    if (!documents.some((document) => document.content.trim())) {
+      journal.reportError('所选日报没有可总结的内容。')
+      return
+    }
     const aiContent = aiSummarySource(documents)
     const directContent = plainTextSummary(documents)
     summaryWorkspacePath.value = workspacePath ?? ''
     summarySelectionDates.value = [...dates]
     summaryOutput.clearExport()
-    ai.openSummary({ ai: aiContent, direct: directContent }, documents.map((document) => document.date))
-  } catch (cause) { if (workspace.value?.path === workspacePath && page.value === 'home' && selectionRevision === rangeRevision) journal.reportError(cause) }
-  finally { requestingAi.value = false }
+    ai.openSummary(
+      { ai: aiContent, direct: directContent },
+      documents.map((document) => document.date),
+    )
+  } catch (cause) {
+    if (workspace.value?.path === workspacePath && page.value === 'home' && selectionRevision === rangeRevision)
+      journal.reportError(cause)
+  } finally {
+    requestingAi.value = false
+  }
 }
 function exportSummary(format: FileFormat) {
-  if (!summaryVisible.value || requestingAi.value || summaryGenerating.value || summaryExporting.value || excelBusy.value || workspace.value?.path !== summaryWorkspacePath.value) return
-  void summaryOutput.exportSummary(summaryWorkspacePath.value, [...summaryDates.value], summaryResult.value, format, summaryMode.value)
+  if (
+    !summaryVisible.value ||
+    requestingAi.value ||
+    summaryGenerating.value ||
+    summaryExporting.value ||
+    excelBusy.value ||
+    workspace.value?.path !== summaryWorkspacePath.value
+  )
+    return
+  void summaryOutput.exportSummary(
+    summaryWorkspacePath.value,
+    [...summaryDates.value],
+    summaryResult.value,
+    format,
+    summaryMode.value,
+  )
 }
 function openSummaryDirectory() {
   if (!summaryVisible.value || workspace.value?.path !== summaryWorkspacePath.value) return
@@ -430,21 +856,32 @@ async function requestExcelExport() {
   if (!summaryVisible.value || summaryExporting.value || excelBusy.value) return
   excel.clearExport()
   excelDirectoryError.value = ''
-  const blockedReason = busy.value ? '工作空间正在处理中，请稍后重试。' : !excelSettings.value.enabled ? '请先在设置中启用 Excel 输出。' : excelBlockedReason.value
-  if (blockedReason) { excelExportError.value = blockedReason; return }
+  const blockedReason = busy.value
+    ? '工作空间正在处理中，请稍后重试。'
+    : !excelSettings.value.enabled
+      ? '请先在设置中启用 Excel 输出。'
+      : excelBlockedReason.value
+  if (blockedReason) {
+    excelExportError.value = blockedReason
+    return
+  }
   const dates = [...summarySelectionDates.value]
   const workspacePath = summaryWorkspacePath.value
   const revision = ++excelActionRevision
   requestingExcel.value = true
   try {
-    if (!(await excel.flush())) return
     if (revision !== excelActionRevision || !summaryVisible.value || workspacePath !== workspace.value?.path) return
     await excel.prepareSelection(workspacePath, dates)
-  } finally { if (revision === excelActionRevision) requestingExcel.value = false }
+  } finally {
+    if (revision === excelActionRevision) requestingExcel.value = false
+  }
 }
 async function confirmExcelPreview() {
   if (!summaryVisible.value || summaryExporting.value || excelBusy.value || !excelPreview.value) return
-  if (summaryWorkspacePath.value !== workspace.value?.path) { excelExportError.value = '工作空间已切换，请重新生成 Excel 预览。'; return }
+  if (summaryWorkspacePath.value !== workspace.value?.path) {
+    excelExportError.value = '工作空间已切换，请重新生成 Excel 预览。'
+    return
+  }
   excelDirectoryError.value = ''
   await excel.confirmPreview(summaryWorkspacePath.value)
 }
@@ -454,8 +891,11 @@ function discardExcelPreview() {
 }
 async function openExcelOutputDirectory() {
   if (!nativeApp || !summaryVisible.value || summaryWorkspacePath.value !== workspace.value?.path) return
-  try { await invoke<void>('open_excel_output_directory') }
-  catch (cause) { excelDirectoryError.value = `无法打开 Excel 输出目录：${String(cause)}` }
+  try {
+    await invoke<void>('open_excel_output_directory')
+  } catch (cause) {
+    excelDirectoryError.value = `无法打开 Excel 输出目录：${String(cause)}`
+  }
 }
 async function cancelExcelExport() {
   if (excelExporting.value) return
@@ -464,167 +904,434 @@ async function cancelExcelExport() {
   await excel.cancel()
 }
 async function startAiSummary() {
-  if (requestingAi.value || summaryGenerating.value || summaryExporting.value || excelBusy.value || !summaryVisible.value) return
+  if (
+    requestingAi.value ||
+    summaryGenerating.value ||
+    summaryExporting.value ||
+    excelBusy.value ||
+    !summaryVisible.value
+  )
+    return
   const revision = summarySessionRevision
   requestingAi.value = true
   try {
     const loaded = await ai.load()
     if (revision !== summarySessionRevision || !summaryVisible.value) return
-    if (!loaded) { ai.closeSummary(); journal.reportError(`无法读取 AI 设置：${aiSettingsError.value}`); return }
-    if (!defaultProvider.value) { ai.closeSummary(); await navigate('settings'); return }
+    if (!loaded) {
+      ai.closeSummary()
+      journal.reportError(`无法读取 AI 设置：${aiSettingsError.value}`)
+      return
+    }
+    if (!defaultProvider.value) {
+      ai.closeSummary()
+      await navigate('settings')
+      return
+    }
     void ai.generateSummary()
-  } finally { requestingAi.value = false }
+  } finally {
+    requestingAi.value = false
+  }
 }
 async function applyAi(content: string, restore = false) {
-  if (documentKey.value !== aiDocumentKey) { ai.close(); journal.reportError('日报已切换，未应用润色结果。'); return }
+  if (documentKey.value !== aiDocumentKey) {
+    ai.close()
+    journal.reportError('日报已切换，未应用润色结果。')
+    return
+  }
   if (!restore) backups.value[documentKey.value] ??= aiOriginal.value
   journal.edit(content, true)
   ai.close()
   const closing = polishDialog.value?.close()
   await journal.flush()
-  if (await closing && page.value === 'home' && !document.querySelector('dialog[open]') && documentKey.value === aiDocumentKey) editor.value?.focus()
+  if (
+    (await closing) &&
+    page.value === 'home' &&
+    !document.querySelector('dialog[open]') &&
+    documentKey.value === aiDocumentKey
+  )
+    editor.value?.focus()
 }
-function splitterPixelWidth() {
-  return layoutEl.value?.querySelector<HTMLElement>('.journal-splitter')?.offsetWidth || 18
+function beforeUnload(event: BeforeUnloadEvent) {
+  if (
+    dirty.value ||
+    saving.value ||
+    settingsSaving.value ||
+    databaseBusy.value ||
+    summaryExporting.value ||
+    excelBusy.value ||
+    (page.value === 'settings' && !settingsView.value?.unchanged)
+  ) {
+    event.preventDefault()
+    event.returnValue = ''
+  }
 }
-function calendarPanelWidth() {
-  return layoutEl.value?.querySelector<HTMLElement>('.calendar-panel')?.offsetWidth ?? 0
-}
-function isStackedLayout() {
-  const splitter = layoutEl.value?.querySelector<HTMLElement>('.journal-splitter')
-  return !splitter || getComputedStyle(splitter).display === 'none'
-}
-function clampCalendarWidth(width: number) {
-  const layout = layoutEl.value
-  if (!layout || !layout.clientWidth) return width
-  const max = Math.max(CALENDAR_MIN_WIDTH, layout.clientWidth - splitterPixelWidth() - EDITOR_MIN_WIDTH)
-  return Math.min(Math.max(width, CALENDAR_MIN_WIDTH), max)
-}
-function setCalendarWidth(width: number) {
-  if (!Number.isFinite(width)) return
-  const next = Math.round(clampCalendarWidth(width))
-  if (next !== calendarWidth.value) calendarWidth.value = next
-}
-function onSplitterMove(event: PointerEvent) {
-  if (!resizing.value) return
-  setCalendarWidth(splitterStartWidth + event.clientX - splitterStartX)
-}
-function stopSplitterResize() {
-  resizing.value = false
-  document.body.classList.remove('is-resizing')
-  window.removeEventListener('pointermove', onSplitterMove)
-  window.removeEventListener('pointerup', stopSplitterResize)
-  window.removeEventListener('pointercancel', stopSplitterResize)
-  window.removeEventListener('blur', stopSplitterResize)
-}
-function startSplitterResize(event: PointerEvent) {
-  if (event.button !== 0 || !layoutEl.value || isStackedLayout()) return
-  const width = calendarPanelWidth()
-  if (!width) return
-  event.preventDefault()
-  resizing.value = true
-  splitterStartX = event.clientX
-  splitterStartWidth = width
-  document.body.classList.add('is-resizing')
-  window.addEventListener('pointermove', onSplitterMove)
-  window.addEventListener('pointerup', stopSplitterResize)
-  window.addEventListener('pointercancel', stopSplitterResize)
-  window.addEventListener('blur', stopSplitterResize)
-}
-function onSplitterKeydown(event: KeyboardEvent) {
-  if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return
-  const width = calendarPanelWidth()
-  if (!width) return
-  event.preventDefault()
-  const step = event.shiftKey ? 48 : 16
-  setCalendarWidth(width + (event.key === 'ArrowLeft' ? -step : step))
-}
-function resetSplitterWidth() { calendarWidth.value = null }
-function beforeUnload(event: BeforeUnloadEvent) { if (dirty.value || saving.value || settingsSaving.value || databaseBusy.value || aiSaving.value || appearanceSaving.value || excelSaving.value || summaryOutputSaving.value || summaryExporting.value || excelBusy.value || (page.value === 'settings' && !settingsView.value?.unchanged)) { event.preventDefault(); event.returnValue = '' } }
 function onFocus() {
   now.value = dayjs()
-  if (!dirty.value && !saving.value && !error.value && !modal.value?.open && !picking.value && !aiVisible.value && !summaryVisible.value && !excelBusy.value && !rangeDates.value.length && !databaseBusy.value) void journal.refresh()
+  if (
+    !dirty.value &&
+    !saving.value &&
+    !error.value &&
+    !confirmDialog.value?.isOpen() &&
+    !picking.value &&
+    !aiVisible.value &&
+    !summaryVisible.value &&
+    !excelBusy.value &&
+    !rangeDates.value.length &&
+    !databaseBusy.value
+  )
+    void journal.refresh()
 }
-watch(layoutEl, (element) => {
-  layoutObserver?.disconnect()
-  if (!element || typeof ResizeObserver === 'undefined') return
-  layoutObserver = new ResizeObserver(() => {
-    if (calendarWidth.value === null || isStackedLayout()) return
-    setCalendarWidth(calendarWidth.value)
-  })
-  layoutObserver.observe(element)
-}, { flush: 'post' })
 onMounted(async () => {
-  window.addEventListener('beforeunload', beforeUnload); window.addEventListener('focus', onFocus); window.addEventListener('keydown', onHistoryKeydown)
-  clockTimer = setInterval(() => { now.value = dayjs() }, 60_000)
+  document.documentElement.dataset.skin = uiPreferences.value.skin
+  window.addEventListener('beforeunload', beforeUnload)
+  window.addEventListener('focus', onFocus)
+  window.addEventListener('keydown', onHistoryKeydown)
+  window.addEventListener('pointermove', onLayoutPointerMove)
+  window.addEventListener('pointerup', onLayoutPointerUp)
+  window.addEventListener('keydown', onLayoutKeyDown)
+  clockTimer = setInterval(() => {
+    now.value = dayjs()
+  }, 60_000)
   void appearance.load()
   void excel.load()
-  void holidays.load().finally(() => { holidayReady.value = true })
+  void holidays.load().finally(() => {
+    holidayReady.value = true
+  })
   if (nativeApp) {
     void ai.load()
     try {
       recent.value = await api.recent()
-      unlistenClose = await getCurrentWindow().onCloseRequested(async (event) => { event.preventDefault(); if (busy.value || picking.value || settingsSaving.value || settingsReading.value || databaseBusy.value || settingsLeaveBusy.value || summaryExporting.value) return; if (requestSettingsExit('close')) return; await closeWindow() })
+      unlistenClose = await getCurrentWindow().onCloseRequested(async (event) => {
+        event.preventDefault()
+        if (
+          busy.value ||
+          picking.value ||
+          settingsSaving.value ||
+          settingsReading.value ||
+          databaseBusy.value ||
+          settingsLeaveBusy.value ||
+          summaryExporting.value
+        )
+          return
+        if (requestSettingsExit('close')) return
+        await closeWindow()
+      })
       unlistenHistory = await listen<string>('history-action', (event) => {
         if (event.payload === 'undo' || event.payload === 'redo') performHistory(event.payload)
       })
       historyMenuAvailable = true
-    } catch (cause) { journal.reportError(cause) }
+    } catch (cause) {
+      journal.reportError(cause)
+    }
   }
 })
-onBeforeUnmount(() => { rangeRevision++; settingsLoadRevision++; stopSplitterResize(); layoutObserver?.disconnect(); window.removeEventListener('beforeunload', beforeUnload); window.removeEventListener('focus', onFocus); window.removeEventListener('keydown', onHistoryKeydown); clearInterval(clockTimer); unlistenClose?.(); unlistenHistory?.(); ai.close(); ai.closeSummary(); void excel.cancel(); modalMotion.dispose(); settingsLeaveMotion.dispose(); journal.dispose() })
+onBeforeUnmount(() => {
+  rangeRevision++
+  settingsLoadRevision++
+  window.removeEventListener('beforeunload', beforeUnload)
+  window.removeEventListener('focus', onFocus)
+  window.removeEventListener('keydown', onHistoryKeydown)
+  window.removeEventListener('pointermove', onLayoutPointerMove)
+  window.removeEventListener('pointerup', onLayoutPointerUp)
+  window.removeEventListener('keydown', onLayoutKeyDown)
+  clearInterval(clockTimer)
+  unlistenClose?.()
+  unlistenHistory?.()
+  ai.close()
+  ai.closeSummary()
+  void excel.cancel()
+  journal.dispose()
+})
 </script>
 
 <template>
   <div class="app-shell">
-    <header class="home-heading app-toolbar">
-      <h1 class="home-greeting" :title="`${greeting}，今天是 ${now.format('M 月 D 日 dddd')}`"><span class="greeting-salutation">{{ greeting }}</span><span class="greeting-date">，今天是 {{ now.format('M 月 D 日 dddd') }}</span></h1>
-      <div class="home-heading-actions">
-        <Transition name="toolbar-switch" mode="out-in">
-        <div :key="page" class="toolbar-action-group">
-        <button v-if="page === 'settings'" type="button" class="toolbar-icon-button" aria-label="返回首页" title="返回首页" :disabled="busy || excelBusy || settingsSaving || settingsReading || settingsLeaveBusy || databaseBusy" @click="navigate('home')"><PhHouse :size="20" aria-hidden="true" /></button>
-        <template v-else>
-          <button type="button" class="toolbar-icon-button" aria-label="刷新" title="刷新" :disabled="!workspace || busy || picking || excelBusy" @click="refreshHome"><PhArrowClockwise :key="refreshRevision" :class="{ 'refresh-feedback': refreshRevision > 0 }" :size="20" aria-hidden="true" /></button>
-          <button type="button" class="toolbar-icon-button" aria-label="设置" title="设置" :disabled="busy || excelBusy" @click="navigate('settings')"><PhGearSix :size="20" aria-hidden="true" /></button>
-        </template>
-        </div>
+    <div class="app-main">
+      <AppToolbar
+        :page="page"
+        :greeting="greeting"
+        :date-label="now.format('M 月 D 日 dddd')"
+        :has-workspace="!!workspace"
+        :busy="busy"
+        :picking="picking"
+        :excel-busy="excelBusy"
+        :settings-saving="settingsSaving"
+        :settings-reading="settingsReading"
+        :settings-leave-busy="settingsLeaveBusy"
+        :database-busy="databaseBusy"
+        :refresh-revision="refreshRevision"
+        @navigate="navigate"
+        @refresh="refreshHome"
+      />
+      <div class="app-content">
+        <Transition name="status-fade">
+          <HolidayReminder
+            v-if="holidayReminderVisible"
+            :text="holidayReminderText"
+            :disabled="holidayReminderDisabled"
+            @open="openHolidaySettings"
+            @dismiss="dismissHolidayReminder"
+          />
+        </Transition>
+        <Transition name="page-switch">
+          <div v-show="page === 'settings'" class="settings-viewport" :inert="page !== 'settings'">
+            <Transition name="status-fade">
+              <div v-if="error" class="settings-workspace-error error-banner" role="alert">
+                {{ error }}<button class="text-action" @click="error = ''">关闭</button>
+              </div>
+            </Transition>
+            <SettingsView
+              ref="settingsView"
+              :key="workspace?.path ?? 'no-workspace'"
+              :backup-warning="backupWarning"
+              :backup-retrying="backupRetrying"
+              :workspace="workspace"
+              :picking="picking || busy || excelBusy || settingsSaving"
+              :bundle="workspaceSettings"
+              :loading="settingsLoading"
+              :saving="settingsSaving"
+              :database-busy="databaseBusy"
+              :before-database-transfer="journal.flush"
+              :error="settingsError"
+              :save="saveWorkspaceSettings"
+              :holidays="holidayState"
+              :holiday-loading="holidayLoading"
+              :holiday-syncing="holidaySyncing"
+              :holiday-error="holidayError"
+              :current-year="now.year()"
+              @retry-backup="journal.retryBackup"
+              @database-busy="databaseActivity = $event"
+              @database-transferred="onDatabaseTransferred"
+              @sync-holidays="holidays.sync($event)"
+              @back="navigate('home')"
+              @workspace="chooseWorkspace"
+            />
+          </div>
+        </Transition>
+        <Transition name="page-switch">
+          <main v-if="workspace" v-show="page === 'home'" class="home" :inert="page !== 'home'">
+            <Transition name="status-fade">
+              <div v-if="backupWarning" class="error-banner database-backup-warning" role="status">
+                <span>{{ backupWarning }}</span>
+                <md-text-button :disabled="backupRetrying || busy || databaseBusy" @click="journal.retryBackup">{{
+                  backupRetrying ? '正在重试…' : '重试数据库备份'
+                }}</md-text-button>
+              </div>
+            </Transition>
+            <Transition name="status-fade">
+              <div v-if="error" class="error-banner" role="alert">
+                <span>{{ error }}</span>
+                <md-text-button v-if="dirty" :disabled="saving" @click="journal.flush">重试保存</md-text-button>
+                <md-icon-button v-else aria-label="关闭提示" @click="error = ''"><PhX :size="18" /></md-icon-button>
+              </div>
+            </Transition>
+            <div
+              ref="layoutEl"
+              class="journal-layout"
+              :class="[
+                `layout-${uiPreferences.axis}`,
+                { 'order-editor-first': uiPreferences.order[0] === 'editor', 'is-layout-dragging': !!layoutDragging },
+              ]"
+              :style="layoutStyle"
+              @pointerdown="onLayoutPointerDown"
+            >
+              <CalendarPane
+                ref="calendar"
+                :style="{ order: paneOrder('calendar') }"
+                :today="today"
+                :selected="selectedDate"
+                :entries="entries"
+                :previews="previews"
+                :disabled="busy || aiVisible || summaryVisible || requestingAi || excelBusy"
+                @select="selectDate"
+                @previews="loadPreviews"
+                @range="loadRange"
+              />
+              <div
+                v-if="showSplitter"
+                class="journal-splitter"
+                :class="{ 'is-dragging': resizing }"
+                :style="{ order: 2 }"
+                role="separator"
+                aria-orientation="vertical"
+                aria-label="调整日历和编辑区宽度"
+                tabindex="0"
+                title="拖动调整宽度，双击恢复默认"
+                @pointerdown="startSplitterResize"
+                @keydown="onSplitterKeydown"
+                @dblclick="resetSplitterWidth"
+              ></div>
+              <div class="editor-stage" :style="{ order: paneOrder('editor') }">
+                <Transition name="editor-switch">
+                  <RangeOverview
+                    v-if="rangeDates.length"
+                    key="range"
+                    v-model:preview="editorPreview"
+                    :dates="rangeDates"
+                    :documents="rangeDocuments"
+                    :loading="rangeLoading"
+                    :error="rangeError"
+                    :summarizing="summaryVisible"
+                    @close="closeRangeView"
+                    @summarize="requestSummary(rangeDates)"
+                  />
+                  <JournalEditor
+                    v-else
+                    key="editor"
+                    ref="editor"
+                    v-model:preview="editorPreview"
+                    :date="selectedDate"
+                    :document="activeDocument"
+                    :is-new="isNewDraft"
+                    :content="draft"
+                    :dirty="dirty"
+                    :saving="saving"
+                    :disabled="busy || aiVisible || summaryVisible || requestingAi || excelBusy"
+                    :error="error"
+                    :saved-at="savedAt"
+                    :storage-mode="storageMode"
+                    :can-restore="canRestore"
+                    :can-undo="canUndo"
+                    :can-redo="canRedo"
+                    @edit="journal.edit"
+                    @undo="journal.undo"
+                    @redo="journal.redo"
+                    @save="journal.flush"
+                    @reload="requestReload"
+                    @format="requestFormat"
+                    @ai="requestAi"
+                    @restore="requestRestore"
+                    @error="journal.reportError"
+                  />
+                </Transition>
+              </div>
+              <div v-if="layoutDragging" class="layout-dropzones" aria-hidden="true">
+                <div
+                  v-for="zone in layoutZones"
+                  :key="zone.id"
+                  class="layout-dropzone"
+                  :class="[zone.id, { active: layoutDropZone === zone.id }]"
+                >
+                  <span>{{ zone.label }}</span>
+                </div>
+                <p class="layout-drag-hint">拖到目标位置后松开，Esc 取消</p>
+              </div>
+            </div>
+            <footer class="home-footer">
+              <span :title="workspace.path">
+                <button
+                  class="workspace-folder-button"
+                  aria-label="打开工作空间目录"
+                  title="打开工作空间目录"
+                  :disabled="openingDirectory"
+                  @click="openWorkspaceDirectory"
+                >
+                  <PhFolder :size="15" />
+                </button>
+                <span class="workspace-path-text">{{ workspace.path }}</span>
+              </span>
+              <span>每一天，一份工作记录</span>
+            </footer>
+          </main>
+        </Transition>
+        <Transition name="page-switch">
+          <WorkspaceGate
+            v-if="!workspace && page === 'home'"
+            :picking="picking"
+            :busy="busy"
+            :recent="recent"
+            :recent-name="recentName"
+            :error="error"
+            @choose="chooseWorkspace"
+            @open="journal.open"
+          />
         </Transition>
       </div>
-    </header>
-    <div class="app-content">
-    <Transition name="status-fade">
-      <div v-if="holidayReminderVisible" class="holiday-reminder" role="status">
-        <span>{{ now.year() }} 年放假信息{{ holidayCurrentFailure ? '上次同步失败' : '尚未同步成功' }}，请手动同步到日历。</span>
-        <div class="holiday-reminder-actions"><button type="button" class="text-action" :disabled="busy || picking || settingsSaving || settingsReading || databaseBusy || settingsLeaveBusy || aiVisible || summaryVisible || summaryExporting || excelBusy" @click="openHolidaySettings">前往同步</button><button type="button" class="toolbar-icon-button" aria-label="关闭放假同步提醒" title="关闭提醒" @click="dismissHolidayReminder"><PhX :size="16" aria-hidden="true" /></button></div>
-      </div>
-    </Transition>
-    <Transition name="page-switch">
-    <div v-show="page === 'settings'" class="settings-viewport" :inert="page !== 'settings'">
-      <Transition name="status-fade"><div v-if="error" class="settings-workspace-error error-banner" role="alert">{{ error }}<button class="text-action" @click="error = ''">关闭</button></div></Transition>
-      <SettingsView :backup-warning="backupWarning" :backup-retrying="backupRetrying" @retry-backup="journal.retryBackup" :key="workspace?.path ?? 'no-workspace'" ref="settingsView" :workspace="workspace" :picking="picking || busy || excelBusy || settingsSaving" :bundle="workspaceSettings" :loading="settingsLoading" :saving="settingsSaving" :database-busy="databaseBusy" :before-database-transfer="journal.flush" @database-busy="databaseActivity = $event" @database-transferred="onDatabaseTransferred" :error="settingsError" :save="saveWorkspaceSettings" :holidays="holidayState" :holiday-loading="holidayLoading" :holiday-syncing="holidaySyncing" :holiday-error="holidayError" :current-year="now.year()" @sync-holidays="holidays.sync($event)" @back="navigate('home')" @workspace="chooseWorkspace" />
+      <SettingsLeaveDialog
+        ref="settingsLeaveDialog"
+        :action="pendingSettingsExit"
+        :busy="settingsLeaveBusy"
+        :saving="settingsSaving"
+        :error="settingsLeaveError"
+        @cancel="cancelSettingsExit"
+        @discard="finishSettingsExit(false)"
+        @save="finishSettingsExit(true)"
+      />
+      <ConfirmDialog
+        ref="confirmDialog"
+        :kind="modalKind"
+        :target-format="targetFormat"
+        :filename="activeDocument?.filename"
+        :date="selectedDate"
+        :storage-mode="storageMode"
+        :error="error"
+        :busy="busy"
+        @confirm="confirmModal"
+        @cancel="cancelConfirm"
+      />
+      <AiSummaryDialog
+        :visible="summaryVisible"
+        :generating="summaryGenerating || requestingAi"
+        :elapsed-seconds="summaryElapsedSeconds"
+        :dates="summaryDates"
+        :result="summaryResult"
+        :error="summaryError"
+        :provider="defaultProvider?.name ?? ''"
+        :mode="summaryMode"
+        :output-directory="summaryDirectory"
+        :output-loading="summaryOutputLoading"
+        :output-exporting="summaryExporting"
+        :directory-opening="summaryDirectoryOpening"
+        :output-error="summaryExportError || summaryDirectoryError || summaryOutputError"
+        :exported-file="summaryExportResult?.filename ?? ''"
+        :excel-enabled="excelSettings.enabled"
+        :excel-preparing="excelPreparing || requestingExcel"
+        :excel-exporting="excelExporting"
+        :excel-preview="excelPreview"
+        :excel-blocked-reason="excelBlockedReason"
+        :excel-result="excelResult"
+        :excel-error="excelExportError || excelDirectoryError || excelSettingsError"
+        @excel="requestExcelExport"
+        @excel-unavailable="reportExcelUnavailable"
+        @cancel-excel="cancelExcelExport"
+        @confirm-excel="confirmExcelPreview"
+        @discard-excel="discardExcelPreview"
+        @regenerate-excel="requestExcelExport"
+        @open-excel-directory="openExcelOutputDirectory"
+        @export="exportSummary"
+        @open-directory="openSummaryDirectory"
+        @close="ai.closeSummary"
+        @ai="startAiSummary"
+        @direct="ai.directSummary"
+      />
+      <AiPolishDialog
+        ref="polishDialog"
+        :visible="aiVisible"
+        :generating="generating"
+        :elapsed-seconds="elapsedSeconds"
+        :original="aiOriginal"
+        :result="aiResult"
+        :error="aiResultError"
+        :provider="defaultProvider?.name ?? ''"
+        :provider-kind="defaultProvider?.kind ?? ''"
+        @close="ai.close"
+        @start="ai.generate"
+        @regenerate="ai.generate"
+        @edit="onAiResultEdit"
+        @apply="applyAi(aiResult)"
+        @restore="applyAi(aiOriginal, true)"
+      />
+      <SkinDialog ref="skinDialog" :active="uiPreferences.skin" @select="applySkin" @close="closeSkinDialog" />
     </div>
-    </Transition>
-    <Transition name="page-switch">
-    <main v-if="workspace" v-show="page === 'home'" class="home" :inert="page !== 'home'">
-      <Transition name="status-fade"><div v-if="backupWarning" class="error-banner database-backup-warning" role="status"><span>{{ backupWarning }}</span><md-text-button :disabled="backupRetrying || busy || databaseBusy" @click="journal.retryBackup">{{ backupRetrying ? '正在重试…' : '重试数据库备份' }}</md-text-button></div></Transition>
-      <Transition name="status-fade"><div v-if="error" class="error-banner" role="alert"><span>{{ error }}</span><md-text-button v-if="dirty" :disabled="saving" @click="journal.flush">重试保存</md-text-button><md-icon-button v-else aria-label="关闭提示" @click="error = ''"><PhX :size="18" /></md-icon-button></div></Transition>
-      <div ref="layoutEl" class="journal-layout" :style="layoutStyle"><CalendarPane ref="calendar" :today="today" :selected="selectedDate" :entries="entries" :previews="previews" :disabled="busy || aiVisible || summaryVisible || requestingAi || excelBusy" @select="selectDate" @previews="loadPreviews" @range="loadRange" /><div class="journal-splitter" :class="{ 'is-dragging': resizing }" role="separator" aria-orientation="vertical" aria-label="调整日历和编辑区宽度" tabindex="0" title="拖动调整宽度，双击恢复默认" @pointerdown="startSplitterResize" @keydown="onSplitterKeydown" @dblclick="resetSplitterWidth"></div><div class="editor-stage"><Transition name="editor-switch"><RangeOverview v-if="rangeDates.length" key="range" v-model:preview="editorPreview" :dates="rangeDates" :documents="rangeDocuments" :loading="rangeLoading" :error="rangeError" :summarizing="summaryVisible" @close="closeRangeView" @summarize="requestSummary(rangeDates)" /><JournalEditor v-else key="editor" v-model:preview="editorPreview" ref="editor" :date="selectedDate" :document="activeDocument" :is-new="isNewDraft" :content="draft" :dirty="dirty" :saving="saving" :disabled="busy || aiVisible || summaryVisible || requestingAi || excelBusy" :error="error" :saved-at="savedAt" :storage-mode="storageMode" :can-restore="canRestore" :can-undo="canUndo" :can-redo="canRedo" @edit="journal.edit" @undo="journal.undo" @redo="journal.redo" @save="journal.flush" @reload="requestReload" @format="requestFormat" @ai="requestAi" @restore="requestRestore" @error="journal.reportError" /></Transition></div></div>
-      <footer class="home-footer"><span :title="workspace.path"><button class="workspace-folder-button" aria-label="打开工作空间目录" title="打开工作空间目录" :disabled="openingDirectory" @click="openWorkspaceDirectory"><PhFolder :size="15" /></button><span class="workspace-path-text">{{ workspace.path }}</span></span><span>每一天，一份工作记录</span></footer>
-    </main>
-    </Transition>
-    <Transition name="page-switch">
-    <main v-if="!workspace && page === 'home'" class="workspace-gate" :inert="page !== 'home'"><div class="welcome-art" aria-hidden="true"><div class="art-folder"><PhFolderOpen :size="68" weight="light" /></div><span class="art-file"><PhFileText :size="30" weight="light" /></span></div><span class="welcome-label">你的工作，从这里开始</span><h1>为日报，选一个家。</h1><p>选择一个文件夹作为工作空间。<br />每天的记录，保存为 Markdown 或 TXT 文件。</p><md-filled-button :disabled="picking || busy" @click="chooseWorkspace"><PhFolderOpen slot="icon" :size="19" />{{ picking || busy ? '正在打开…' : '选择工作空间' }}</md-filled-button><button v-if="recent" class="recent-workspace" :disabled="picking || busy" :title="recent" @click="journal.open(recent)"><PhFolder :size="18" /><span><small>继续使用上次的工作空间</small><strong>{{ recentName }}</strong></span><PhArrowRight :size="18" /></button><p v-if="error" class="gate-error" role="alert">{{ error }}</p><div class="welcome-footnote">文件保存在本地，随时可以用其他编辑器打开。</div></main>
-    </Transition>
-    </div>
-    <dialog ref="settingsLeaveDialog" tabindex="-1" role="alertdialog" aria-modal="true" class="confirmation-dialog settings-leave-dialog" aria-labelledby="settings-leave-title" aria-describedby="settings-leave-description" @cancel.prevent="cancelSettingsExit">
-      <div class="dialog-icon"><PhGearSix :size="28" weight="light" /></div><h2 id="settings-leave-title">保存设置修改？</h2>
-      <p id="settings-leave-description">设置中有未保存的修改。保存后再{{ pendingSettingsExit === 'close' ? '关闭窗口' : pendingSettingsExit === 'workspace' ? '切换工作空间' : '返回首页' }}，或放弃本次修改。</p>
-      <p v-if="settingsLeaveError" class="error-text dialog-error" role="alert">{{ settingsLeaveError }}</p>
-      <div class="dialog-actions"><md-text-button class="dialog-button dialog-button-secondary" :disabled="settingsLeaveBusy || settingsSaving" @click="cancelSettingsExit">继续编辑</md-text-button><md-text-button class="dialog-button dialog-button-secondary" :disabled="settingsLeaveBusy || settingsSaving" @click="finishSettingsExit(false)">不保存</md-text-button><md-filled-button class="dialog-button dialog-button-primary" :disabled="settingsLeaveBusy || settingsSaving" @click="finishSettingsExit(true)">{{ settingsLeaveBusy || settingsSaving ? '正在保存…' : '保存并继续' }}</md-filled-button></div>
-    </dialog>
-    <dialog ref="modal" tabindex="-1" role="dialog" aria-modal="true" class="confirmation-dialog" aria-labelledby="dialog-title" aria-describedby="dialog-description" @cancel.prevent="!busy && modalMotion.close()"><div class="dialog-icon"><PhFileText :size="28" weight="light" /></div><h2 id="dialog-title">{{ modalKind === 'format' ? '切换日报文件格式？' : modalKind === 'restore' ? '恢复润色前的原文？' : '重新载入磁盘内容？' }}</h2>
-      <p id="dialog-description" v-if="modalKind === 'format'">将 <strong>{{ activeDocument?.filename }}</strong> 切换为 <strong>{{ selectedDate }}.{{ targetFormat }}</strong>。<br /><template v-if="storageMode === 'database'">文本内容保持原样，仅更新数据库中的日报格式，已有文件保持不变。</template><template v-else>文本内容保持原样，保存后会更换文件扩展名。若目标文件已存在，将阻止切换。</template></p><p id="dialog-description" v-else-if="modalKind === 'restore'">将使用 AI 润色前保留的原始日报替换当前文本，并自动保存。</p><p id="dialog-description" v-else>当前未保存的编辑将被{{ storageMode === 'database' ? '数据库中的内容' : '磁盘文件' }}替换。<br />请先复制需要保留的草稿。</p><p v-if="error" class="error-text dialog-error" role="alert">{{ error }}</p><div class="dialog-actions"><md-text-button class="dialog-button dialog-button-secondary" :disabled="busy" @click="modalMotion.close()">取消</md-text-button><md-filled-button class="dialog-button dialog-button-primary" :disabled="busy" @click="confirmModal">{{ busy ? '处理中…' : modalKind === 'format' ? '确认切换' : modalKind === 'restore' ? '恢复原文' : '重新载入' }}</md-filled-button></div></dialog>
-    <AiSummaryDialog :visible="summaryVisible" :generating="summaryGenerating || requestingAi" :elapsed-seconds="summaryElapsedSeconds" :dates="summaryDates" :result="summaryResult" :error="summaryError" :provider="defaultProvider?.name ?? ''" :mode="summaryMode" :output-directory="summaryDirectory" :output-loading="summaryOutputLoading" :output-exporting="summaryExporting" :directory-opening="summaryDirectoryOpening" :output-error="summaryExportError || summaryDirectoryError || summaryOutputError" :exported-file="summaryExportResult?.filename ?? ''" :excel-enabled="excelSettings.enabled" :excel-preparing="excelPreparing || requestingExcel" :excel-exporting="excelExporting" :excel-preview="excelPreview" :excel-blocked-reason="excelBlockedReason" :excel-result="excelResult" :excel-error="excelExportError || excelDirectoryError || excelSettingsError" @excel="requestExcelExport" @excel-unavailable="reportExcelUnavailable" @cancel-excel="cancelExcelExport" @confirm-excel="confirmExcelPreview" @discard-excel="discardExcelPreview" @regenerate-excel="requestExcelExport" @open-excel-directory="openExcelOutputDirectory" @export="exportSummary" @open-directory="openSummaryDirectory" @close="ai.closeSummary" @ai="startAiSummary" @direct="ai.directSummary" />
-    <AiPolishDialog ref="polishDialog" :visible="aiVisible" :generating="generating" :elapsed-seconds="elapsedSeconds" :original="aiOriginal" :result="aiResult" :error="aiResultError" :provider="defaultProvider?.name ?? ''" :provider-kind="defaultProvider?.kind ?? ''" @close="ai.close" @regenerate="ai.generate" @edit="aiResult = $event; aiResultError = ''" @apply="applyAi(aiResult)" @restore="applyAi(aiOriginal, true)" />
+    <AppRail
+      v-if="page === 'home' && workspace"
+      :disabled="busy || excelBusy || picking"
+      @refresh="refreshHome"
+      @settings="navigate('settings')"
+      @skin="openSkinDialog"
+      @summary="openSummaryFromRail"
+      @excel="openExcelFromRail"
+      @history="openHistoryFromRail"
+    />
   </div>
 </template>

@@ -9,7 +9,7 @@ export const dateKey = (value: Dayjs | string = dayjs()) => dayjs(value).format(
 export function monthDays(anchor: Dayjs) {
   const first = anchor.startOf('month')
   const start = first.subtract((first.day() + 6) % 7, 'day')
-  const total = Math.ceil((first.daysInMonth() + (first.day() + 6) % 7) / 7) * 7
+  const total = Math.ceil((first.daysInMonth() + ((first.day() + 6) % 7)) / 7) * 7
   return Array.from({ length: total }, (_, index) => start.add(index, 'day'))
 }
 
@@ -35,7 +35,11 @@ export function movePeriod(anchor: Dayjs, view: ViewMode, step: number) {
 
 // WebKit may spell the day in Chinese for zh-CN, even with day: 'numeric'.
 // Request Latin digits explicitly, and localize the resulting day ourselves.
-const lunarFormatter = new Intl.DateTimeFormat('en-US-u-ca-chinese', { day: 'numeric', month: 'numeric', numberingSystem: 'latn' })
+const lunarFormatter = new Intl.DateTimeFormat('en-US-u-ca-chinese', {
+  day: 'numeric',
+  month: 'numeric',
+  numberingSystem: 'latn',
+})
 export function lunarDay(date: Dayjs) {
   const parts = lunarFormatter.formatToParts(date.toDate())
   const value = Number(parts.find((part) => part.type === 'day')?.value)
@@ -43,7 +47,9 @@ export function lunarDay(date: Dayjs) {
   if (value === 1) {
     const month = parts.find((part) => part.type === 'month')?.value ?? ''
     const monthNumber = Number.parseInt(month, 10)
-    const name = ['正月', '二月', '三月', '四月', '五月', '六月', '七月', '八月', '九月', '十月', '冬月', '腊月'][monthNumber - 1]
+    const name = ['正月', '二月', '三月', '四月', '五月', '六月', '七月', '八月', '九月', '十月', '冬月', '腊月'][
+      monthNumber - 1
+    ]
     return name ? `${month.includes('bis') ? '闰' : ''}${name}` : '初一'
   }
   const digits = ['一', '二', '三', '四', '五', '六', '七', '八', '九', '十']

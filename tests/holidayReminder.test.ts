@@ -63,7 +63,11 @@ describe('holiday synchronization reminder lifecycle', () => {
   it('reacts to the newest failed attempt and clears after a successful retry', () => {
     const reminder = setup('2027-01-01', { years: [syncedYear(2027)], failures: [] })
     expect(reminder.visible.value).toBe(false)
-    reminder.state.value.failures.push({ year: 2027, message: 'Request timed out', attemptedAt: '2027-01-01T00:02:00+08:00' })
+    reminder.state.value.failures.push({
+      year: 2027,
+      message: 'Request timed out',
+      attemptedAt: '2027-01-01T00:02:00+08:00',
+    })
     expect(reminder.visible.value).toBe(true)
     reminder.state.value = { years: [syncedYear(2027, '2027-01-01T00:03:00+08:00')], failures: [] }
     expect(reminder.visible.value).toBe(false)
@@ -75,7 +79,10 @@ describe('holiday synchronization reminder lifecycle', () => {
     reminder.dismiss()
     expect(reminder.visible.value).toBe(false)
     reminder.localDate.value = '2027-01-01'
-    reminder.state.value = { years: [], failures: [{ year: 2027, message: 'Still offline', attemptedAt: '2027-01-01T12:00:00+08:00' }] }
+    reminder.state.value = {
+      years: [],
+      failures: [{ year: 2027, message: 'Still offline', attemptedAt: '2027-01-01T12:00:00+08:00' }],
+    }
     reminder.ready.value = false
     reminder.ready.value = true
     expect(reminder.visible.value).toBe(false)
@@ -101,7 +108,8 @@ describe('holiday synchronization reminder lifecycle', () => {
     reminder.localDate.value = '2027-01-02'
     expect(reminder.visible.value).toBe(false)
     reminder.state.value = {
-      years: [], failures: [{ year: 2027, message: 'Late failure', attemptedAt: '2027-01-02T00:00:00+08:00' }],
+      years: [],
+      failures: [{ year: 2027, message: 'Late failure', attemptedAt: '2027-01-02T00:00:00+08:00' }],
     }
     expect(reminder.visible.value).toBe(false)
   })

@@ -37,17 +37,31 @@ describe('select keyboard navigation', () => {
 describe('select popup viewport placement', () => {
   it('places a short list below and caps tall menus', () => {
     const anchor = { top: 100, bottom: 144, left: 20, width: 240 }
-    expect(selectMenuPosition(anchor, { width: 800, height: 600 }, 150)).toEqual({ placement: 'bottom', top: 150, left: 20, width: 240, maxHeight: 288 })
+    expect(selectMenuPosition(anchor, { width: 800, height: 600 }, 150)).toEqual({
+      placement: 'bottom',
+      top: 150,
+      left: 20,
+      width: 240,
+      maxHeight: 288,
+    })
     expect(selectMenuPosition(anchor, { width: 800, height: 600 }, 1200).maxHeight).toBe(288)
   })
 
   it('flips upward near the bottom and stays within horizontal viewport bounds', () => {
-    const result = selectMenuPosition({ top: 500, bottom: 544, left: 700, width: 240 }, { width: 800, height: 600 }, 200)
+    const result = selectMenuPosition(
+      { top: 500, bottom: 544, left: 700, width: 240 },
+      { width: 800, height: 600 },
+      200,
+    )
     expect(result).toEqual({ placement: 'top', top: 294, left: 552, width: 240, maxHeight: 288 })
   })
 
   it('constrains a large trigger and list in a small viewport', () => {
-    const result = selectMenuPosition({ top: 100, bottom: 144, left: -20, width: 1000 }, { width: 320, height: 240 }, 600)
+    const result = selectMenuPosition(
+      { top: 100, bottom: 144, left: -20, width: 1000 },
+      { width: 320, height: 240 },
+      600,
+    )
     expect(result.width).toBe(304)
     expect(result.left).toBe(8)
     expect(result.placement).toBe('top')

@@ -1,7 +1,14 @@
 import { describe, expect, it } from 'vitest'
 import { historyShortcut } from '../src/lib/shortcuts'
 
-const key = (value: string, extra: Partial<KeyboardEvent> = {}) => ({ key: value, altKey: false, ctrlKey: false, metaKey: false, shiftKey: false, ...extra })
+const key = (value: string, extra: Partial<KeyboardEvent> = {}) => ({
+  key: value,
+  altKey: false,
+  ctrlKey: false,
+  metaKey: false,
+  shiftKey: false,
+  ...extra,
+})
 
 describe('history shortcuts', () => {
   it('uses Command on macOS', () => {

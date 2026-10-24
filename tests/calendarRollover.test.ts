@@ -36,19 +36,26 @@ function remove(child: TestNode) {
 // Exercise the real component's reactive render without introducing a browser
 // dependency. The host records the date buttons and their rendered classes.
 const renderer = createRenderer<TestNode, TestNode>({
-  createElement: type => node(type),
-  createText: text => node('text', text),
-  createComment: text => node('comment', text),
-  setText: (target, text) => { target.text = text },
-  setElementText: (target, text) => { target.text = text; target.children = [] },
-  parentNode: target => target.parent,
-  nextSibling: target => {
+  createElement: (type) => node(type),
+  createText: (text) => node('text', text),
+  createComment: (text) => node('comment', text),
+  setText: (target, text) => {
+    target.text = text
+  },
+  setElementText: (target, text) => {
+    target.text = text
+    target.children = []
+  },
+  parentNode: (target) => target.parent,
+  nextSibling: (target) => {
     const siblings = target.parent?.children ?? []
     return siblings[siblings.indexOf(target) + 1] ?? null
   },
   insert,
   remove,
-  patchProp: (target, key, _previous, value) => { target.props[key] = value },
+  patchProp: (target, key, _previous, value) => {
+    target.props[key] = value
+  },
   insertStaticContent: (content, parent, anchor) => {
     const target = node('static', content)
     insert(target, parent, anchor)
@@ -61,20 +68,30 @@ const renderer = createRenderer<TestNode, TestNode>({
 const descriptor = parse(calendarSource).descriptor
 const bindings = compileScript(descriptor, { id: 'calendar-rollover-test' }).bindings
 const template = compileTemplate({
-  id: 'calendar-rollover-test', filename: 'CalendarPane.vue', source: descriptor.template!.content,
-  compilerOptions: { bindingMetadata: bindings, isCustomElement: tag => tag.startsWith('md-') },
+  id: 'calendar-rollover-test',
+  filename: 'CalendarPane.vue',
+  source: descriptor.template!.content,
+  compilerOptions: { bindingMetadata: bindings, isCustomElement: (tag) => tag.startsWith('md-') },
 })
 if (template.errors.length) throw new Error(String(template.errors[0]))
 const renderSource = template.code
-  .replace(/import \{([^}]+)\} from ["']vue["']/g, (_match, imports: string) => `const {${imports.replace(/\bas\b/g, ':')}} = Vue`)
+  .replace(
+    /import \{([^}]+)\} from ["']vue["']/g,
+    (_match, imports: string) => `const {${imports.replace(/\bas\b/g, ':')}} = Vue`,
+  )
   .replace('export function render', 'return function render')
-const ClientCalendarPane = Object.assign({}, CalendarPane, { render: new Function('Vue', renderSource)(Vue) as RenderFunction })
+const ClientCalendarPane = Object.assign({}, CalendarPane, {
+  render: new Function('Vue', renderSource)(Vue) as RenderFunction,
+})
 
 function descendants(root: TestNode): TestNode[] {
-  return root.children.flatMap(child => [child, ...descendants(child)])
+  return root.children.flatMap((child) => [child, ...descendants(child)])
 }
 
-afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals() })
+afterEach(() => {
+  vi.useRealTimers()
+  vi.unstubAllGlobals()
+})
 
 describe('calendar date rollover', () => {
   it('updates today after midnight without changing the selected report or emitting navigation', async () => {
@@ -87,15 +104,24 @@ describe('calendar date rollover', () => {
     const onRange = vi.fn()
     const root = node('root')
     const app = renderer.createApp({
-      setup: () => () => h(ClientCalendarPane, {
-        today: today.value, selected: '20261022', entries: [], previews: {}, disabled: false,
-        onSelect, onRange,
-      }),
+      setup: () => () =>
+        h(ClientCalendarPane, {
+          today: today.value,
+          selected: '20261022',
+          entries: [],
+          previews: {},
+          disabled: false,
+          onSelect,
+          onRange,
+        }),
     })
     app.provide(ssrContextKey, { modules: new Set() })
     app.mount(root)
     try {
-      const day = (date: number) => descendants(root).find(target => target.type === 'button' && String(target.props['aria-label']).startsWith(`2026年10月${date}日 `))!
+      const day = (date: number) =>
+        descendants(root).find(
+          (target) => target.type === 'button' && String(target.props['aria-label']).startsWith(`2026年10月${date}日 `),
+        )!
       expect(day(22).props.class).toContain('is-today')
       expect(day(22).props.class).toContain('selected')
       expect(day(23).props.class).not.toContain('is-today')
@@ -112,6 +138,8 @@ describe('calendar date rollover', () => {
       expect(day(23).props.class).not.toContain('selected')
       expect(onSelect).not.toHaveBeenCalled()
       expect(onRange).not.toHaveBeenCalled()
-    } finally { app.unmount() }
+    } finally {
+      app.unmount()
+    }
   })
 })

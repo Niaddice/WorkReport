@@ -2,25 +2,39 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { invoke, isTauri } from '@tauri-apps/api/core'
 import { computed } from 'vue'
 import { getChinaDayMeta, installHolidayData, isWeekend } from '../src/lib/chinaHolidays'
-import { emptyHolidayState, HOLIDAY_STORAGE_KEY, parseHolidayState, shouldRemindHolidaySync, useHolidays, type HolidayState, type HolidayYear } from '../src/lib/holidays'
+import {
+  emptyHolidayState,
+  HOLIDAY_STORAGE_KEY,
+  parseHolidayState,
+  shouldRemindHolidaySync,
+  useHolidays,
+  type HolidayState,
+  type HolidayYear,
+} from '../src/lib/holidays'
 
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn(), isTauri: vi.fn() }))
 
 function yearData(year = 2027, values: Partial<HolidayYear> = {}): HolidayYear {
   return {
-    year, days: [{ date: `${year}-01-01`, name: '元旦', isOffDay: true }],
+    year,
+    days: [{ date: `${year}-01-01`, name: '元旦', isOffDay: true }],
     syncedAt: `${year}-01-01T00:00:00+08:00`,
     sourceUrl: `https://raw.githubusercontent.com/NateScarlet/holiday-cn/master/${year}.json`,
     ...values,
   }
 }
 
-function stateWith(...years: HolidayYear[]): HolidayState { return { years, failures: [] } }
+function stateWith(...years: HolidayYear[]): HolidayState {
+  return { years, failures: [] }
+}
 
 function deferred<T>() {
   let resolve!: (value: T) => void
   let reject!: (reason: unknown) => void
-  const promise = new Promise<T>((done, fail) => { resolve = done; reject = fail })
+  const promise = new Promise<T>((done, fail) => {
+    resolve = done
+    reject = fail
+  })
   return { promise, resolve, reject }
 }
 
@@ -29,16 +43,27 @@ beforeEach(() => {
   vi.mocked(isTauri).mockReturnValue(true)
   installHolidayData(emptyHolidayState())
 })
-afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); installHolidayData(emptyHolidayState()) })
+afterEach(() => {
+  vi.useRealTimers()
+  vi.unstubAllGlobals()
+  installHolidayData(emptyHolidayState())
+})
 
 describe('manual holiday synchronization', () => {
   it('loads only the local cache and applies holidays reactively to the calendar', async () => {
     const holidays = useHolidays()
     const date = computed(() => getChinaDayMeta('2027-01-02'))
     expect(date.value).toBeNull()
-    vi.mocked(invoke).mockResolvedValue(stateWith(yearData(2027, {
-      days: [{ date: '2027-01-02', name: '元旦假期', isOffDay: true }, { date: '2027-01-03', name: '元旦', isOffDay: false }],
-    })))
+    vi.mocked(invoke).mockResolvedValue(
+      stateWith(
+        yearData(2027, {
+          days: [
+            { date: '2027-01-02', name: '元旦假期', isOffDay: true },
+            { date: '2027-01-03', name: '元旦', isOffDay: false },
+          ],
+        }),
+      ),
+    )
     expect(await holidays.load()).toBe(true)
     expect(invoke).toHaveBeenCalledExactlyOnceWith('load_holiday_data')
     expect(date.value).toEqual({ name: '元旦假期', kind: 'holiday' })
@@ -64,10 +89,18 @@ describe('manual holiday synchronization', () => {
   })
 
   it('keeps working calendar data after failed sync and reloads the persisted failure before a later successful retry', async () => {
-    vi.useFakeTimers(); vi.setSystemTime(new Date('2027-01-01T01:00:00+08:00'))
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2027-01-01T01:00:00+08:00'))
     const cached = stateWith(yearData())
-    const failed = { ...cached, failures: [{ year: 2027, message: 'offline', attemptedAt: '2027-01-01T01:00:00+08:00' }] }
-    vi.mocked(invoke).mockResolvedValueOnce(cached).mockRejectedValueOnce('offline').mockResolvedValueOnce(failed).mockResolvedValueOnce({ ...cached, years: [yearData(2027, { syncedAt: '2027-01-01T01:01:00+08:00' })] })
+    const failed = {
+      ...cached,
+      failures: [{ year: 2027, message: 'offline', attemptedAt: '2027-01-01T01:00:00+08:00' }],
+    }
+    vi.mocked(invoke)
+      .mockResolvedValueOnce(cached)
+      .mockRejectedValueOnce('offline')
+      .mockResolvedValueOnce(failed)
+      .mockResolvedValueOnce({ ...cached, years: [yearData(2027, { syncedAt: '2027-01-01T01:01:00+08:00' })] })
     const holidays = useHolidays()
     expect(await holidays.load()).toBe(true)
     expect(await holidays.sync(2027)).toBe(false)
@@ -82,25 +115,40 @@ describe('manual holiday synchronization', () => {
   })
 
   it('retains current calendar data and newest failed attempt even when the failure cannot be persisted or read', async () => {
-    vi.useFakeTimers(); vi.setSystemTime(new Date('2027-01-01T02:00:00+08:00'))
-    vi.mocked(invoke).mockResolvedValueOnce(stateWith(yearData())).mockRejectedValueOnce('disk full').mockRejectedValueOnce('cannot read')
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2027-01-01T02:00:00+08:00'))
+    vi.mocked(invoke)
+      .mockResolvedValueOnce(stateWith(yearData()))
+      .mockRejectedValueOnce('disk full')
+      .mockRejectedValueOnce('cannot read')
     const holidays = useHolidays()
     await holidays.load()
     expect(await holidays.sync(2027)).toBe(false)
     expect(holidays.state.value.years).toHaveLength(1)
-    expect(holidays.state.value.failures).toEqual([{ year: 2027, message: 'disk full', attemptedAt: '2026-12-31T18:00:00.000Z' }])
+    expect(holidays.state.value.failures).toEqual([
+      { year: 2027, message: 'disk full', attemptedAt: '2026-12-31T18:00:00.000Z' },
+    ])
     expect(shouldRemindHolidaySync(holidays.state.value, '2027-01-01')).toBe(true)
   })
 
   it('replaces an older retained failure if saving the latest failed attempt also failed', async () => {
-    vi.useFakeTimers(); vi.setSystemTime(new Date('2027-01-01T02:00:00+08:00'))
-    const cached = { ...stateWith(yearData()), failures: [{ year: 2027, message: 'old failure', attemptedAt: '2026-12-31T23:00:00+08:00' }] }
-    vi.mocked(invoke).mockResolvedValueOnce(cached).mockRejectedValueOnce('new failure; disk full').mockResolvedValueOnce(cached)
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2027-01-01T02:00:00+08:00'))
+    const cached = {
+      ...stateWith(yearData()),
+      failures: [{ year: 2027, message: 'old failure', attemptedAt: '2026-12-31T23:00:00+08:00' }],
+    }
+    vi.mocked(invoke)
+      .mockResolvedValueOnce(cached)
+      .mockRejectedValueOnce('new failure; disk full')
+      .mockResolvedValueOnce(cached)
     const holidays = useHolidays()
     await holidays.load()
     expect(shouldRemindHolidaySync(holidays.state.value, '2027-01-01')).toBe(false)
     expect(await holidays.sync(2027)).toBe(false)
-    expect(holidays.state.value.failures).toEqual([{ year: 2027, message: 'new failure; disk full', attemptedAt: '2026-12-31T18:00:00.000Z' }])
+    expect(holidays.state.value.failures).toEqual([
+      { year: 2027, message: 'new failure; disk full', attemptedAt: '2026-12-31T18:00:00.000Z' },
+    ])
     expect(shouldRemindHolidaySync(holidays.state.value, '2027-01-01')).toBe(true)
   })
 
@@ -143,7 +191,8 @@ describe('manual holiday synchronization', () => {
     const cached = stateWith(yearData())
     const getItem = vi.fn(() => JSON.stringify(cached))
     const fetch = vi.fn()
-    vi.stubGlobal('localStorage', { getItem }); vi.stubGlobal('fetch', fetch)
+    vi.stubGlobal('localStorage', { getItem })
+    vi.stubGlobal('fetch', fetch)
     vi.mocked(isTauri).mockReturnValue(false)
     const holidays = useHolidays()
     expect(await holidays.load()).toBe(true)
@@ -175,14 +224,31 @@ describe('holiday calendar authority and cache validation', () => {
 
   it('gives the newer annual notice precedence for explicit dates in the preceding December', () => {
     const previous = yearData(2026, { days: [{ date: '2026-12-31', name: '旧安排', isOffDay: false }] })
-    const next = yearData(2027, { days: [{ date: '2027-01-01', name: '元旦', isOffDay: true }, { date: '2026-12-31', name: '元旦假期', isOffDay: true }] })
+    const next = yearData(2027, {
+      days: [
+        { date: '2027-01-01', name: '元旦', isOffDay: true },
+        { date: '2026-12-31', name: '元旦假期', isOffDay: true },
+      ],
+    })
     installHolidayData(parseHolidayState(stateWith(next, previous)))
     expect(getChinaDayMeta('2026-12-31')).toEqual({ name: '元旦假期', kind: 'holiday' })
   })
 
   it('rejects incomplete, duplicate, impossible, or wrong-year date records', () => {
-    const invalidDays: unknown[] = [[], [{ date: '2027-02-29', name: '假期', isOffDay: true }], [{ date: '2027-01-01', name: ' ', isOffDay: true }], [{ date: '2027-01-01', name: '元旦', isOffDay: 'true' }], [{ date: '2027-01-01', name: '元旦', isOffDay: true }, { date: '2027-01-01', name: '元旦', isOffDay: true }], [{ date: '2026-11-30', name: '假期', isOffDay: true }], [{ date: '2026-12-31', name: '假期', isOffDay: true }]]
-    for (const days of invalidDays) expect(() => parseHolidayState({ years: [{ ...yearData(), days }], failures: [] })).toThrow()
+    const invalidDays: unknown[] = [
+      [],
+      [{ date: '2027-02-29', name: '假期', isOffDay: true }],
+      [{ date: '2027-01-01', name: ' ', isOffDay: true }],
+      [{ date: '2027-01-01', name: '元旦', isOffDay: 'true' }],
+      [
+        { date: '2027-01-01', name: '元旦', isOffDay: true },
+        { date: '2027-01-01', name: '元旦', isOffDay: true },
+      ],
+      [{ date: '2026-11-30', name: '假期', isOffDay: true }],
+      [{ date: '2026-12-31', name: '假期', isOffDay: true }],
+    ]
+    for (const days of invalidDays)
+      expect(() => parseHolidayState({ years: [{ ...yearData(), days }], failures: [] })).toThrow()
     expect(() => parseHolidayState(stateWith(yearData(), yearData()))).toThrow()
     expect(() => parseHolidayState(stateWith(yearData(2027, { syncedAt: 'yesterday' })))).toThrow()
     expect(() => parseHolidayState(stateWith(yearData(2027, { sourceUrl: 'javascript:alert(1)' })))).toThrow()

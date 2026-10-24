@@ -23,6 +23,10 @@ use std::{
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(12);
 const QUERY_TIMEOUT: Duration = Duration::from_secs(30);
+/// 历史版本上限的可配置范围：1 GB – 10 GB，默认 1 GB。
+pub const MIN_HISTORY_LIMIT_BYTES: u64 = 1024 * 1024 * 1024;
+pub const MAX_HISTORY_LIMIT_BYTES: u64 = 10 * 1024 * 1024 * 1024;
+pub const DEFAULT_HISTORY_LIMIT_BYTES: u64 = 1024 * 1024 * 1024;
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
@@ -53,8 +57,7 @@ pub enum TlsMode {
 
 #[derive(Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default, rename_all = "camelCase")]
-pub struct Settings {
-    pub enabled: bool,
+pub struct Settings {    pub enabled: bool,
     pub engine: Engine,
     pub mode: Mode,
     pub workspace_id: String,
@@ -66,6 +69,10 @@ pub struct Settings {
     pub user: String,
     pub password: String,
     pub tls_mode: TlsMode,
+    /// 新建日报时使用的默认格式；已有日报的格式不受影响。
+    pub default_format: crate::workspace::Format,
+    /// 历史版本占用的最大字节数，超出后从最旧的一天开始清理。
+    pub history_limit_bytes: u64,
 }
 
 impl Default for Settings {
@@ -82,6 +89,8 @@ impl Default for Settings {
             user: String::new(),
             password: String::new(),
             tls_mode: TlsMode::Preferred,
+            default_format: crate::workspace::Format::Md,
+            history_limit_bytes: DEFAULT_HISTORY_LIMIT_BYTES,
         }
     }
 }
@@ -111,6 +120,9 @@ pub fn validate(settings: &Settings) -> Result<Settings, String> {
     settings.database = settings.database.trim().into();
     settings.user = settings.user.trim().into();
     settings.workspace_id = settings.workspace_id.trim().to_ascii_lowercase();
+    settings.history_limit_bytes = settings
+        .history_limit_bytes
+        .clamp(MIN_HISTORY_LIMIT_BYTES, MAX_HISTORY_LIMIT_BYTES);
     if settings.sqlite_path.is_empty() {
         settings.sqlite_path = "workreport.sqlite".into();
     }
@@ -595,6 +607,18 @@ mod tests {
         assert_eq!(restored.sqlite_path, "workreport.sqlite");
         let secret = Settings { password: "do-not-print-this".into(), ..restored };
         assert!(!format!("{secret:?}").contains("do-not-print-this"));
+    }
+
+    #[test]
+    fn defaults_and_clamps_the_history_limit() {
+        let restored: Settings = serde_json::from_str("{}").unwrap();
+        assert_eq!(restored.history_limit_bytes, DEFAULT_HISTORY_LIMIT_BYTES);
+        let mut small = settings();
+        small.history_limit_bytes = 1;
+        assert_eq!(validate(&small).unwrap().history_limit_bytes, MIN_HISTORY_LIMIT_BYTES);
+        let mut large = settings();
+        large.history_limit_bytes = u64::MAX;
+        assert_eq!(validate(&large).unwrap().history_limit_bytes, MAX_HISTORY_LIMIT_BYTES);
     }
 
     #[test]

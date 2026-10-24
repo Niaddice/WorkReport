@@ -76,7 +76,8 @@ const syncedCalendar = computed(() => {
   // Newer notices take precedence for overlapping dates around New Year.
   for (const entry of [...syncedHolidayState.value.years].sort((a, b) => a.year - b.year)) {
     years.add(entry.year)
-    for (const day of entry.days) dates.set(day.date, { name: day.isOffDay ? day.name : '补班', kind: day.isOffDay ? 'holiday' : 'workday' })
+    for (const day of entry.days)
+      dates.set(day.date, { name: day.isOffDay ? day.name : '补班', kind: day.isOffDay ? 'holiday' : 'workday' })
   }
   return { years, dates }
 })

@@ -160,6 +160,14 @@ impl Workspace {
     pub fn root(&self) -> &Path {
         &self.root
     }
+    /// 历史版本失败不应阻断保存，这里只做尽力而为的记录。
+    fn record_history(&self, date: &str, format: Format, content: &str) {
+        let limit = self.database_settings.history_limit_bytes;
+        if let Err(error) = crate::history::record(self.root(), date, format, content, limit) {
+            #[cfg(debug_assertions)]
+            eprintln!("[history] {error}");
+        }
+    }
     pub fn info(&self) -> WorkspaceInfo {
         WorkspaceInfo {
             path: self.root.to_string_lossy().into_owned(),
@@ -564,10 +572,12 @@ impl Workspace {
             }
             let record = JournalRecord::new(date, format, content);
             database::run_blocking(|| database.save(&record, None))?;
+            self.record_history(date, format, content);
             return Ok(Self::document_from_record(record));
         }
         let was_pending = self.begin_backup();
         let document = self.create_file_with_content(date, format, content)?;
+        self.record_history(date, format, content);
         Ok(self.backup_document(document, was_pending))
     }
 
@@ -577,10 +587,12 @@ impl Workspace {
             let record = JournalRecord::new(date, format, content);
             let database = self.connected_database()?;
             database::run_blocking(|| database.save(&record, Some(expected_revision)))?;
+            self.record_history(date, format, content);
             return Ok(Self::document_from_record(record));
         }
         let was_pending = self.begin_backup();
         let document = self.save_file(date, format, content, expected_revision)?;
+        self.record_history(date, format, content);
         Ok(self.backup_document(document, was_pending))
     }
 
@@ -987,6 +999,16 @@ mod tests {
         let entries = workspace.list().unwrap();
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].filename, "20261018.md");
+    }
+    #[test]
+    fn saving_records_a_history_version() {
+        let (dir, mut workspace) = setup();
+        workspace.create_with_content("20261018", Format::Md, "第一版").unwrap();
+        let current = workspace.read("20261018", Format::Md).unwrap();
+        workspace.save("20261018", Format::Md, "第二版", &current.revision).unwrap();
+        let versions = crate::history::list(dir.path(), Some("20261018")).unwrap();
+        assert_eq!(versions.len(), 2);
+        assert_eq!(crate::history::read(dir.path(), "20261018", &versions[0].id).unwrap(), "第二版");
     }
     #[test]
     fn create_with_content_writes_literal_report_without_template() {

@@ -285,9 +285,10 @@ fn save(path: &Path, state: &HolidayState) -> Result<(), String> {
         .map_err(|error| format!("无法创建放假数据临时文件：{error}"))?;
     temporary.write_all(&bytes).map_err(|error| format!("无法写入放假数据缓存：{error}"))?;
     temporary.as_file().sync_all().map_err(|error| format!("无法同步放假数据缓存：{error}"))?;
-    temporary.persist(path)
-        .map(|_| ())
-        .map_err(|error| format!("无法保存放假数据，原数据保持不变：{}", error.error))
+    // 带上目标路径：失败时能直接判断是权限、磁盘还是目录问题。
+    temporary.persist(path).map(|_| ()).map_err(|error| {
+        format!("无法保存放假数据（{}），原数据保持不变：{}", path.display(), error.error)
+    })
 }
 
 async fn synchronize_with<F, Fut>(path: &Path, year: i32, fetch: F) -> Result<HolidayState, String>

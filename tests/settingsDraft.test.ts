@@ -4,15 +4,29 @@ import { DEFAULT_DATABASE_SETTINGS, cloneDatabaseSettings } from '../src/lib/dat
 import { cloneWorkspaceSettings, useSettingsDraft, type WorkspaceSettings } from '../src/lib/settingsDraft'
 
 const scopes: EffectScope[] = []
-afterEach(() => { scopes.splice(0).forEach(scope => scope.stop()) })
+afterEach(() => {
+  scopes.splice(0).forEach((scope) => scope.stop())
+})
 
 function initialSettings(): WorkspaceSettings {
   return {
     appearance: { scale: 100 },
     database: cloneDatabaseSettings(DEFAULT_DATABASE_SETTINGS),
     ai: {
-      providers: [{ id: 'main', name: '默认 AI', kind: 'http', executable: '', model: 'example-model', baseUrl: 'https://example.test/v1', apiKey: 'local-key' }],
-      defaultProviderId: 'main', generationPreference: '', summaryPrompt: '',
+      providers: [
+        {
+          id: 'main',
+          name: '默认 AI',
+          kind: 'http',
+          executable: '',
+          model: 'example-model',
+          baseUrl: 'https://example.test/v1',
+          apiKey: 'local-key',
+        },
+      ],
+      defaultProviderId: 'main',
+      generationPreference: '',
+      summaryPrompt: '',
     },
     excel: { enabled: false, templatePath: '', prompt: '', outputDirectory: '' },
     summary: { outputDirectory: '总结' },
@@ -22,7 +36,10 @@ function initialSettings(): WorkspaceSettings {
 function deferred<T>() {
   let resolve!: (value: T) => void
   let reject!: (cause: unknown) => void
-  const promise = new Promise<T>((done, fail) => { resolve = done; reject = fail })
+  const promise = new Promise<T>((done, fail) => {
+    resolve = done
+    reject = fail
+  })
   return { promise, resolve, reject }
 }
 
@@ -41,12 +58,25 @@ describe('manual settings draft', () => {
     state.draft.value.database.enabled = true
     state.draft.value.appearance.scale = 120
     state.draft.value.ai.providers[0]!.name = '修改后的 AI'
-    state.draft.value.ai.providers.push({ id: 'second', name: '备用 AI', kind: 'http', executable: '', model: 'second-model', baseUrl: 'https://second.example.test/v1', apiKey: '' })
+    state.draft.value.ai.providers.push({
+      id: 'second',
+      name: '备用 AI',
+      kind: 'http',
+      executable: '',
+      model: 'second-model',
+      baseUrl: 'https://second.example.test/v1',
+      apiKey: '',
+    })
     state.draft.value.ai.defaultProviderId = 'second'
     state.draft.value.ai.generationPreference = '改写时保留数字'
     state.draft.value.ai.summaryPrompt = '按项目整理'
     state.draft.value.summary.outputDirectory = '总结/周报'
-    state.draft.value.excel = { enabled: true, templatePath: '/templates/week.xlsx', prompt: '填入工作明细', outputDirectory: '/exports' }
+    state.draft.value.excel = {
+      enabled: true,
+      templatePath: '/templates/week.xlsx',
+      prompt: '填入工作明细',
+      outputDirectory: '/exports',
+    }
     await nextTick()
     expect(state.unchanged.value).toBe(false)
     expect(state.source.value).toEqual(original)
@@ -72,24 +102,27 @@ describe('manual settings draft', () => {
     expect(state.saved.value).toBe(false)
   })
 
-  it.each(['false', 'rejection'] as const)('retains edits and dirty state when persistence fails by %s', async failure => {
-    const persist = vi.fn<(settings: WorkspaceSettings) => Promise<boolean>>()
-    if (failure === 'false') persist.mockResolvedValueOnce(false)
-    else persist.mockRejectedValueOnce(new Error('磁盘已满'))
-    const state = createDraft(persist)
-    state.draft.value.summary.outputDirectory = '新的总结目录'
-    expect(await state.save()).toBe(false)
-    expect(state.draft.value.summary.outputDirectory).toBe('新的总结目录')
-    expect(state.source.value.summary.outputDirectory).toBe('总结')
-    expect(state.unchanged.value).toBe(false)
-    expect(state.saved.value).toBe(false)
-    expect(state.saving.value).toBe(false)
-    expect(state.error.value).toContain('保存设置失败')
-    persist.mockResolvedValueOnce(true)
-    expect(await state.save()).toBe(true)
-    expect(persist).toHaveBeenCalledTimes(2)
-    expect(state.error.value).toBe('')
-  })
+  it.each(['false', 'rejection'] as const)(
+    'retains edits and dirty state when persistence fails by %s',
+    async (failure) => {
+      const persist = vi.fn<(settings: WorkspaceSettings) => Promise<boolean>>()
+      if (failure === 'false') persist.mockResolvedValueOnce(false)
+      else persist.mockRejectedValueOnce(new Error('磁盘已满'))
+      const state = createDraft(persist)
+      state.draft.value.summary.outputDirectory = '新的总结目录'
+      expect(await state.save()).toBe(false)
+      expect(state.draft.value.summary.outputDirectory).toBe('新的总结目录')
+      expect(state.source.value.summary.outputDirectory).toBe('总结')
+      expect(state.unchanged.value).toBe(false)
+      expect(state.saved.value).toBe(false)
+      expect(state.saving.value).toBe(false)
+      expect(state.error.value).toContain('保存设置失败')
+      persist.mockResolvedValueOnce(true)
+      expect(await state.save()).toBe(true)
+      expect(persist).toHaveBeenCalledTimes(2)
+      expect(state.error.value).toBe('')
+    },
+  )
 
   it('does not persist unchanged settings or a temporary edit reverted before saving', async () => {
     const state = createDraft()
@@ -154,7 +187,10 @@ describe('manual settings draft', () => {
 
   it('retains edits made during an in-flight save and requires another explicit save', async () => {
     const write = deferred<boolean>()
-    const persist = vi.fn<(settings: WorkspaceSettings) => Promise<boolean>>().mockReturnValueOnce(write.promise).mockResolvedValue(true)
+    const persist = vi
+      .fn<(settings: WorkspaceSettings) => Promise<boolean>>()
+      .mockReturnValueOnce(write.promise)
+      .mockResolvedValue(true)
     const state = createDraft(persist)
     state.draft.value.appearance.scale = 110
     const first = state.save()

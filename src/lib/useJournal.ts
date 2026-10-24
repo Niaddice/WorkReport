@@ -32,6 +32,12 @@ export function useJournal() {
   let previewRevision = 0
   const pendingPreviews = new Map<string, object>()
   const previewVersions = new Map<string, number>()
+  /** 新建日报使用的格式，由「数据存储」中的默认格式设置驱动。 */
+  let defaultFormat: FileFormat = 'md'
+
+  function setDefaultFormat(format: FileFormat) {
+    defaultFormat = format === 'txt' ? 'txt' : 'md'
+  }
 
   function reportError(cause: unknown) {
     error.value = String(cause)
@@ -47,7 +53,11 @@ export function useJournal() {
   async function refreshIndex() {
     clearPreviews()
     entries.value = await api.list()
-    try { backupWarning.value = await api.backupWarning() ?? '' } catch { /* Status cannot block reading the primary store. */ }
+    try {
+      backupWarning.value = (await api.backupWarning()) ?? ''
+    } catch {
+      /* Status cannot block reading the primary store. */
+    }
   }
 
   function invalidatePreview(date: string) {
@@ -92,7 +102,7 @@ export function useJournal() {
     if (!preserveHistory) resetHistory()
   }
 
-  function applyDraft(date: string, format: FileFormat = 'md') {
+  function applyDraft(date: string, format: FileFormat = defaultFormat) {
     isNewDraft.value = true
     document.value = emptyDocument(date, format)
     draft.value = ''
@@ -102,7 +112,9 @@ export function useJournal() {
 
   async function loadPreviews(dates: string[]) {
     if (!workspace.value) return
-    const requested = [...new Set(dates)].filter((date) => previews.value[date] === undefined && !pendingPreviews.has(date))
+    const requested = [...new Set(dates)].filter(
+      (date) => previews.value[date] === undefined && !pendingPreviews.has(date),
+    )
     if (!requested.length) return
     const revision = previewRevision
     const versions = new Map(requested.map((date) => [date, previewVersions.get(date) ?? 0]))
@@ -130,7 +142,7 @@ export function useJournal() {
 
   async function flush(): Promise<boolean> {
     clearTimeout(timer)
-    if (pendingSave) return pendingSave.then(success => success && dirty.value ? flush() : success)
+    if (pendingSave) return pendingSave.then((success) => (success && dirty.value ? flush() : success))
     if (!document.value) return true
     if (isNewDraft.value && !draft.value.trim()) return true
     const task = (async () => {
@@ -176,13 +188,16 @@ export function useJournal() {
       }
     })
     // Preview reads can outlive the write; include any edits made during them.
-    return task.then(success => success && dirty.value ? flush() : success)
+    return task.then((success) => (success && dirty.value ? flush() : success))
   }
 
   function scheduleSave() {
     clearTimeout(timer)
     // A failed save needs a deliberate retry; keep the draft intact.
-    if (!error.value) timer = setTimeout(() => { void flush() }, 650)
+    if (!error.value)
+      timer = setTimeout(() => {
+        void flush()
+      }, 650)
   }
 
   function edit(content: string, forceHistory = false) {
@@ -234,7 +249,9 @@ export function useJournal() {
     } catch (cause) {
       reportError(cause)
       return false
-    } finally { busy.value = false }
+    } finally {
+      busy.value = false
+    }
   }
 
   async function open(path: string) {
@@ -257,7 +274,9 @@ export function useJournal() {
     } catch (cause) {
       reportError(cause)
       return false
-    } finally { busy.value = false }
+    } finally {
+      busy.value = false
+    }
   }
 
   async function reload() {
@@ -266,12 +285,17 @@ export function useJournal() {
     try {
       const format = isNewDraft.value && document.value ? document.value.format : 'md'
       await refreshIndex()
-      const entry = entries.value.find((entry) => entry.date === selectedDate.value && entry.format === document.value?.format) ?? entries.value.find((entry) => entry.date === selectedDate.value)
+      const entry =
+        entries.value.find((entry) => entry.date === selectedDate.value && entry.format === document.value?.format) ??
+        entries.value.find((entry) => entry.date === selectedDate.value)
       if (entry) applyDocument(await api.read(selectedDate.value, entry.format))
       else applyDraft(selectedDate.value, format)
       error.value = ''
-    } catch (cause) { reportError(cause) }
-    finally { busy.value = false }
+    } catch (cause) {
+      reportError(cause)
+    } finally {
+      busy.value = false
+    }
   }
 
   async function refresh() {
@@ -295,8 +319,12 @@ export function useJournal() {
       upsertEntry(switched)
       error.value = ''
       return true
-    } catch (cause) { reportError(cause); return false }
-    finally { busy.value = false }
+    } catch (cause) {
+      reportError(cause)
+      return false
+    } finally {
+      busy.value = false
+    }
   }
 
   async function retryBackup(): Promise<boolean> {
@@ -313,10 +341,45 @@ export function useJournal() {
     } catch (cause) {
       if (workspace.value?.path === path) backupWarning.value = `文件已保存，数据库备份未完成：${String(cause)}`
       return false
-    } finally { backupRetrying.value = false }
+    } finally {
+      backupRetrying.value = false
+    }
   }
 
-  function dispose() { clearTimeout(timer) }
+  function dispose() {
+    clearTimeout(timer)
+  }
 
-  return { workspace, entries, previews, selectedDate, document, isNewDraft, draft, dirty, canUndo, canRedo, busy, saving, error, backupWarning, backupRetrying, retryBackup, savedAt, edit, undo, redo, flush, select, open, switchFormat, reload, refresh, loadPreviews, reportError, dispose }
+  return {
+    workspace,
+    entries,
+    previews,
+    selectedDate,
+    document,
+    isNewDraft,
+    draft,
+    dirty,
+    canUndo,
+    canRedo,
+    busy,
+    saving,
+    error,
+    backupWarning,
+    backupRetrying,
+    retryBackup,
+    savedAt,
+    edit,
+    undo,
+    redo,
+    flush,
+    select,
+    setDefaultFormat,
+    open,
+    switchFormat,
+    reload,
+    refresh,
+    loadPreviews,
+    reportError,
+    dispose,
+  }
 }

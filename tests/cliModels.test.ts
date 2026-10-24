@@ -5,12 +5,20 @@ import { useCliModels } from '../src/lib/useCliModels'
 
 const available: AiModel[] = [{ id: 'gpt-a', name: 'GPT A' }]
 let scope: EffectScope
-beforeEach(() => { vi.restoreAllMocks(); scope = effectScope() })
-afterEach(() => { scope.stop() })
+beforeEach(() => {
+  vi.restoreAllMocks()
+  scope = effectScope()
+})
+afterEach(() => {
+  scope.stop()
+})
 
 describe('CLI model catalog', () => {
   it('fetches with the current kind and executable', async () => {
-    const source = reactive<{ kind: ProviderKind; executable: string }>({ kind: 'codex', executable: ' /opt/homebrew/bin/codex ' })
+    const source = reactive<{ kind: ProviderKind; executable: string }>({
+      kind: 'codex',
+      executable: ' /opt/homebrew/bin/codex ',
+    })
     const catalog = scope.run(() => useCliModels(() => source))!
     vi.spyOn(aiApi, 'cliModels').mockResolvedValue(available)
     expect(await catalog.fetchModels()).toBe(true)
@@ -35,7 +43,13 @@ describe('CLI model catalog', () => {
     const source = reactive<{ kind: ProviderKind; executable: string }>({ kind: 'codex', executable: '/opt/codex' })
     const catalog = scope.run(() => useCliModels(() => source))!
     let finish!: (models: AiModel[]) => void
-    vi.spyOn(aiApi, 'cliModels').mockReturnValueOnce(new Promise(resolve => { finish = resolve })).mockResolvedValueOnce(available)
+    vi.spyOn(aiApi, 'cliModels')
+      .mockReturnValueOnce(
+        new Promise((resolve) => {
+          finish = resolve
+        }),
+      )
+      .mockResolvedValueOnce(available)
     const old = catalog.fetchModels()
     source.executable = '/opt/codex-new'
     expect(await catalog.fetchModels()).toBe(true)
@@ -48,7 +62,9 @@ describe('CLI model catalog', () => {
   it('clears errors and retries', async () => {
     const source = reactive<{ kind: ProviderKind; executable: string }>({ kind: 'codex', executable: '/opt/codex' })
     const catalog = scope.run(() => useCliModels(() => source))!
-    vi.spyOn(aiApi, 'cliModels').mockRejectedValueOnce(new Error('CLI 获取模型列表失败')).mockResolvedValueOnce(available)
+    vi.spyOn(aiApi, 'cliModels')
+      .mockRejectedValueOnce(new Error('CLI 获取模型列表失败'))
+      .mockResolvedValueOnce(available)
     expect(await catalog.fetchModels()).toBe(false)
     expect(catalog.error.value).toContain('获取模型列表失败')
     expect(await catalog.fetchModels()).toBe(true)
@@ -60,7 +76,11 @@ describe('CLI model catalog', () => {
     const source = reactive<{ kind: ProviderKind; executable: string }>({ kind: 'codex', executable: '/opt/codex' })
     const catalog = scope.run(() => useCliModels(() => source))!
     let finish!: (models: AiModel[]) => void
-    vi.spyOn(aiApi, 'cliModels').mockReturnValue(new Promise(resolve => { finish = resolve }))
+    vi.spyOn(aiApi, 'cliModels').mockReturnValue(
+      new Promise((resolve) => {
+        finish = resolve
+      }),
+    )
     const pending = catalog.fetchModels()
     scope.stop()
     finish(available)

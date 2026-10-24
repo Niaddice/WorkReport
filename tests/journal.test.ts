@@ -2,8 +2,26 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { api, type Document } from '../src/lib/workspace'
 import { useJournal } from '../src/lib/useJournal'
 
-vi.mock('../src/lib/workspace', () => ({ api: { backupWarning: vi.fn(), retryBackup: vi.fn(), open: vi.fn(), list: vi.fn(), previews: vi.fn(), read: vi.fn(), create: vi.fn(), save: vi.fn(), switchFormat: vi.fn() } }))
-const original: Document = { date: '20261018', filename: '20261018.md', format: 'md', content: '# 日报\n', revision: 'r1' }
+vi.mock('../src/lib/workspace', () => ({
+  api: {
+    backupWarning: vi.fn(),
+    retryBackup: vi.fn(),
+    open: vi.fn(),
+    list: vi.fn(),
+    previews: vi.fn(),
+    read: vi.fn(),
+    create: vi.fn(),
+    save: vi.fn(),
+    switchFormat: vi.fn(),
+  },
+}))
+const original: Document = {
+  date: '20261018',
+  filename: '20261018.md',
+  format: 'md',
+  content: '# 日报\n',
+  revision: 'r1',
+}
 
 async function setup() {
   vi.mocked(api.open).mockResolvedValue({ path: '/workspace', name: 'workspace' })
@@ -17,13 +35,27 @@ async function setup() {
 }
 
 describe('workspace journal save lifecycle', () => {
-  beforeEach(() => { vi.resetAllMocks(); vi.useFakeTimers() })
-  afterEach(() => { vi.useRealTimers() })
+  beforeEach(() => {
+    vi.resetAllMocks()
+    vi.useFakeTimers()
+  })
+  afterEach(() => {
+    vi.useRealTimers()
+  })
 
   it('requires choosing a workspace again on every startup', () => {
     const journal = useJournal()
     expect(journal.workspace.value).toBeNull()
     expect(api.open).not.toHaveBeenCalled()
+  })
+
+  it('starts a new draft in the configured default format', async () => {
+    const journal = await setup()
+    journal.setDefaultFormat('txt')
+    expect(await journal.select('20261020')).toBe(true)
+    expect(journal.isNewDraft.value).toBe(true)
+    expect(journal.document.value?.format).toBe('txt')
+    expect(journal.document.value?.filename).toBe('20261020.txt')
   })
 
   it('debounces typing and saves the literal Markdown content', async () => {
@@ -40,7 +72,13 @@ describe('workspace journal save lifecycle', () => {
 
   it('keeps autosaving files when the database backup needs retry', async () => {
     const journal = await setup()
-    vi.mocked(api.save).mockImplementation(async (date, content) => ({ ...original, date, content, revision: content, backupWarning: '文件已保存，数据库备份待重试' }))
+    vi.mocked(api.save).mockImplementation(async (date, content) => ({
+      ...original,
+      date,
+      content,
+      revision: content,
+      backupWarning: '文件已保存，数据库备份待重试',
+    }))
     journal.edit('first')
     await vi.advanceTimersByTimeAsync(650)
     expect(journal.dirty.value).toBe(false)
@@ -84,7 +122,12 @@ describe('workspace journal save lifecycle', () => {
   it('serializes edits made while a save is in flight', async () => {
     const journal = await setup()
     let resolveFirst!: (value: Document) => void
-    vi.mocked(api.save).mockReturnValueOnce(new Promise((resolve) => { resolveFirst = resolve }))
+    vi.mocked(api.save)
+      .mockReturnValueOnce(
+        new Promise((resolve) => {
+          resolveFirst = resolve
+        }),
+      )
       .mockImplementationOnce(async (date, content, revision) => {
         expect(revision).toBe('r2')
         return { ...original, date, content, revision: 'r3' }
@@ -116,7 +159,13 @@ describe('workspace journal save lifecycle', () => {
   it('saves typing continued during a slow calendar preview before changing date', async () => {
     const journal = await setup()
     let resolvePreview!: (value: []) => void
-    vi.mocked(api.previews).mockReturnValueOnce(new Promise(resolve => { resolvePreview = resolve })).mockResolvedValue([])
+    vi.mocked(api.previews)
+      .mockReturnValueOnce(
+        new Promise((resolve) => {
+          resolvePreview = resolve
+        }),
+      )
+      .mockResolvedValue([])
     vi.mocked(api.save).mockImplementation(async (date, content) => ({ ...original, date, content, revision: content }))
     journal.edit('first save')
     const pending = journal.flush()
@@ -134,7 +183,13 @@ describe('workspace journal save lifecycle', () => {
   it('does not finish the first flush while newer typing still needs saving', async () => {
     const journal = await setup()
     let resolvePreview!: (value: []) => void
-    vi.mocked(api.previews).mockReturnValueOnce(new Promise(resolve => { resolvePreview = resolve })).mockResolvedValue([])
+    vi.mocked(api.previews)
+      .mockReturnValueOnce(
+        new Promise((resolve) => {
+          resolvePreview = resolve
+        }),
+      )
+      .mockResolvedValue([])
     vi.mocked(api.save).mockImplementation(async (date, content) => ({ ...original, date, content, revision: content }))
     journal.edit('first save')
     const pending = journal.flush()
@@ -151,7 +206,13 @@ describe('workspace journal save lifecycle', () => {
   it('flushes the latest draft before converting the filename and uses the new revision', async () => {
     const journal = await setup()
     vi.mocked(api.save).mockImplementation(async (date, content) => ({ ...original, date, content, revision: 'r2' }))
-    vi.mocked(api.switchFormat).mockResolvedValue({ ...original, filename: '20261018.txt', format: 'txt', content: 'latest draft', revision: 'r2' })
+    vi.mocked(api.switchFormat).mockResolvedValue({
+      ...original,
+      filename: '20261018.txt',
+      format: 'txt',
+      content: 'latest draft',
+      revision: 'r2',
+    })
     journal.edit('latest draft')
     expect(await journal.switchFormat('txt')).toBe(true)
     expect(api.switchFormat).toHaveBeenCalledWith(original.date, 'md', 'txt', 'r2')
@@ -172,7 +233,13 @@ describe('workspace journal save lifecycle', () => {
   it('shows an empty editable draft without creating a file', async () => {
     const journal = await setup()
     expect(await journal.select('20261019')).toBe(true)
-    expect(journal.document.value).toMatchObject({ date: '20261019', filename: '20261019.md', format: 'md', content: '', revision: '' })
+    expect(journal.document.value).toMatchObject({
+      date: '20261019',
+      filename: '20261019.md',
+      format: 'md',
+      content: '',
+      revision: '',
+    })
     expect(journal.isNewDraft.value).toBe(true)
     expect(journal.draft.value).toBe('')
     expect(api.create).not.toHaveBeenCalled()
@@ -184,7 +251,13 @@ describe('workspace journal save lifecycle', () => {
   it('creates the report from the first typed content', async () => {
     const journal = await setup()
     await journal.select('20261019')
-    const created: Document = { date: '20261019', filename: '20261019.md', format: 'md', content: '新的工作', revision: 'c1' }
+    const created: Document = {
+      date: '20261019',
+      filename: '20261019.md',
+      format: 'md',
+      content: '新的工作',
+      revision: 'c1',
+    }
     vi.mocked(api.create).mockResolvedValue(created)
     journal.edit('新的工作')
     await vi.advanceTimersByTimeAsync(650)
@@ -203,7 +276,13 @@ describe('workspace journal save lifecycle', () => {
     expect(await journal.switchFormat('txt')).toBe(true)
     expect(journal.document.value?.format).toBe('txt')
     expect(api.switchFormat).not.toHaveBeenCalled()
-    const created: Document = { date: '20261019', filename: '20261019.txt', format: 'txt', content: '纯文本内容', revision: 'c1' }
+    const created: Document = {
+      date: '20261019',
+      filename: '20261019.txt',
+      format: 'txt',
+      content: '纯文本内容',
+      revision: 'c1',
+    }
     vi.mocked(api.create).mockResolvedValue(created)
     journal.edit('纯文本内容')
     await vi.advanceTimersByTimeAsync(650)
@@ -253,7 +332,12 @@ describe('workspace journal save lifecycle', () => {
   it('ignores a stale preview response after a save invalidates it', async () => {
     const journal = await setup()
     let resolveOld!: (value: { date: string; preview: string }[]) => void
-    vi.mocked(api.previews).mockReturnValueOnce(new Promise((resolve) => { resolveOld = resolve }))
+    vi.mocked(api.previews)
+      .mockReturnValueOnce(
+        new Promise((resolve) => {
+          resolveOld = resolve
+        }),
+      )
       .mockResolvedValueOnce([{ date: original.date, preview: '新预览' }])
     const old = journal.loadPreviews([original.date])
     vi.mocked(api.save).mockImplementation(async (date, content) => ({ ...original, date, content, revision: 'r2' }))

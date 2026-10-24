@@ -22,6 +22,9 @@ pub struct StoredSettings {
     pub summary: crate::summary::Settings,
     #[serde(default)]
     pub database: crate::database::Settings,
+    /// 主界面模块排列；只影响界面，不参与业务校验。
+    #[serde(default)]
+    pub ui: crate::ui::Preferences,
 }
 
 pub fn load(path: &Path) -> Result<Option<StoredSettings>, String> {
@@ -99,6 +102,7 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join(FILE_NAME);
         let settings = StoredSettings {
+            ui: Default::default(),
             database: crate::database::Settings::default(),
             appearance: crate::appearance::Settings { scale: 110 },
             ai: crate::ai::Settings {
@@ -136,6 +140,7 @@ mod tests {
         save(
             &path,
             &StoredSettings {
+                ui: Default::default(),
                 database: crate::database::Settings::default(),
                 appearance: crate::appearance::Settings { scale: 120 },
                 ai: crate::ai::Settings::default(),
@@ -185,6 +190,7 @@ mod tests {
         save(
             &path,
             &StoredSettings {
+                ui: Default::default(),
                 database: crate::database::Settings::default(),
                 appearance: crate::appearance::Settings { scale: 90 },
                 ai: crate::ai::Settings::default(),

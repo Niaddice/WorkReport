@@ -6,8 +6,13 @@ import { useAiModels } from '../src/lib/useAiModels'
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn() }))
 const available: AiModel[] = [{ id: 'text-model', name: 'Text model' }]
 let scope: EffectScope
-beforeEach(() => { vi.restoreAllMocks(); scope = effectScope() })
-afterEach(() => { scope.stop() })
+beforeEach(() => {
+  vi.restoreAllMocks()
+  scope = effectScope()
+})
+afterEach(() => {
+  scope.stop()
+})
 
 describe('model catalog', () => {
   it('fetches with the current unsaved endpoint and key, without needing a model ID', async () => {
@@ -34,7 +39,13 @@ describe('model catalog', () => {
     const source = reactive({ baseUrl: 'https://first.example/v1', apiKey: 'old-key' })
     const catalog = scope.run(() => useAiModels(() => source))!
     let finish!: (models: AiModel[]) => void
-    vi.spyOn(aiApi, 'models').mockReturnValueOnce(new Promise(resolve => { finish = resolve })).mockResolvedValueOnce(available)
+    vi.spyOn(aiApi, 'models')
+      .mockReturnValueOnce(
+        new Promise((resolve) => {
+          finish = resolve
+        }),
+      )
+      .mockResolvedValueOnce(available)
     const old = catalog.fetchModels()
     source.apiKey = 'new-key'
     source.baseUrl = 'https://second.example/v1'
@@ -61,7 +72,11 @@ describe('model catalog', () => {
   it('ignores pending results after the provider editor is removed', async () => {
     const catalog = scope.run(() => useAiModels(() => ({ baseUrl: 'https://example.com/v1', apiKey: '' })))!
     let finish!: (models: AiModel[]) => void
-    vi.spyOn(aiApi, 'models').mockReturnValue(new Promise(resolve => { finish = resolve }))
+    vi.spyOn(aiApi, 'models').mockReturnValue(
+      new Promise((resolve) => {
+        finish = resolve
+      }),
+    )
     const pending = catalog.fetchModels()
     scope.stop()
     finish(available)

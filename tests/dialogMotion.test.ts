@@ -10,12 +10,18 @@ function mockDialog({ reduced = false, duration = '0.18s', animations = [] as { 
       remove: (name: string) => classes.delete(name),
       contains: (name: string) => classes.has(name),
     },
-    ownerDocument: { defaultView: {
-      matchMedia: () => ({ matches: reduced }),
-      getComputedStyle: () => ({ animationDuration: duration, animationDelay: '0s' }),
-    } },
-    showModal: vi.fn(() => { dialog.open = true }),
-    close: vi.fn(() => { dialog.open = false }),
+    ownerDocument: {
+      defaultView: {
+        matchMedia: () => ({ matches: reduced }),
+        getComputedStyle: () => ({ animationDuration: duration, animationDelay: '0s' }),
+      },
+    },
+    showModal: vi.fn(() => {
+      dialog.open = true
+    }),
+    close: vi.fn(() => {
+      dialog.open = false
+    }),
     focus: vi.fn(),
     getAnimations: () => animations,
   }
@@ -38,7 +44,9 @@ describe('native dialog motion', () => {
 
   it('keeps the modal open until its exit animation finishes', async () => {
     let finishAnimation!: () => void
-    const finished = new Promise<void>(resolve => { finishAnimation = resolve })
+    const finished = new Promise<void>((resolve) => {
+      finishAnimation = resolve
+    })
     const { element, dialog } = mockDialog({ animations: [{ finished }] })
     const motion = createDialogMotion(() => element)
     motion.open()
@@ -58,7 +66,9 @@ describe('native dialog motion', () => {
   it('does not close a quickly reopened modal when the previous animation finishes', async () => {
     vi.useFakeTimers()
     let finishAnimation!: () => void
-    const finished = new Promise<void>(resolve => { finishAnimation = resolve })
+    const finished = new Promise<void>((resolve) => {
+      finishAnimation = resolve
+    })
     const { element, dialog } = mockDialog({ animations: [{ finished }] })
     const motion = createDialogMotion(() => element)
     motion.open()
@@ -89,14 +99,17 @@ describe('native dialog motion', () => {
     expect(dialog.close).toHaveBeenCalledTimes(1)
   })
 
-  it.each([{ reduced: true }, { duration: '0s' }])('closes immediately when motion is unavailable: %j', async options => {
-    const { element, dialog } = mockDialog(options)
-    const motion = createDialogMotion(() => element)
-    motion.open()
-    expect(await motion.close()).toBe(true)
-    expect(dialog.open).toBe(false)
-    expect(element.classList.contains('is-closing')).toBe(false)
-  })
+  it.each([{ reduced: true }, { duration: '0s' }])(
+    'closes immediately when motion is unavailable: %j',
+    async (options) => {
+      const { element, dialog } = mockDialog(options)
+      const motion = createDialogMotion(() => element)
+      motion.open()
+      expect(await motion.close()).toBe(true)
+      expect(dialog.open).toBe(false)
+      expect(element.classList.contains('is-closing')).toBe(false)
+    },
+  )
 
   it('cancels the pending close and removes the modal from the top layer when disposed', async () => {
     vi.useFakeTimers()

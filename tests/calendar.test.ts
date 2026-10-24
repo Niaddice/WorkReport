@@ -14,7 +14,15 @@ describe('preserved calendar behavior', () => {
 
   it('handles leap days, weeks spanning years, and month clamping', () => {
     expect(monthDays(dayjs('2028-02-01')).some((date) => dateKey(date) === '20280229')).toBe(true)
-    expect(weekDays(dayjs('2027-01-01')).map(dateKey)).toEqual(['20261228', '20261229', '20261230', '20261231', '20270101', '20270102', '20270103'])
+    expect(weekDays(dayjs('2027-01-01')).map(dateKey)).toEqual([
+      '20261228',
+      '20261229',
+      '20261230',
+      '20261231',
+      '20270101',
+      '20270102',
+      '20270103',
+    ])
     expect(dateKey(movePeriod(dayjs('2026-01-31'), 'month', 1))).toBe('20260228')
   })
 
