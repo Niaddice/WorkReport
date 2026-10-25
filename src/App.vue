@@ -1,37 +1,31 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, provide, ref, watch } from 'vue'
 import dayjs from 'dayjs'
 import { invoke, isTauri } from '@tauri-apps/api/core'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { listen } from '@tauri-apps/api/event'
 import { open as pickDirectory } from '@tauri-apps/plugin-dialog'
-import { PhFolder, PhX } from '@phosphor-icons/vue'
+import { PhCircleNotch, PhFolder } from '@phosphor-icons/vue'
 import AppToolbar from './components/AppToolbar.vue'
 import AppRail from './components/AppRail.vue'
 import SkinDialog from './components/SkinDialog.vue'
-import CalendarPane from './components/CalendarPane.vue'
-import JournalEditor from './components/JournalEditor.vue'
 import SettingsView from './components/SettingsView.vue'
 import AiPolishDialog from './components/AiPolishDialog.vue'
-import AiSummaryDialog from './components/AiSummaryDialog.vue'
-import RangeOverview from './components/RangeOverview.vue'
 import WorkspaceGate from './components/WorkspaceGate.vue'
-import HolidayReminder from './components/HolidayReminder.vue'
 import ConfirmDialog from './components/ConfirmDialog.vue'
 import SettingsLeaveDialog from './components/SettingsLeaveDialog.vue'
+import WorkspaceSwitchDialog from './components/WorkspaceSwitchDialog.vue'
+import MessageHost from './components/MessageHost.vue'
 import { api, type Document, type FileFormat } from './lib/workspace'
 import { historyShortcut } from './lib/shortcuts'
 import { useJournal } from './lib/useJournal'
 import { aiSummarySource, plainTextSummary } from './lib/summary'
 import { useAi } from './lib/ai'
-import { useSplitter } from './lib/useSplitter'
-import {
-  DEFAULT_UI_PREFERENCES,
-  normalizeUiPreferences,
-  uiPreferencesApi,
-  type LayoutModule,
-  type UiPreferences,
-} from './lib/uiPreferences'
+import ModuleBoard from './components/ModuleBoard.vue'
+import LayoutDialog from './components/LayoutDialog.vue'
+import type { DropSide, ModuleId } from './modules/types'
+import { MODULE_CONTEXT, type CalendarHandle, type EditorHandle, type ModuleActions } from './modules/context'
+import { useModuleLayout } from './modules/useModuleLayout'
 import type { SkinId } from './lib/skins'
 import { useAppearance } from './lib/useAppearance'
 import { sameWeekRange, useExcel } from './lib/useExcel'
@@ -46,26 +40,23 @@ import {
 import { dateKey } from './lib/calendar'
 import { useHolidays } from './lib/holidays'
 import { useHolidayReminder } from './lib/useHolidayReminder'
+import { clearMessages, dismissMessage, pushMessage } from './lib/messages'
 
+const nativeApp = isTauri()
 const journal = useJournal()
 const {
   workspace,
   entries,
-  previews,
   selectedDate,
   document: activeDocument,
   isNewDraft,
   draft,
   dirty,
-  canUndo,
-  canRedo,
   busy,
   saving,
   error,
   backupWarning,
   backupRetrying,
-  savedAt,
-  loadPreviews,
 } = journal
 const ai = useAi()
 const appearance = useAppearance()
@@ -74,33 +65,9 @@ const summaryOutput = useSummaryOutput()
 const holidays = useHolidays()
 const { state: holidayState, loading: holidayLoading, syncing: holidaySyncing, error: holidayError } = holidays
 const holidayReady = ref(false)
-const {
-  settings: summaryOutputSettings,
-  loading: summaryOutputLoading,
-  error: summaryOutputError,
-  exporting: summaryExporting,
-  opening: summaryDirectoryOpening,
-  result: summaryExportResult,
-  exportError: summaryExportError,
-  openError: summaryDirectoryError,
-} = summaryOutput
+const { settings: summaryOutputSettings } = summaryOutput
 const summaryWorkspacePath = ref('')
-const summaryDirectory = computed(() => {
-  const root = summaryWorkspacePath.value.replace(/[\\/]+$/, '')
-  if (!root) return ''
-  const separator = root.includes('\\') ? '\\' : '/'
-  return `${root}${separator}${summaryOutputSettings.value.outputDirectory.replace(/[\\/]/g, separator)}`
-})
-const {
-  settings: excelSettings,
-  loading: excelLoading,
-  error: excelSettingsError,
-  preparing: excelPreparing,
-  exporting: excelExporting,
-  preview: excelPreview,
-  result: excelResult,
-  exportError: excelExportError,
-} = excel
+const { settings: excelSettings, preparing: excelPreparing, exporting: excelExporting } = excel
 const { scale: appearanceScale, loading: appearanceLoading, error: appearanceError } = appearance
 watch(
   appearanceScale,
@@ -125,42 +92,22 @@ const {
   result: aiResult,
   resultError: aiResultError,
   summaryVisible,
-  summaryGenerating,
-  summaryElapsedSeconds,
   summaryDates,
   summaryResult,
-  summaryError,
   summaryMode,
 } = ai
 watch(summaryResult, () => summaryOutput.clearExport())
 const page = ref<'home' | 'settings'>('home')
 const recent = ref<string | null>(null)
+const startupPending = ref(nativeApp)
 const picking = ref(false)
+const workspaceSwitchDialog = ref<InstanceType<typeof WorkspaceSwitchDialog>>()
+const pendingWorkspaceSwitch = ref<{ path: string; sourcePath: string; sourceName: string } | null>(null)
+const workspaceSwitchError = ref('')
 const openingDirectory = ref(false)
 const requestingAi = ref(false)
-const requestingExcel = ref(false)
-const excelBusy = computed(() => requestingExcel.value || excelPreparing.value || excelExporting.value)
+const excelBusy = computed(() => excelPreparing.value || excelExporting.value)
 const summarySelectionDates = ref<string[]>([])
-const excelDirectoryError = ref('')
-let excelActionRevision = 0
-let summarySessionRevision = 0
-watch(
-  summaryVisible,
-  () => {
-    excelActionRevision++
-    requestingExcel.value = false
-    excelDirectoryError.value = ''
-    excel.clearExport()
-  },
-  { flush: 'sync' },
-)
-watch(
-  summaryVisible,
-  () => {
-    summarySessionRevision++
-  },
-  { flush: 'sync' },
-)
 const refreshRevision = ref(0)
 const settingsView = ref<InstanceType<typeof SettingsView>>()
 const databaseSettings = ref(cloneDatabaseSettings(DEFAULT_DATABASE_SETTINGS))
@@ -193,8 +140,8 @@ const settingsLoading = computed(
   () =>
     settingsReading.value ||
     appearanceLoading.value ||
-    excelLoading.value ||
-    summaryOutputLoading.value ||
+    excel.loading.value ||
+    summaryOutput.loading.value ||
     databaseLoading.value,
 )
 let settingsLoadRevision = 0
@@ -207,116 +154,72 @@ const settingsLeaveError = ref('')
 const confirmDialog = ref<InstanceType<typeof ConfirmDialog>>()
 const modalKind = ref<'reload' | 'format' | 'restore'>('format')
 const targetFormat = ref<FileFormat>('md')
-const editor = ref<InstanceType<typeof JournalEditor>>()
 const editorPreview = ref(false)
 const polishDialog = ref<InstanceType<typeof AiPolishDialog>>()
-const calendar = ref<InstanceType<typeof CalendarPane>>()
-const layoutEl = ref<HTMLElement>()
-const { resizing, layoutStyle, startSplitterResize, onSplitterKeydown, resetSplitterWidth } = useSplitter(layoutEl)
-const uiPreferences = ref<UiPreferences>(normalizeUiPreferences(DEFAULT_UI_PREFERENCES))
-const showSplitter = computed(() => uiPreferences.value.axis === 'row' && uiPreferences.value.order[0] === 'calendar')
-function paneOrder(module: LayoutModule) {
-  if (uiPreferences.value.axis === 'column') return uiPreferences.value.order.indexOf(module) + 1
-  if (uiPreferences.value.order[0] === 'calendar') return module === 'calendar' ? 1 : 3
-  return module === 'editor' ? 1 : 2
-}
-const layoutDragging = ref<LayoutModule | null>(null)
-const layoutDropZone = ref<LayoutDropZone | null>(null)
-const layoutZones = [
-  { id: 'left', label: '移到左侧' },
-  { id: 'right', label: '移到右侧' },
-  { id: 'top', label: '移到上方' },
-  { id: 'bottom', label: '移到下方' },
-] as const
-type LayoutDropZone = (typeof layoutZones)[number]['id']
-const LAYOUT_LONG_PRESS_MS = 450
-let layoutPressTimer: ReturnType<typeof setTimeout> | undefined
-let layoutPressOrigin: { x: number; y: number } | null = null
+const layoutError = ref('')
+const moduleLayout = useModuleLayout({
+  onError: (message) => {
+    layoutError.value = message
+  },
+  workspacePath: () => workspace.value?.path ?? null,
+})
+const { layout: layoutTree, items: layoutItems, skin: activeSkin } = moduleLayout
+const layoutDialog = ref<InstanceType<typeof LayoutDialog>>()
+const moduleBoard = ref<InstanceType<typeof ModuleBoard>>()
+const calendarHandle = ref<CalendarHandle | null>(null)
+const editorHandle = ref<EditorHandle | null>(null)
 
+watch(
+  activeSkin,
+  (skin) => {
+    document.documentElement.dataset.skin = skin
+  },
+  { immediate: true },
+)
 watch(
   () => workspace.value?.path,
   (path) => {
-    if (!path) {
-      uiPreferences.value = normalizeUiPreferences(DEFAULT_UI_PREFERENCES)
-      document.documentElement.dataset.skin = uiPreferences.value.skin
-      return
-    }
-    void uiPreferencesApi
-      .load()
-      .then((preferences) => {
-        uiPreferences.value = normalizeUiPreferences(preferences)
-        document.documentElement.dataset.skin = uiPreferences.value.skin
-      })
-      .catch(() => {
-        uiPreferences.value = normalizeUiPreferences(DEFAULT_UI_PREFERENCES)
-        document.documentElement.dataset.skin = uiPreferences.value.skin
-      })
+    // 工作空间变了：先清掉旧空间布局，避免加载返回前把旧布局写进新空间。
+    moduleLayout.resetLocal()
+    if (path) void moduleLayout.load()
   },
 )
-
-function cancelLayoutPress() {
-  clearTimeout(layoutPressTimer)
-  layoutPressTimer = undefined
-  layoutPressOrigin = null
+function openLayoutDialog() {
+  layoutDialog.value?.open()
 }
-function endLayoutDrag() {
-  layoutDragging.value = null
-  layoutDropZone.value = null
-  document.body.classList.remove('is-layout-dragging')
+function closeLayoutDialog() {
+  void layoutDialog.value?.close()
 }
-function layoutZoneAt(x: number, y: number): LayoutDropZone | null {
-  const rect = layoutEl.value?.getBoundingClientRect()
-  if (!rect || x < rect.left || x > rect.right || y < rect.top || y > rect.bottom) return null
-  const dx = (x - rect.left) / rect.width - 0.5
-  const dy = (y - rect.top) / rect.height - 0.5
-  if (Math.abs(dx) > Math.abs(dy)) return dx < 0 ? 'left' : 'right'
-  return dy < 0 ? 'top' : 'bottom'
+function removeModule(id: ModuleId) {
+  moduleLayout.remove(id)
 }
-function onLayoutPointerDown(event: PointerEvent) {
-  if (page.value !== 'home' || busy.value || event.button !== 0) return
-  const target = event.target as HTMLElement | null
-  if (!target || target.closest('button, a, input, textarea, select, [contenteditable="true"]')) return
-  const pane = target.closest('.calendar-panel, .editor-panel')
-  if (!pane || !target.closest('.calendar-toolbar, .editor-heading')) return
-  const module: LayoutModule = pane.classList.contains('calendar-panel') ? 'calendar' : 'editor'
-  layoutPressOrigin = { x: event.clientX, y: event.clientY }
-  clearTimeout(layoutPressTimer)
-  layoutPressTimer = setTimeout(() => {
-    layoutPressTimer = undefined
-    layoutDragging.value = module
-    layoutDropZone.value = null
-    document.body.classList.add('is-layout-dragging')
-  }, LAYOUT_LONG_PRESS_MS)
-}
-function onLayoutPointerMove(event: PointerEvent) {
-  if (layoutPressTimer && layoutPressOrigin) {
-    const moved = Math.hypot(event.clientX - layoutPressOrigin.x, event.clientY - layoutPressOrigin.y)
-    if (moved > 8) cancelLayoutPress()
+async function activateModule(id: ModuleId) {
+  if (page.value !== 'home') {
+    await navigate('home')
+    if ((page.value as string) !== 'home') return
   }
-  if (layoutDragging.value) layoutDropZone.value = layoutZoneAt(event.clientX, event.clientY)
+  if (!layoutItems.value.some((item) => item.id === id)) moduleLayout.add(id)
+  await nextTick()
+  moduleBoard.value?.reveal(id)
 }
-function applyLayoutDrop() {
-  const module = layoutDragging.value
-  const zone = layoutDropZone.value
-  endLayoutDrag()
-  if (!module || !zone) return
-  const other: LayoutModule = module === 'calendar' ? 'editor' : 'calendar'
-  const axis: UiPreferences['axis'] = zone === 'left' || zone === 'right' ? 'row' : 'column'
-  const order: LayoutModule[] = zone === 'left' || zone === 'top' ? [module, other] : [other, module]
-  if (axis === uiPreferences.value.axis && order[0] === uiPreferences.value.order[0]) return
-  uiPreferences.value = { ...uiPreferences.value, axis, order }
-  void uiPreferencesApi.save(uiPreferences.value).catch((cause) => {
-    error.value = `保存界面布局失败：${String(cause)}`
-  })
+async function openLayoutFromRail() {
+  if (page.value !== 'home') {
+    await navigate('home')
+    if ((page.value as string) !== 'home') return
+  }
+  openLayoutDialog()
 }
-function onLayoutPointerUp() {
-  if (layoutDragging.value) applyLayoutDrop()
-  else cancelLayoutPress()
+function splitModule(dragged: ModuleId, target: ModuleId, side: DropSide) {
+  moduleLayout.split(dragged, target, side)
 }
-function onLayoutKeyDown(event: KeyboardEvent) {
-  if (event.key !== 'Escape' || !layoutDragging.value) return
-  cancelLayoutPress()
-  endLayoutDrag()
+function insertModuleAtGutter(dragged: ModuleId, path: number[]) {
+  moduleLayout.insertAtGutter(dragged, path)
+}
+function resizeModules(path: number[], ratio: number) {
+  moduleLayout.resize(path, ratio)
+}
+function resetLayout() {
+  moduleLayout.reset()
 }
 function openSkinDialog() {
   skinDialog.value?.open()
@@ -325,24 +228,7 @@ function closeSkinDialog() {
   void skinDialog.value?.close()
 }
 function applySkin(id: SkinId) {
-  uiPreferences.value = { ...uiPreferences.value, skin: id }
-  document.documentElement.dataset.skin = id
-  void uiPreferencesApi.save(uiPreferences.value).catch((cause) => {
-    error.value = `保存皮肤失败：${String(cause)}`
-  })
-}
-async function openSummaryFromRail() {
-  await requestSummary([journal.selectedDate.value])
-}
-async function openExcelFromRail() {
-  const base = dayjs(journal.selectedDate.value)
-  const start = base.subtract((base.day() + 6) % 7, 'day')
-  const dates = Array.from({ length: 7 }, (_, index) => start.add(index, 'day').format('YYYYMMDD'))
-  await requestSummary(dates)
-  if (summaryVisible.value) await requestExcelExport()
-}
-function openHistoryFromRail() {
-  editor.value?.openHistory()
+  moduleLayout.setSkin(id)
 }
 const rangeDates = ref<string[]>([])
 const rangeDocuments = ref<Document[]>([])
@@ -377,20 +263,6 @@ const holidayReminderText = computed(
   () =>
     `${now.value.year()} 年放假信息${holidayCurrentFailure.value ? '上次同步失败' : '尚未同步成功'}，请手动同步到日历。`,
 )
-const holidayReminderDisabled = computed(
-  () =>
-    busy.value ||
-    picking.value ||
-    settingsSaving.value ||
-    settingsReading.value ||
-    databaseBusy.value ||
-    settingsLeaveBusy.value ||
-    aiVisible.value ||
-    summaryVisible.value ||
-    summaryExporting.value ||
-    excelBusy.value,
-)
-const nativeApp = isTauri()
 const recentName = computed(() => recent.value?.split(/[\\/]/).filter(Boolean).at(-1))
 const greeting = computed(() => (now.value.hour() < 12 ? '上午好' : now.value.hour() < 18 ? '下午好' : '晚上好'))
 const documentKey = computed(() => `${workspace.value?.path ?? ''}/${selectedDate.value}`)
@@ -401,6 +273,20 @@ let unlistenClose: (() => void) | undefined
 let unlistenHistory: (() => void) | undefined
 let historyMenuAvailable = false
 let clockTimer: ReturnType<typeof setInterval> | undefined
+let appDisposed = false
+
+async function restoreRecentWorkspace() {
+  try {
+    const path = await api.recent()
+    if (appDisposed) return
+    recent.value = path
+    if (path) await journal.open(path)
+  } catch (cause) {
+    if (!appDisposed) journal.reportError(cause)
+  } finally {
+    if (!appDisposed) startupPending.value = false
+  }
+}
 
 async function navigate(target: 'home' | 'settings') {
   if (
@@ -411,7 +297,7 @@ async function navigate(target: 'home' | 'settings') {
     databaseBusy.value ||
     settingsLeaveBusy.value ||
     aiVisible.value ||
-    summaryExporting.value ||
+    summaryOutput.exporting.value ||
     excelBusy.value ||
     page.value === target
   )
@@ -425,9 +311,39 @@ async function navigate(target: 'home' | 'settings') {
     settingsView.value?.reset()
   }
 }
+async function toggleSettings() {
+  if (page.value !== 'settings') {
+    await navigate('settings')
+    return
+  }
+  if (
+    !settingsView.value ||
+    busy.value ||
+    picking.value ||
+    settingsLoading.value ||
+    settingsSaving.value ||
+    settingsLeaveBusy.value ||
+    databaseBusy.value ||
+    aiVisible.value ||
+    summaryOutput.exporting.value ||
+    excelBusy.value
+  )
+    return
+  settingsLeaveBusy.value = true
+  try {
+    if (!settingsView.value.unchanged && !(await settingsView.value.save())) return
+    if (await journal.flush()) page.value = 'home'
+  } finally {
+    settingsLeaveBusy.value = false
+  }
+}
 async function openHolidaySettings() {
   await navigate('settings')
   if (page.value === 'settings') await settingsView.value?.navigate('holidays')
+}
+async function openAiSettings() {
+  await navigate('settings')
+  if ((page.value as string) === 'settings') await settingsView.value?.navigate('ai')
 }
 async function loadWorkspaceSettings(reload: boolean): Promise<boolean> {
   const revision = ++settingsLoadRevision
@@ -449,8 +365,8 @@ async function loadWorkspaceSettings(reload: boolean): Promise<boolean> {
       [
         appearanceError.value,
         aiSettingsError.value,
-        excelSettingsError.value,
-        summaryOutputError.value,
+        excel.error.value,
+        summaryOutput.error.value,
         settingsDatabaseError.value,
       ]
         .filter(Boolean)
@@ -474,13 +390,14 @@ async function loadDatabaseSettings(): Promise<boolean> {
   }
 }
 async function onDatabaseTransferred(result: DatabaseTransferResult) {
+  if (result.message) pushMessage({ tone: 'success', text: result.message })
   storageRefreshing.value = true
   try {
     databaseSettings.value = cloneDatabaseSettings(result.settings)
     await nextTick()
     settingsView.value?.reset()
     clearRange()
-    calendar.value?.clearRange()
+    calendarHandle.value?.clearRange()
     await journal.reload()
   } finally {
     storageRefreshing.value = false
@@ -510,7 +427,7 @@ async function saveWorkspaceSettings(value: WorkspaceSettings): Promise<boolean>
     databaseSettings.value = cloneDatabaseSettings(stored.database)
     if (storageChanged) {
       clearRange()
-      calendar.value?.clearRange()
+      calendarHandle.value?.clearRange()
       await journal.reload()
     }
     return true
@@ -584,7 +501,7 @@ async function chooseWorkspace() {
     settingsReading.value ||
     databaseBusy.value ||
     settingsLeaveBusy.value ||
-    summaryExporting.value ||
+    summaryOutput.exporting.value ||
     excelBusy.value
   )
     return
@@ -605,13 +522,47 @@ async function performChooseWorkspace() {
       title: '选择 WorkReport 工作空间',
       defaultPath: workspace.value?.path ?? recent.value ?? undefined,
     })
-    if (typeof path === 'string' && (await journal.open(path))) {
-      calendar.value?.clearRange()
-      clearRange()
-      recent.value = workspace.value?.path ?? path
-    }
+    if (appDisposed || typeof path !== 'string' || path === workspace.value?.path) return
+    if (workspace.value) {
+      pendingWorkspaceSwitch.value = { path, sourcePath: workspace.value.path, sourceName: workspace.value.name }
+      workspaceSwitchError.value = ''
+      await nextTick()
+      workspaceSwitchDialog.value?.open()
+    } else await openSelectedWorkspace(path)
   } catch (cause) {
     journal.reportError(cause)
+  } finally {
+    picking.value = false
+  }
+}
+async function openSelectedWorkspace(path: string, syncSettingsFrom?: string) {
+  const previous = workspace.value?.path
+  const opened = await journal.open(path, syncSettingsFrom)
+  if (!opened && (!workspace.value || workspace.value.path === previous)) return false
+  calendarHandle.value?.clearRange()
+  clearRange()
+  recent.value = workspace.value?.path ?? path
+  return true
+}
+function cancelWorkspaceSwitch() {
+  if (picking.value || busy.value) return
+  pendingWorkspaceSwitch.value = null
+  workspaceSwitchError.value = ''
+  void workspaceSwitchDialog.value?.close()
+}
+async function finishWorkspaceSwitch(sync: boolean) {
+  const pending = pendingWorkspaceSwitch.value
+  if (!pending || picking.value || busy.value) return
+  picking.value = true
+  workspaceSwitchError.value = ''
+  try {
+    if (!(await openSelectedWorkspace(pending.path, sync ? pending.sourcePath : undefined))) {
+      workspaceSwitchError.value = error.value || '工作空间未切换，请检查后重试。'
+      return
+    }
+    pendingWorkspaceSwitch.value = null
+    await workspaceSwitchDialog.value?.close()
+    if (sync) pushMessage({ tone: 'success', text: '设置已同步到新工作空间。' })
   } finally {
     picking.value = false
   }
@@ -621,11 +572,11 @@ function showConfirmation() {
 }
 async function selectDate(date: string) {
   if (excelBusy.value) return
-  if (await journal.select(date)) editor.value?.focus()
+  if (await journal.select(date)) editorHandle.value?.focus()
 }
 async function requestFormat(format: FileFormat) {
   if (isNewDraft.value) {
-    if (await journal.switchFormat(format)) editor.value?.focus()
+    if (await journal.switchFormat(format)) editorHandle.value?.focus()
     return
   }
   targetFormat.value = format
@@ -644,7 +595,7 @@ async function confirmModal() {
   if (modalKind.value === 'format') {
     if (await journal.switchFormat(targetFormat.value)) {
       await confirmDialog.value?.close()
-      editor.value?.focus()
+      editorHandle.value?.focus()
     }
   } else if (modalKind.value === 'restore') {
     const original = backups.value[documentKey.value]
@@ -667,7 +618,7 @@ function onAiResultEdit(value: string) {
   aiResultError.value = ''
 }
 async function requestAi() {
-  if (requestingAi.value || !activeDocument.value || busy.value || summaryVisible.value || excelBusy.value) return
+  if (requestingAi.value || !activeDocument.value || busy.value || excelBusy.value) return
   const sourceKey = documentKey.value
   requestingAi.value = true
   try {
@@ -702,10 +653,6 @@ function clearRange() {
   rangeDocuments.value = []
   rangeLoading.value = false
   rangeError.value = ''
-}
-function closeRangeView() {
-  calendar.value?.clearRange()
-  clearRange()
 }
 async function loadRange(dates: string[]) {
   if (excelBusy.value) return
@@ -753,7 +700,6 @@ function performHistory(action: 'undo' | 'redo') {
     page.value !== 'home' ||
     busy.value ||
     aiVisible.value ||
-    summaryVisible.value ||
     rangeDates.value.length ||
     document.querySelector('dialog[open]')
   )
@@ -769,7 +715,6 @@ function onHistoryKeydown(event: KeyboardEvent) {
     page.value !== 'home' ||
     busy.value ||
     aiVisible.value ||
-    summaryVisible.value ||
     rangeDates.value.length ||
     document.querySelector('dialog[open]')
   )
@@ -788,7 +733,7 @@ function onHistoryKeydown(event: KeyboardEvent) {
   performHistory(action)
 }
 async function requestSummary(dates: string[]) {
-  if (requestingAi.value || busy.value || aiVisible.value || summaryVisible.value || excelBusy.value) return
+  if (requestingAi.value || busy.value || aiVisible.value || excelBusy.value) return
   const workspacePath = workspace.value?.path
   const selectionRevision = rangeRevision
   requestingAi.value = true
@@ -799,13 +744,13 @@ async function requestSummary(dates: string[]) {
       .filter((entry) => dates.includes(entry.date))
       .sort((left, right) => left.date.localeCompare(right.date))
     if (!selected.length) {
-      journal.reportError('所选日期还没有日报，无法生成总结。')
+      closeSummary()
       return
     }
     const documents = await Promise.all(selected.map((entry) => api.read(entry.date, entry.format)))
     if (workspace.value?.path !== workspacePath || page.value !== 'home' || selectionRevision !== rangeRevision) return
     if (!documents.some((document) => document.content.trim())) {
-      journal.reportError('所选日报没有可总结的内容。')
+      closeSummary()
       return
     }
     const aiContent = aiSummarySource(documents)
@@ -813,9 +758,11 @@ async function requestSummary(dates: string[]) {
     summaryWorkspacePath.value = workspacePath ?? ''
     summarySelectionDates.value = [...dates]
     summaryOutput.clearExport()
+    if (summaryVisible.value) ai.closeSummary()
     ai.openSummary(
       { ai: aiContent, direct: directContent },
       documents.map((document) => document.date),
+      dates,
     )
   } catch (cause) {
     if (workspace.value?.path === workspacePath && page.value === 'home' && selectionRevision === rangeRevision)
@@ -824,12 +771,15 @@ async function requestSummary(dates: string[]) {
     requestingAi.value = false
   }
 }
+function closeSummary() {
+  ai.closeSummary()
+  summaryOutput.clearExport()
+}
 function exportSummary(format: FileFormat) {
   if (
     !summaryVisible.value ||
-    requestingAi.value ||
-    summaryGenerating.value ||
-    summaryExporting.value ||
+    ai.summaryGenerating.value ||
+    summaryOutput.exporting.value ||
     excelBusy.value ||
     workspace.value?.path !== summaryWorkspacePath.value
   )
@@ -842,47 +792,30 @@ function exportSummary(format: FileFormat) {
     summaryMode.value,
   )
 }
-function openSummaryDirectory() {
-  if (!summaryVisible.value || workspace.value?.path !== summaryWorkspacePath.value) return
-  void summaryOutput.openDirectory(summaryWorkspacePath.value)
-}
-function reportExcelUnavailable() {
-  if (!summaryVisible.value || summaryExporting.value || excelBusy.value) return
+async function prepareExcel(dates: string[]) {
+  if (busy.value || excelBusy.value || !workspace.value) return
+  const workspacePath = workspace.value.path
+  summaryWorkspacePath.value = workspacePath
+  summarySelectionDates.value = [...dates].sort()
   excel.clearExport()
-  excelDirectoryError.value = ''
-  excelExportError.value = excelBlockedReason.value
-}
-async function requestExcelExport() {
-  if (!summaryVisible.value || summaryExporting.value || excelBusy.value) return
-  excel.clearExport()
-  excelDirectoryError.value = ''
-  const blockedReason = busy.value
-    ? '工作空间正在处理中，请稍后重试。'
-    : !excelSettings.value.enabled
-      ? '请先在设置中启用 Excel 输出。'
-      : excelBlockedReason.value
-  if (blockedReason) {
-    excelExportError.value = blockedReason
+  excel.exportError.value = ''
+  if (!excelSettings.value.enabled) {
+    excel.exportError.value = '请先在设置中启用 Excel 输出。'
     return
   }
-  const dates = [...summarySelectionDates.value]
-  const workspacePath = summaryWorkspacePath.value
-  const revision = ++excelActionRevision
-  requestingExcel.value = true
-  try {
-    if (revision !== excelActionRevision || !summaryVisible.value || workspacePath !== workspace.value?.path) return
-    await excel.prepareSelection(workspacePath, dates)
-  } finally {
-    if (revision === excelActionRevision) requestingExcel.value = false
+  const blockedReason = excelBlockedReason.value
+  if (blockedReason) {
+    excel.exportError.value = blockedReason
+    return
   }
+  await excel.prepareSelection(workspacePath, summarySelectionDates.value)
 }
 async function confirmExcelPreview() {
-  if (!summaryVisible.value || summaryExporting.value || excelBusy.value || !excelPreview.value) return
+  if (excelExporting.value || excelBusy.value || !excel.preview.value) return
   if (summaryWorkspacePath.value !== workspace.value?.path) {
-    excelExportError.value = '工作空间已切换，请重新生成 Excel 预览。'
+    excel.exportError.value = '工作空间已切换，请重新生成 Excel 预览。'
     return
   }
-  excelDirectoryError.value = ''
   await excel.confirmPreview(summaryWorkspacePath.value)
 }
 function discardExcelPreview() {
@@ -890,41 +823,25 @@ function discardExcelPreview() {
   void excel.discardPreview()
 }
 async function openExcelOutputDirectory() {
-  if (!nativeApp || !summaryVisible.value || summaryWorkspacePath.value !== workspace.value?.path) return
+  if (!nativeApp) return
   try {
     await invoke<void>('open_excel_output_directory')
   } catch (cause) {
-    excelDirectoryError.value = `无法打开 Excel 输出目录：${String(cause)}`
+    excel.exportError.value = `无法打开 Excel 输出目录：${String(cause)}`
   }
 }
-async function cancelExcelExport() {
-  if (excelExporting.value) return
-  excelActionRevision++
-  requestingExcel.value = false
-  await excel.cancel()
-}
 async function startAiSummary() {
-  if (
-    requestingAi.value ||
-    summaryGenerating.value ||
-    summaryExporting.value ||
-    excelBusy.value ||
-    !summaryVisible.value
-  )
-    return
-  const revision = summarySessionRevision
+  if (requestingAi.value || ai.summaryGenerating.value || excelBusy.value || !summaryVisible.value) return
   requestingAi.value = true
   try {
     const loaded = await ai.load()
-    if (revision !== summarySessionRevision || !summaryVisible.value) return
     if (!loaded) {
-      ai.closeSummary()
       journal.reportError(`无法读取 AI 设置：${aiSettingsError.value}`)
       return
     }
     if (!defaultProvider.value) {
-      ai.closeSummary()
-      await navigate('settings')
+      journal.reportError('请先在设置中配置并选择默认 AI。')
+      void navigate('settings')
       return
     }
     void ai.generateSummary()
@@ -949,15 +866,145 @@ async function applyAi(content: string, restore = false) {
     !document.querySelector('dialog[open]') &&
     documentKey.value === aiDocumentKey
   )
-    editor.value?.focus()
+    editorHandle.value?.focus()
 }
+const moduleDisabled = computed(() => busy.value || aiVisible.value || requestingAi.value)
+const moduleActions: ModuleActions = {
+  selectDate,
+  loadRange,
+  requestSummary,
+  generateSummary: () => {
+    void startAiSummary()
+  },
+  directSummary: ai.directSummary,
+  closeSummary,
+  exportSummary,
+  prepareExcel,
+  confirmExcel: confirmExcelPreview,
+  discardExcelPreview,
+  openExcelOutputDirectory,
+  requestAi,
+  requestFormat,
+  requestReload,
+  requestRestore,
+  openAiSettings: () => {
+    void openAiSettings()
+  },
+  openHolidaySettings: () => {
+    void openHolidaySettings()
+  },
+  openWorkspaceDirectory,
+  syncHolidays: (year: number) => {
+    void syncHolidays(year)
+  },
+}
+provide(MODULE_CONTEXT, {
+  journal,
+  ai,
+  holidays,
+  excel,
+  summaryOutput,
+  summarySelectionDates,
+  excelBlockedReason,
+  now,
+  today,
+  storageMode,
+  canRestore,
+  disabled: moduleDisabled,
+  rangeDates,
+  rangeDocuments,
+  rangeLoading,
+  rangeError,
+  editorPreview,
+  calendar: calendarHandle,
+  editor: editorHandle,
+  actions: moduleActions,
+})
+const messageIds: { backup: number; layout: number; holiday: number } = { backup: 0, layout: 0, holiday: 0 }
+
+async function syncHolidays(year: number) {
+  if (await holidays.sync(year)) pushMessage({ tone: 'success', text: `${year} 年放假信息已同步` })
+}
+
+watch(error, (value) => {
+  if (!value) return
+  pushMessage({
+    tone: 'error',
+    text: value,
+    duration: dirty.value ? 0 : undefined,
+    actions: dirty.value ? [{ label: '重试保存', run: () => void journal.flush() }] : undefined,
+  })
+})
+watch(backupWarning, (value) => {
+  if (value) {
+    if (messageIds.backup) dismissMessage(messageIds.backup)
+    messageIds.backup = pushMessage({
+      tone: 'warning',
+      text: value,
+      duration: 0,
+      actions: [{ label: '重试数据库备份', run: () => void journal.retryBackup() }],
+    })
+  } else if (messageIds.backup) {
+    dismissMessage(messageIds.backup)
+    messageIds.backup = 0
+  }
+})
+watch(layoutError, (value) => {
+  if (value) {
+    if (messageIds.layout) dismissMessage(messageIds.layout)
+    messageIds.layout = pushMessage({ tone: 'error', text: value })
+  } else if (messageIds.layout) {
+    dismissMessage(messageIds.layout)
+    messageIds.layout = 0
+  }
+})
+watch(
+  () => summaryOutput.result.value,
+  (value) => {
+    if (value?.filename) pushMessage({ tone: 'success', text: `总结已导出：${value.filename}` })
+  },
+)
+watch(
+  () => excel.result.value,
+  (value) => {
+    if (value?.filename) pushMessage({ tone: 'success', text: `Excel 周报已生成：${value.filename}` })
+  },
+)
+watch(
+  [holidayReminderVisible, holidayReminderText],
+  ([visible, text]) => {
+    if (visible) {
+      if (messageIds.holiday) dismissMessage(messageIds.holiday)
+      messageIds.holiday = pushMessage({
+        tone: 'warning',
+        title: '放假信息提醒',
+        text,
+        duration: 0,
+        actions: [
+          {
+            label: '前往同步',
+            run: () => {
+              dismissHolidayReminder()
+              void openHolidaySettings()
+            },
+          },
+          { label: '今天不再提醒', run: () => dismissHolidayReminder() },
+        ],
+      })
+    } else if (messageIds.holiday) {
+      dismissMessage(messageIds.holiday)
+      messageIds.holiday = 0
+    }
+  },
+  { immediate: true },
+)
 function beforeUnload(event: BeforeUnloadEvent) {
   if (
     dirty.value ||
     saving.value ||
     settingsSaving.value ||
     databaseBusy.value ||
-    summaryExporting.value ||
+    summaryOutput.exporting.value ||
     excelBusy.value ||
     (page.value === 'settings' && !settingsView.value?.unchanged)
   ) {
@@ -974,7 +1021,6 @@ function onFocus() {
     !confirmDialog.value?.isOpen() &&
     !picking.value &&
     !aiVisible.value &&
-    !summaryVisible.value &&
     !excelBusy.value &&
     !rangeDates.value.length &&
     !databaseBusy.value
@@ -982,13 +1028,9 @@ function onFocus() {
     void journal.refresh()
 }
 onMounted(async () => {
-  document.documentElement.dataset.skin = uiPreferences.value.skin
   window.addEventListener('beforeunload', beforeUnload)
   window.addEventListener('focus', onFocus)
   window.addEventListener('keydown', onHistoryKeydown)
-  window.addEventListener('pointermove', onLayoutPointerMove)
-  window.addEventListener('pointerup', onLayoutPointerUp)
-  window.addEventListener('keydown', onLayoutKeyDown)
   clockTimer = setInterval(() => {
     now.value = dayjs()
   }, 60_000)
@@ -999,10 +1041,14 @@ onMounted(async () => {
   })
   if (nativeApp) {
     void ai.load()
+    void restoreRecentWorkspace()
     try {
-      recent.value = await api.recent()
       unlistenClose = await getCurrentWindow().onCloseRequested(async (event) => {
         event.preventDefault()
+        if (pendingWorkspaceSwitch.value) {
+          cancelWorkspaceSwitch()
+          return
+        }
         if (
           busy.value ||
           picking.value ||
@@ -1010,7 +1056,7 @@ onMounted(async () => {
           settingsReading.value ||
           databaseBusy.value ||
           settingsLeaveBusy.value ||
-          summaryExporting.value
+          summaryOutput.exporting.value
         )
           return
         if (requestSettingsExit('close')) return
@@ -1026,14 +1072,12 @@ onMounted(async () => {
   }
 })
 onBeforeUnmount(() => {
+  appDisposed = true
   rangeRevision++
   settingsLoadRevision++
   window.removeEventListener('beforeunload', beforeUnload)
   window.removeEventListener('focus', onFocus)
   window.removeEventListener('keydown', onHistoryKeydown)
-  window.removeEventListener('pointermove', onLayoutPointerMove)
-  window.removeEventListener('pointerup', onLayoutPointerUp)
-  window.removeEventListener('keydown', onLayoutKeyDown)
   clearInterval(clockTimer)
   unlistenClose?.()
   unlistenHistory?.()
@@ -1041,14 +1085,16 @@ onBeforeUnmount(() => {
   ai.closeSummary()
   void excel.cancel()
   journal.dispose()
+  clearMessages()
 })
 </script>
 
 <template>
-  <div class="app-shell">
+  <div class="app-shell" :class="{ 'has-native-titlebar': nativeApp && isMac }">
     <div class="app-main">
       <AppToolbar
         :page="page"
+        :native-titlebar="nativeApp && isMac"
         :greeting="greeting"
         :date-label="now.format('M 月 D 日 dddd')"
         :has-workspace="!!workspace"
@@ -1064,27 +1110,14 @@ onBeforeUnmount(() => {
         @refresh="refreshHome"
       />
       <div class="app-content">
-        <Transition name="status-fade">
-          <HolidayReminder
-            v-if="holidayReminderVisible"
-            :text="holidayReminderText"
-            :disabled="holidayReminderDisabled"
-            @open="openHolidaySettings"
-            @dismiss="dismissHolidayReminder"
-          />
-        </Transition>
+        <main v-if="startupPending" class="workspace-loading" role="status" aria-live="polite">
+          <PhCircleNotch class="spin" :size="18" aria-hidden="true" /><span>正在打开工作空间…</span>
+        </main>
         <Transition name="page-switch">
           <div v-show="page === 'settings'" class="settings-viewport" :inert="page !== 'settings'">
-            <Transition name="status-fade">
-              <div v-if="error" class="settings-workspace-error error-banner" role="alert">
-                {{ error }}<button class="text-action" @click="error = ''">关闭</button>
-              </div>
-            </Transition>
             <SettingsView
               ref="settingsView"
               :key="workspace?.path ?? 'no-workspace'"
-              :backup-warning="backupWarning"
-              :backup-retrying="backupRetrying"
               :workspace="workspace"
               :picking="picking || busy || excelBusy || settingsSaving"
               :bundle="workspaceSettings"
@@ -1099,124 +1132,25 @@ onBeforeUnmount(() => {
               :holiday-syncing="holidaySyncing"
               :holiday-error="holidayError"
               :current-year="now.year()"
-              @retry-backup="journal.retryBackup"
               @database-busy="databaseActivity = $event"
               @database-transferred="onDatabaseTransferred"
-              @sync-holidays="holidays.sync($event)"
+              @sync-holidays="syncHolidays"
               @back="navigate('home')"
               @workspace="chooseWorkspace"
             />
           </div>
         </Transition>
         <Transition name="page-switch">
-          <main v-if="workspace" v-show="page === 'home'" class="home" :inert="page !== 'home'">
-            <Transition name="status-fade">
-              <div v-if="backupWarning" class="error-banner database-backup-warning" role="status">
-                <span>{{ backupWarning }}</span>
-                <md-text-button :disabled="backupRetrying || busy || databaseBusy" @click="journal.retryBackup">{{
-                  backupRetrying ? '正在重试…' : '重试数据库备份'
-                }}</md-text-button>
-              </div>
-            </Transition>
-            <Transition name="status-fade">
-              <div v-if="error" class="error-banner" role="alert">
-                <span>{{ error }}</span>
-                <md-text-button v-if="dirty" :disabled="saving" @click="journal.flush">重试保存</md-text-button>
-                <md-icon-button v-else aria-label="关闭提示" @click="error = ''"><PhX :size="18" /></md-icon-button>
-              </div>
-            </Transition>
-            <div
-              ref="layoutEl"
-              class="journal-layout"
-              :class="[
-                `layout-${uiPreferences.axis}`,
-                { 'order-editor-first': uiPreferences.order[0] === 'editor', 'is-layout-dragging': !!layoutDragging },
-              ]"
-              :style="layoutStyle"
-              @pointerdown="onLayoutPointerDown"
-            >
-              <CalendarPane
-                ref="calendar"
-                :style="{ order: paneOrder('calendar') }"
-                :today="today"
-                :selected="selectedDate"
-                :entries="entries"
-                :previews="previews"
-                :disabled="busy || aiVisible || summaryVisible || requestingAi || excelBusy"
-                @select="selectDate"
-                @previews="loadPreviews"
-                @range="loadRange"
-              />
-              <div
-                v-if="showSplitter"
-                class="journal-splitter"
-                :class="{ 'is-dragging': resizing }"
-                :style="{ order: 2 }"
-                role="separator"
-                aria-orientation="vertical"
-                aria-label="调整日历和编辑区宽度"
-                tabindex="0"
-                title="拖动调整宽度，双击恢复默认"
-                @pointerdown="startSplitterResize"
-                @keydown="onSplitterKeydown"
-                @dblclick="resetSplitterWidth"
-              ></div>
-              <div class="editor-stage" :style="{ order: paneOrder('editor') }">
-                <Transition name="editor-switch">
-                  <RangeOverview
-                    v-if="rangeDates.length"
-                    key="range"
-                    v-model:preview="editorPreview"
-                    :dates="rangeDates"
-                    :documents="rangeDocuments"
-                    :loading="rangeLoading"
-                    :error="rangeError"
-                    :summarizing="summaryVisible"
-                    @close="closeRangeView"
-                    @summarize="requestSummary(rangeDates)"
-                  />
-                  <JournalEditor
-                    v-else
-                    key="editor"
-                    ref="editor"
-                    v-model:preview="editorPreview"
-                    :date="selectedDate"
-                    :document="activeDocument"
-                    :is-new="isNewDraft"
-                    :content="draft"
-                    :dirty="dirty"
-                    :saving="saving"
-                    :disabled="busy || aiVisible || summaryVisible || requestingAi || excelBusy"
-                    :error="error"
-                    :saved-at="savedAt"
-                    :storage-mode="storageMode"
-                    :can-restore="canRestore"
-                    :can-undo="canUndo"
-                    :can-redo="canRedo"
-                    @edit="journal.edit"
-                    @undo="journal.undo"
-                    @redo="journal.redo"
-                    @save="journal.flush"
-                    @reload="requestReload"
-                    @format="requestFormat"
-                    @ai="requestAi"
-                    @restore="requestRestore"
-                    @error="journal.reportError"
-                  />
-                </Transition>
-              </div>
-              <div v-if="layoutDragging" class="layout-dropzones" aria-hidden="true">
-                <div
-                  v-for="zone in layoutZones"
-                  :key="zone.id"
-                  class="layout-dropzone"
-                  :class="[zone.id, { active: layoutDropZone === zone.id }]"
-                >
-                  <span>{{ zone.label }}</span>
-                </div>
-                <p class="layout-drag-hint">拖到目标位置后松开，Esc 取消</p>
-              </div>
-            </div>
+          <main v-if="workspace && !startupPending" v-show="page === 'home'" class="home" :inert="page !== 'home'">
+            <ModuleBoard
+              ref="moduleBoard"
+              :layout="layoutTree"
+              :workspace-path="workspace.path"
+              @split="splitModule"
+              @insert="insertModuleAtGutter"
+              @resize="resizeModules"
+              @remove="removeModule"
+            />
             <footer class="home-footer">
               <span :title="workspace.path">
                 <button
@@ -1236,12 +1170,11 @@ onBeforeUnmount(() => {
         </Transition>
         <Transition name="page-switch">
           <WorkspaceGate
-            v-if="!workspace && page === 'home'"
+            v-if="!startupPending && !workspace && page === 'home'"
             :picking="picking"
             :busy="busy"
             :recent="recent"
             :recent-name="recentName"
-            :error="error"
             @choose="chooseWorkspace"
             @open="journal.open"
           />
@@ -1257,6 +1190,16 @@ onBeforeUnmount(() => {
         @discard="finishSettingsExit(false)"
         @save="finishSettingsExit(true)"
       />
+      <WorkspaceSwitchDialog
+        ref="workspaceSwitchDialog"
+        :source-name="pendingWorkspaceSwitch?.sourceName ?? ''"
+        :target-path="pendingWorkspaceSwitch?.path ?? ''"
+        :busy="picking || busy"
+        :error="workspaceSwitchError"
+        @cancel="cancelWorkspaceSwitch"
+        @keep="finishWorkspaceSwitch(false)"
+        @sync="finishWorkspaceSwitch(true)"
+      />
       <ConfirmDialog
         ref="confirmDialog"
         :kind="modalKind"
@@ -1268,41 +1211,6 @@ onBeforeUnmount(() => {
         :busy="busy"
         @confirm="confirmModal"
         @cancel="cancelConfirm"
-      />
-      <AiSummaryDialog
-        :visible="summaryVisible"
-        :generating="summaryGenerating || requestingAi"
-        :elapsed-seconds="summaryElapsedSeconds"
-        :dates="summaryDates"
-        :result="summaryResult"
-        :error="summaryError"
-        :provider="defaultProvider?.name ?? ''"
-        :mode="summaryMode"
-        :output-directory="summaryDirectory"
-        :output-loading="summaryOutputLoading"
-        :output-exporting="summaryExporting"
-        :directory-opening="summaryDirectoryOpening"
-        :output-error="summaryExportError || summaryDirectoryError || summaryOutputError"
-        :exported-file="summaryExportResult?.filename ?? ''"
-        :excel-enabled="excelSettings.enabled"
-        :excel-preparing="excelPreparing || requestingExcel"
-        :excel-exporting="excelExporting"
-        :excel-preview="excelPreview"
-        :excel-blocked-reason="excelBlockedReason"
-        :excel-result="excelResult"
-        :excel-error="excelExportError || excelDirectoryError || excelSettingsError"
-        @excel="requestExcelExport"
-        @excel-unavailable="reportExcelUnavailable"
-        @cancel-excel="cancelExcelExport"
-        @confirm-excel="confirmExcelPreview"
-        @discard-excel="discardExcelPreview"
-        @regenerate-excel="requestExcelExport"
-        @open-excel-directory="openExcelOutputDirectory"
-        @export="exportSummary"
-        @open-directory="openSummaryDirectory"
-        @close="ai.closeSummary"
-        @ai="startAiSummary"
-        @direct="ai.directSummary"
       />
       <AiPolishDialog
         ref="polishDialog"
@@ -1321,17 +1229,21 @@ onBeforeUnmount(() => {
         @apply="applyAi(aiResult)"
         @restore="applyAi(aiOriginal, true)"
       />
-      <SkinDialog ref="skinDialog" :active="uiPreferences.skin" @select="applySkin" @close="closeSkinDialog" />
+      <SkinDialog ref="skinDialog" :active="activeSkin" @select="applySkin" @close="closeSkinDialog" />
+      <LayoutDialog ref="layoutDialog" @reset="resetLayout" @close="closeLayoutDialog" />
     </div>
     <AppRail
-      v-if="page === 'home' && workspace"
+      v-if="workspace"
       :disabled="busy || excelBusy || picking"
+      :active="layoutItems.map((item) => item.id)"
+      :settings-active="page === 'settings'"
+      :settings-busy="settingsLoading || settingsSaving || settingsLeaveBusy || databaseBusy"
+      @module="activateModule"
       @refresh="refreshHome"
-      @settings="navigate('settings')"
+      @layout="openLayoutFromRail"
+      @settings="toggleSettings"
       @skin="openSkinDialog"
-      @summary="openSummaryFromRail"
-      @excel="openExcelFromRail"
-      @history="openHistoryFromRail"
     />
+    <MessageHost />
   </div>
 </template>

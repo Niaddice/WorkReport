@@ -8,7 +8,13 @@ import ExcelSheetPreview from './ExcelSheetPreview.vue'
 
 type ExcelPreviewStyle = ExcelPreview['styles'][number]
 
-const props = defineProps<{ visible: boolean; preview: ExcelPreview | null; exporting: boolean; error: string }>()
+const props = defineProps<{
+  inline?: boolean
+  visible: boolean
+  preview: ExcelPreview | null
+  exporting: boolean
+  error: string
+}>()
 const emit = defineEmits<{ close: []; confirm: []; regenerate: [] }>()
 const dialog = ref<HTMLDialogElement>()
 const motion = createDialogMotion(() => dialog.value)
@@ -26,6 +32,7 @@ watch(
 watch(
   [() => props.visible, dialog],
   ([visible]) => {
+    if (props.inline) return
     if (visible) motion.open()
     else void motion.close()
   },
@@ -74,13 +81,15 @@ function styleText(style: ExcelPreviewStyle): string {
 </script>
 
 <template>
-  <Teleport to="body">
+  <Teleport to="body" :disabled="inline">
     <dialog
       ref="dialog"
       tabindex="-1"
-      role="dialog"
-      aria-modal="true"
+      :open="inline ? true : undefined"
+      :role="inline ? 'region' : 'dialog'"
+      :aria-modal="inline ? undefined : 'true'"
       class="ai-dialog excel-preview-dialog"
+      :class="{ 'is-inline': inline }"
       aria-labelledby="excel-preview-title"
       aria-describedby="excel-preview-description"
       @cancel.prevent="!exporting && emit('close')"

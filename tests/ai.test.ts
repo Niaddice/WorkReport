@@ -152,6 +152,7 @@ describe('AI preview lifecycle', () => {
     expect(ai.summaryResult.value).toBe('')
     expect(ai.summaryMode.value).toBe('')
     expect(ai.summaryDates.value).toEqual(['20261018', '20261019'])
+    expect(ai.summaryScopeDates.value).toEqual(['20261018', '20261019'])
     expect(summarize).not.toHaveBeenCalled()
   })
   it('summarizes the selected reports only when the AI action is chosen', async () => {

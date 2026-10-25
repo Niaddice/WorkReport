@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { PhArrowRight, PhFileText, PhFolder, PhFolderOpen } from '@phosphor-icons/vue'
 
-defineProps<{ picking: boolean; busy: boolean; recent: string | null; recentName: string | undefined; error: string }>()
+defineProps<{ picking: boolean; busy: boolean; recent: string | null; recentName: string | undefined }>()
 const emit = defineEmits<{ choose: []; open: [path: string] }>()
 </script>
 
@@ -30,7 +30,6 @@ const emit = defineEmits<{ choose: []; open: [path: string] }>()
       >
       <PhArrowRight :size="18" />
     </button>
-    <p v-if="error" class="gate-error" role="alert">{{ error }}</p>
     <div class="welcome-footnote">文件保存在本地，随时可以用其他编辑器打开。</div>
   </main>
 </template>

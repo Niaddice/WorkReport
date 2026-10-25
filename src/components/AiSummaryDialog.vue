@@ -5,12 +5,13 @@ import { marked } from 'marked'
 import DOMPurify from 'dompurify'
 import { isTauri } from '@tauri-apps/api/core'
 import {
-  PhSparkle,
   PhCircleNotch,
   PhFolderOpen,
   PhDownloadSimple,
-  PhCaretDown,
   PhFileText,
+  PhCopy,
+  PhCheck,
+  PhSparkle,
   PhMicrosoftExcelLogo,
 } from '@phosphor-icons/vue'
 import { api } from '../lib/workspace'
@@ -21,7 +22,15 @@ import type { ExcelExportResult, ExcelPreview } from '../lib/useExcel'
 import ExcelPreviewDialog from './ExcelPreviewDialog.vue'
 
 const props = defineProps<{
+  /** 在模块内直接渲染，不使用原生 modal dialog。 */
+  inline?: boolean
   visible: boolean
+  /** 是否已经读取好所选日期的日报原文。未准备时在同一界面内显示“准备总结”。 */
+  prepared?: boolean
+  preparing?: boolean
+  prepareError?: string
+  /** 是否已配置默认 AI；未配置时 AI 总结仅提示前往设置。 */
+  aiAvailable?: boolean
   generating: boolean
   elapsedSeconds: number
   dates: string[]
@@ -29,10 +38,8 @@ const props = defineProps<{
   error: string
   provider: string
   mode: SummaryMode
-  outputDirectory: string
   outputLoading: boolean
   outputExporting: boolean
-  directoryOpening: boolean
   outputError: string
   exportedFile: string
   excelEnabled: boolean
@@ -48,7 +55,6 @@ const emit = defineEmits<{
   ai: []
   direct: []
   export: [format: FileFormat]
-  openDirectory: []
   excel: []
   excelUnavailable: []
   cancelExcel: []
@@ -63,11 +69,20 @@ const excelConfirmation = ref<HTMLDialogElement>()
 const excelConfirmationMotion = createDialogMotion(() => excelConfirmation.value)
 const excelConfirming = ref(false)
 const copied = ref(false)
-const exportMenuOpen = ref(false)
+type MenuKind = 'export' | 'ai'
+const activeMenu = ref<MenuKind | null>(null)
+const exportMenuOpen = computed(() => activeMenu.value === 'export')
+const aiMenuOpen = computed(() => activeMenu.value === 'ai')
 const exportControl = ref<HTMLElement>()
 const exportButton = ref<HTMLButtonElement>()
 const exportMenu = ref<HTMLElement>()
+const aiControl = ref<HTMLElement>()
+const aiButton = ref<HTMLButtonElement>()
+const aiMenu = ref<HTMLElement>()
 const excelBusy = computed(() => props.excelPreparing || props.excelExporting)
+const summaryActionDisabled = computed(
+  () => !props.prepared || props.preparing || props.generating || props.outputExporting || excelBusy.value,
+)
 const exportDisabled = computed(
   () => props.generating || props.outputLoading || props.outputExporting || excelBusy.value || !props.result.trim(),
 )
@@ -86,12 +101,6 @@ const rangeLabel = computed(() => {
   return `${first.format('YYYY 年 M 月 D 日')} – ${last.format(last.isSame(first, 'year') ? 'M 月 D 日' : 'YYYY 年 M 月 D 日')}`
 })
 const countLabel = computed(() => `${props.dates.length} 天有日报`)
-const modeHint = computed(() => {
-  if (props.generating) return `正在由 ${props.provider || '默认 AI'} 生成总结…`
-  if (props.mode === 'direct') return '已按日期合并为纯文本，未调用 AI。'
-  if (props.mode === 'ai' && props.result) return `由 ${props.provider || '默认 AI'} 生成。`
-  return 'AI 总结会调用默认 AI；直接总结只合并所选日报原文。'
-})
 const progressText = computed(() => {
   if (props.elapsedSeconds < 3) return `正在整理 ${props.dates.length} 天的日报…`
   if (props.elapsedSeconds < 12) return 'AI 正在总结所选日报…'
@@ -105,8 +114,9 @@ const elapsedLabel = computed(() => {
 watch(
   [() => props.visible, dialog],
   ([visible]) => {
-    exportMenuOpen.value = false
+    activeMenu.value = null
     if (!visible) cancelExcelConfirmation()
+    if (props.inline) return
     if (visible) dialogMotion.open()
     else void dialogMotion.close()
   },
@@ -119,41 +129,47 @@ watch(
   () => props.result,
   () => {
     copied.value = false
-    exportMenuOpen.value = false
+    activeMenu.value = null
   },
 )
 watch(exportDisabled, (disabled) => {
-  if (disabled) exportMenuOpen.value = false
+  if (disabled && exportMenuOpen.value) closeMenu()
 })
-function closeExportMenu(focus = false) {
-  exportMenuOpen.value = false
-  if (focus) exportButton.value?.focus()
+function closeMenu(focus = false) {
+  const button = activeMenu.value === 'ai' ? aiButton.value : exportButton.value
+  activeMenu.value = null
+  if (focus) button?.focus()
 }
-async function showExportMenu(last = false) {
-  if (exportDisabled.value) return
-  exportMenuOpen.value = true
+function menuItems(kind: MenuKind) {
+  const menu = kind === 'ai' ? aiMenu.value : exportMenu.value
+  return [...(menu?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]:not(:disabled)') ?? [])]
+}
+async function showMenu(kind: MenuKind, last = false) {
+  if (kind === 'export' && exportDisabled.value) return
+  activeMenu.value = kind
   await nextTick()
-  const items = exportMenu.value?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')
-  items?.[last ? items.length - 1 : 0]?.focus()
+  if (activeMenu.value !== kind) return
+  const items = menuItems(kind)
+  items[last ? items.length - 1 : 0]?.focus()
 }
-function onExportKeydown(event: KeyboardEvent) {
-  if (event.key === 'Escape' && exportMenuOpen.value) {
+function onMenuKeydown(kind: MenuKind, event: KeyboardEvent) {
+  if (event.key === 'Escape' && activeMenu.value === kind) {
     event.preventDefault()
     event.stopPropagation()
-    closeExportMenu(true)
+    closeMenu(true)
     return
   }
   if (event.key === 'Tab') {
-    closeExportMenu()
+    closeMenu()
     return
   }
   if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return
   event.preventDefault()
-  if (!exportMenuOpen.value) {
-    void showExportMenu(event.key === 'ArrowUp' || event.key === 'End')
+  if (activeMenu.value !== kind) {
+    void showMenu(kind, event.key === 'ArrowUp' || event.key === 'End')
     return
   }
-  const items = [...(exportMenu.value?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]') ?? [])]
+  const items = menuItems(kind)
   if (!items.length) return
   const index = items.indexOf(document.activeElement as HTMLButtonElement)
   const next =
@@ -165,11 +181,18 @@ function onExportKeydown(event: KeyboardEvent) {
   items[next]?.focus()
 }
 function exportAs(format: FileFormat) {
-  closeExportMenu(true)
+  closeMenu(true)
   emit('export', format)
 }
+function summarize(mode: 'ai' | 'direct') {
+  if (!props.visible || summaryActionDisabled.value) return
+  closeMenu(true)
+  if (mode === 'ai') emit('ai')
+  else emit('direct')
+}
 function onOutsidePointer(event: PointerEvent) {
-  if (!exportControl.value?.contains(event.target as Node)) closeExportMenu()
+  const control = activeMenu.value === 'ai' ? aiControl.value : exportControl.value
+  if (!control?.contains(event.target as Node)) closeMenu()
 }
 onMounted(() => document.addEventListener('pointerdown', onOutsidePointer))
 onBeforeUnmount(() => {
@@ -183,7 +206,7 @@ function requestExcel() {
     emit('excelUnavailable')
     return
   }
-  closeExportMenu()
+  closeMenu()
   excelConfirming.value = true
   excelConfirmationMotion.open()
 }
@@ -210,63 +233,155 @@ async function copySummary() {
 
 <template>
   <!-- eslint-disable vue/no-v-html -- AI 结果先经 DOMPurify 清洗再渲染 -->
-  <Teleport to="body">
+  <Teleport to="body" :disabled="inline">
     <dialog
       ref="dialog"
       tabindex="-1"
-      role="dialog"
-      aria-modal="true"
+      :open="inline ? true : undefined"
+      :role="inline ? 'region' : 'dialog'"
+      :aria-modal="inline ? undefined : 'true'"
       class="ai-dialog summary-dialog"
-      aria-labelledby="summary-dialog-title"
+      :class="{ 'is-inline': inline }"
+      aria-label="AI 总结"
       aria-describedby="summary-dialog-description"
       @cancel.prevent="!outputExporting && !excelExporting && emit('close')"
     >
-      <header class="ai-dialog-heading">
-        <div>
-          <PhSparkle :size="23" />
-          <h2 id="summary-dialog-title">总结</h2>
+      <header class="summary-header">
+        <p id="summary-dialog-description" class="ai-dialog-description">
+          {{ rangeLabel }}<span v-if="prepared && dates.length"> · {{ countLabel }}</span>
+        </p>
+        <div class="summary-result-actions" role="group" aria-label="总结操作">
+          <button
+            v-if="result"
+            type="button"
+            class="summary-result-icon summary-copy-icon"
+            :title="copied ? '已复制' : '复制总结'"
+            :aria-label="copied ? '已复制' : '复制总结'"
+            @click="copySummary"
+          >
+            <Transition name="button-label" mode="out-in"
+              ><PhCheck v-if="copied" key="copied" :size="14" /><PhCopy v-else key="copy" :size="14"
+            /></Transition>
+          </button>
+          <div v-if="result" ref="exportControl" class="summary-export" @keydown="onMenuKeydown('export', $event)">
+            <button
+              ref="exportButton"
+              type="button"
+              class="summary-result-icon summary-export-icon"
+              :disabled="exportDisabled"
+              :title="outputExporting ? '正在导出' : '导出总结'"
+              :aria-label="outputExporting ? '正在导出' : '导出总结'"
+              aria-haspopup="menu"
+              :aria-expanded="exportMenuOpen"
+              aria-controls="summary-export-menu"
+              @click="exportMenuOpen ? closeMenu() : showMenu('export')"
+            >
+              <PhCircleNotch v-if="outputExporting" class="spin" :size="14" aria-hidden="true" /><PhDownloadSimple
+                v-else
+                :size="14"
+                aria-hidden="true"
+              />
+            </button>
+            <Transition name="status-fade"
+              ><div
+                v-if="exportMenuOpen"
+                id="summary-export-menu"
+                ref="exportMenu"
+                class="summary-export-menu"
+                role="menu"
+                aria-label="选择总结导出格式"
+              >
+                <button type="button" role="menuitem" @click="exportAs('md')">
+                  <PhFileText :size="16" aria-hidden="true" /><span>Markdown <small>.md</small></span></button
+                ><button type="button" role="menuitem" @click="exportAs('txt')">
+                  <PhFileText :size="16" aria-hidden="true" /><span>TXT <small>.txt</small></span>
+                </button>
+              </div></Transition
+            >
+          </div>
+          <div ref="aiControl" class="summary-export summary-ai-control" @keydown="onMenuKeydown('ai', $event)">
+            <button
+              ref="aiButton"
+              type="button"
+              class="summary-result-icon summary-ai-status"
+              title="选择总结方式"
+              aria-label="选择总结方式"
+              aria-haspopup="menu"
+              :aria-expanded="aiMenuOpen"
+              aria-controls="summary-ai-menu"
+              @click="aiMenuOpen ? closeMenu() : showMenu('ai')"
+            >
+              <PhSparkle :size="14" aria-hidden="true" />
+            </button>
+            <Transition name="status-fade">
+              <div
+                v-if="aiMenuOpen"
+                id="summary-ai-menu"
+                ref="aiMenu"
+                class="summary-export-menu summary-ai-menu"
+                role="menu"
+                aria-label="选择总结方式"
+              >
+                <button
+                  type="button"
+                  role="menuitem"
+                  class="summary-ai-action"
+                  :disabled="summaryActionDisabled"
+                  :aria-disabled="!aiAvailable || summaryActionDisabled"
+                  :title="aiAvailable ? '使用默认 AI 生成总结' : '尚未设置默认 AI，点击查看设置提示'"
+                  @click="summarize('ai')"
+                >
+                  <PhSparkle :size="16" aria-hidden="true" /><span
+                    >AI 总结<small v-if="!aiAvailable">需设置</small></span
+                  >
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  class="summary-direct-action"
+                  :disabled="summaryActionDisabled"
+                  @click="summarize('direct')"
+                >
+                  <PhFileText :size="16" aria-hidden="true" /><span>直接总结</span>
+                </button>
+              </div>
+            </Transition>
+          </div>
         </div>
-        <span>{{ provider || '未设置默认 AI' }}</span>
       </header>
-      <p id="summary-dialog-description" class="ai-dialog-description">
-        {{ rangeLabel }}<span v-if="dates.length"> · {{ countLabel }}</span>
-      </p>
-      <div class="summary-modes" role="group" aria-label="总结方式">
-        <md-filled-button
-          class="dialog-button dialog-button-primary"
-          :disabled="generating || outputExporting || excelBusy"
-          @click="emit('ai')"
-          >AI 总结</md-filled-button
-        >
-        <md-text-button
-          class="dialog-button dialog-button-secondary"
-          :disabled="generating || outputExporting || excelBusy"
-          @click="emit('direct')"
-          >直接总结</md-text-button
-        >
-        <p class="summary-mode-hint" role="status">{{ modeHint }}</p>
-      </div>
-      <Transition name="status-fade"
-        ><section v-if="generating" class="ai-progress" aria-live="polite">
-          <div class="ai-progress-head">
-            <PhCircleNotch class="spin" :size="15" /><span>{{ progressText }}</span
-            ><span class="ai-progress-time" aria-hidden="true">{{ elapsedLabel }}</span>
-          </div>
-          <div class="ai-progress-track" role="progressbar" aria-label="AI 总结进度" aria-valuetext="正在等待 AI 返回">
-            <span></span>
-          </div>
-          <p class="ai-progress-hint">AI 返回前可以继续等待，或点击“停止总结”。</p>
-        </section></Transition
-      >
       <div class="summary-result" :aria-busy="generating">
         <Transition name="status-fade" mode="out-in">
           <div v-if="generating" key="generating" class="summary-empty">
-            <span><PhCircleNotch class="spin" :size="18" /> 正在生成总结…</span>
+            <section class="ai-progress summary-progress" aria-live="polite">
+              <div class="ai-progress-head">
+                <PhCircleNotch class="spin" :size="15" /><span>{{ progressText }}</span
+                ><span class="ai-progress-time" aria-hidden="true">{{ elapsedLabel }}</span>
+              </div>
+              <div
+                class="ai-progress-track"
+                role="progressbar"
+                aria-label="AI 总结进度"
+                aria-valuetext="正在等待 AI 返回"
+              >
+                <span></span>
+              </div>
+              <p class="ai-progress-hint">
+                AI 返回前可以继续等待，或<button type="button" class="text-action summary-stop" @click="emit('close')">
+                  停止总结
+                </button>
+              </p>
+            </section>
           </div>
           <pre v-else-if="result && mode === 'direct'" key="direct" class="summary-plain">{{ result }}</pre>
           <div v-else-if="result" key="result" class="summary-markdown" v-html="rendered"></div>
           <div v-else-if="error" key="error" class="summary-empty summary-error" role="alert">{{ error }}</div>
-          <div v-else key="empty" class="summary-empty">选择“AI 总结”或“直接总结”<br />结果会显示在这里</div>
+          <div v-else-if="!prepared" key="prepare" class="summary-empty" :class="{ 'summary-error': !!prepareError }">
+            <template v-if="prepareError">{{ prepareError }}</template>
+            <template v-else-if="preparing">正在读取所选日报原文…</template>
+          </div>
+          <div v-else key="empty" class="summary-empty">
+            <span>点击右上角 AI 按钮<br />选择“AI 总结”或“直接总结”</span>
+          </div>
         </Transition>
       </div>
       <Transition name="status-fade" mode="out-in">
@@ -292,66 +407,9 @@ async function copySummary() {
         </p>
         <p v-else>{{ excelBlockedReason || '无需先生成总结；先调用 AI 生成填充预览，核对并确认后再输出 Excel。' }}</p>
       </section>
-      <footer class="ai-dialog-actions summary-dialog-actions">
-        <div class="summary-directory">
-          <button
-            type="button"
-            class="summary-directory-button"
-            :disabled="!outputDirectory || outputLoading || directoryOpening || outputExporting"
-            :title="outputDirectory"
-            aria-label="打开总结输出目录"
-            @click="emit('openDirectory')"
-          >
-            <PhCircleNotch v-if="directoryOpening" class="spin" :size="15" aria-hidden="true" /><PhFolderOpen
-              v-else
-              :size="15"
-              aria-hidden="true"
-            /><span>{{ outputLoading ? '正在读取总结目录…' : outputDirectory || '尚未选择工作空间' }}</span>
-          </button>
-        </div>
+      <footer v-if="excelEnabled" class="ai-dialog-actions summary-dialog-actions">
         <div class="ai-dialog-confirm-actions">
-          <button class="text-action summary-copy" :disabled="generating || !result" @click="copySummary">
-            <Transition name="button-label" mode="out-in"
-              ><span :key="String(copied)">{{ copied ? '已复制' : '复制' }}</span></Transition
-            >
-          </button>
-          <div ref="exportControl" class="summary-export" @keydown="onExportKeydown">
-            <button
-              ref="exportButton"
-              type="button"
-              class="summary-export-toggle"
-              :disabled="exportDisabled"
-              aria-haspopup="menu"
-              :aria-expanded="exportMenuOpen"
-              aria-controls="summary-export-menu"
-              @click="exportMenuOpen ? closeExportMenu() : showExportMenu()"
-            >
-              <PhCircleNotch v-if="outputExporting" class="spin" :size="14" aria-hidden="true" /><PhDownloadSimple
-                v-else
-                :size="14"
-                aria-hidden="true"
-              /><span>{{ outputExporting ? '正在导出' : '导出' }}</span
-              ><PhCaretDown :size="12" aria-hidden="true" />
-            </button>
-            <Transition name="status-fade"
-              ><div
-                v-if="exportMenuOpen"
-                id="summary-export-menu"
-                ref="exportMenu"
-                class="summary-export-menu"
-                role="menu"
-                aria-label="选择总结导出格式"
-              >
-                <button type="button" role="menuitem" @click="exportAs('md')">
-                  <PhFileText :size="16" aria-hidden="true" /><span>Markdown <small>.md</small></span></button
-                ><button type="button" role="menuitem" @click="exportAs('txt')">
-                  <PhFileText :size="16" aria-hidden="true" /><span>TXT <small>.txt</small></span>
-                </button>
-              </div></Transition
-            >
-          </div>
           <button
-            v-if="excelEnabled"
             type="button"
             class="summary-export-toggle summary-excel-button"
             :disabled="outputExporting || excelBusy"
@@ -361,16 +419,6 @@ async function copySummary() {
           >
             <PhMicrosoftExcelLogo :size="15" aria-hidden="true" /><span>Excel 输出</span>
           </button>
-          <md-text-button
-            class="dialog-button dialog-button-secondary"
-            :disabled="outputExporting || excelExporting"
-            @click="emit('close')"
-            ><Transition name="button-label" mode="out-in"
-              ><span :key="generating ? 'ai' : excelPreparing ? 'excel' : 'idle'">{{
-                generating ? '停止总结' : excelPreparing ? '停止并关闭' : '关闭'
-              }}</span></Transition
-            ></md-text-button
-          >
         </div>
       </footer>
     </dialog>

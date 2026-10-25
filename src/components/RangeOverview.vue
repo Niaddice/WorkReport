@@ -3,7 +3,7 @@ import { computed } from 'vue'
 import dayjs from 'dayjs'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
-import { PhCircleNotch, PhFileText, PhTextAlignLeft } from '@phosphor-icons/vue'
+import { PhCircleNotch, PhFileText } from '@phosphor-icons/vue'
 import type { Document } from '../lib/workspace'
 
 const props = defineProps<{
@@ -11,10 +11,9 @@ const props = defineProps<{
   documents: Document[]
   loading: boolean
   error: string
-  summarizing: boolean
   preview: boolean
 }>()
-const emit = defineEmits<{ close: []; summarize: []; 'update:preview': [value: boolean] }>()
+const emit = defineEmits<{ 'update:preview': [value: boolean] }>()
 type RangeRun = { start: string; end: string }
 const sortedDocuments = computed(() => [...props.documents].sort((left, right) => right.date.localeCompare(left.date)))
 const characterCount = computed(() =>
@@ -88,17 +87,6 @@ function render(content: string) {
       </div>
     </header>
     <div class="editor-content">
-      <div class="editor-text-actions">
-        <button class="text-action" @click="emit('close')">取消框选</button>
-        <button
-          class="text-action"
-          :disabled="loading || !documents.length || summarizing"
-          title="打开所选日报的总结弹窗"
-          @click="emit('summarize')"
-        >
-          <PhTextAlignLeft :size="14" aria-hidden="true" /><span>总结</span>
-        </button>
-      </div>
       <div class="editor-toolbar range-toolbar">
         <span class="editor-context-label">按日期降序</span>
         <button class="preview-toggle" :aria-pressed="preview" @click="emit('update:preview', !preview)">

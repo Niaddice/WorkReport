@@ -13,10 +13,9 @@ import {
   PhCopy,
   PhCheck,
   PhCircleNotch,
-  PhClockCounterClockwise,
 } from '@phosphor-icons/vue'
 import { api, type Document, type FileFormat } from '../lib/workspace'
-import { historyApi, type HistoryVersion } from '../lib/history'
+import { pushMessage } from '../lib/messages'
 
 const props = defineProps<{
   date: string
@@ -55,27 +54,6 @@ let copiedTimer: ReturnType<typeof setTimeout> | undefined
 let dateAnimation: Animation | undefined
 const newEmpty = computed(() => props.isNew && !props.content.trim())
 const hasContent = computed(() => props.content.trim().length > 0)
-const historyOpen = ref(false)
-const historyLoading = ref(false)
-const historyError = ref('')
-const historyList = ref<HistoryVersion[]>([])
-const hoveredVersion = ref<HistoryVersion | null>(null)
-const versionContent = ref('')
-const versionLoading = ref(false)
-const versionCache = new Map<string, string>()
-let historyRequest = 0
-let versionRequest = 0
-const formatVersionTime = (millis: number) => dayjs(millis).format('HH:mm:ss')
-const formatHistoryDate = (date: string) => `${date.slice(0, 4)}-${date.slice(4, 6)}-${date.slice(6, 8)}`
-const historyGroups = computed(() => {
-  const groups: { date: string; versions: HistoryVersion[] }[] = []
-  for (const version of historyList.value) {
-    const last = groups[groups.length - 1]
-    if (last && last.date === version.date) last.versions.push(version)
-    else groups.push({ date: version.date, versions: [version] })
-  }
-  return groups
-})
 const rendered = computed(() =>
   DOMPurify.sanitize(marked.parse(props.content, { async: false }) as string, {
     FORBID_TAGS: ['img', 'style', 'input', 'a'],
@@ -97,7 +75,6 @@ watch(
   () => {
     copied.value = false
     clearTimeout(copiedTimer)
-    if (historyOpen.value) closeHistory()
   },
 )
 watch(
@@ -116,8 +93,6 @@ watch(
 watch(
   () => props.date,
   () => {
-    closeHistory()
-    versionCache.clear()
     dateAnimation?.cancel()
     const body = editorBody.value
     if (!body || typeof body.animate !== 'function' || window.matchMedia?.('(prefers-reduced-motion: reduce)').matches)
@@ -135,7 +110,6 @@ watch(
 onBeforeUnmount(() => {
   dateAnimation?.cancel()
   clearTimeout(copiedTimer)
-  window.removeEventListener('keydown', onHistoryKey)
 })
 async function insert(before: string, after = '') {
   preview.value = false
@@ -155,6 +129,7 @@ async function copyDraft() {
     if (isTauri()) await api.copy(props.content)
     else await navigator.clipboard.writeText(props.content)
     copied.value = true
+    pushMessage({ tone: 'success', text: '日报正文已复制到剪贴板' })
     clearTimeout(copiedTimer)
     copiedTimer = setTimeout(() => {
       copied.value = false
@@ -163,65 +138,11 @@ async function copyDraft() {
     emit('error', '复制失败，请重试或选中文本后手动复制。')
   }
 }
-function closeHistory() {
-  historyOpen.value = false
-  hoveredVersion.value = null
-  versionContent.value = ''
-}
-async function openHistory() {
-  historyOpen.value = true
-  hoveredVersion.value = null
-  versionContent.value = ''
-  historyList.value = []
-  historyError.value = ''
-  const id = ++historyRequest
-  historyLoading.value = true
-  try {
-    const versions = await historyApi.list()
-    if (id === historyRequest) historyList.value = versions
-  } catch (cause) {
-    if (id === historyRequest) historyError.value = String(cause)
-  } finally {
-    if (id === historyRequest) historyLoading.value = false
-  }
-}
-function toggleHistory() {
-  if (historyOpen.value) closeHistory()
-  else void openHistory()
-}
-async function previewVersion(version: HistoryVersion) {
-  hoveredVersion.value = version
-  const key = `${version.date}/${version.id}`
-  const cached = versionCache.get(key)
-  if (cached !== undefined) {
-    versionContent.value = cached
-    versionLoading.value = false
-    return
-  }
-  const id = ++versionRequest
-  versionLoading.value = true
-  try {
-    const content = await historyApi.read(version.date, version.id)
-    versionCache.set(key, content)
-    if (id === versionRequest && hoveredVersion.value?.id === version.id) versionContent.value = content
-  } catch (cause) {
-    if (id === versionRequest) versionContent.value = `读取失败：${String(cause)}`
-  } finally {
-    if (id === versionRequest) versionLoading.value = false
-  }
-}
-function onHistoryKey(event: KeyboardEvent) {
-  if (event.key === 'Escape' && historyOpen.value) closeHistory()
-}
-watch(historyOpen, (open) => {
-  if (open) window.addEventListener('keydown', onHistoryKey)
-  else window.removeEventListener('keydown', onHistoryKey)
-})
 function focus() {
   preview.value = false
   void nextTick(() => textarea.value?.focus())
 }
-defineExpose({ focus, openHistory })
+defineExpose({ focus })
 </script>
 <template>
   <!-- eslint-disable vue/no-v-html -- Markdown 预览先经 DOMPurify 清洗再渲染 -->
@@ -310,20 +231,6 @@ defineExpose({ focus, openHistory })
             <button
               v-if="hasContent"
               type="button"
-              class="history-icon"
-              :class="{ active: historyOpen }"
-              :aria-expanded="historyOpen"
-              aria-haspopup="dialog"
-              title="历史记录"
-              aria-label="历史记录"
-              :disabled="disabled"
-              @click="toggleHistory"
-            >
-              <PhClockCounterClockwise :size="15" />
-            </button>
-            <button
-              v-if="hasContent"
-              type="button"
               class="copy-icon"
               :title="copied ? '已复制' : '复制日报'"
               :aria-label="copied ? '已复制' : '复制日报'"
@@ -334,48 +241,6 @@ defineExpose({ focus, openHistory })
                 ><PhCheck v-if="copied" key="copied" :size="14" /><PhCopy v-else key="copy" :size="14"
               /></Transition>
             </button>
-            <div v-if="historyOpen" class="history-backdrop" @pointerdown="closeHistory"></div>
-            <aside v-if="historyOpen" class="history-panel" role="dialog" aria-label="日报历史记录" @pointerdown.stop>
-              <header>
-                <span>历史记录</span><span>{{ historyLoading ? '' : `${historyList.length} 个版本` }}</span>
-              </header>
-              <p v-if="historyLoading" class="history-note">正在加载…</p>
-              <p v-else-if="historyError" class="history-note history-error">{{ historyError }}</p>
-              <p v-else-if="!historyList.length" class="history-note">还没有保存过版本</p>
-              <div v-else class="history-groups">
-                <section v-for="group in historyGroups" :key="group.date" class="history-group">
-                  <p class="history-group-title">{{ formatHistoryDate(group.date) }}</p>
-                  <ul>
-                    <li v-for="version in group.versions" :key="version.id">
-                      <button
-                        type="button"
-                        class="history-item"
-                        :class="{ active: hoveredVersion?.id === version.id }"
-                        @mouseenter="previewVersion(version)"
-                        @focus="previewVersion(version)"
-                      >
-                        <span class="history-time">{{ formatVersionTime(version.savedAt) }}</span
-                        ><span class="history-meta">{{ version.format === 'md' ? 'MD' : 'TXT' }}</span>
-                      </button>
-                    </li>
-                  </ul>
-                </section>
-              </div>
-            </aside>
-            <aside
-              v-if="historyOpen && hoveredVersion"
-              class="history-detail"
-              role="dialog"
-              aria-label="历史版本内容"
-              @pointerdown.stop
-            >
-              <header>
-                <span>{{ formatHistoryDate(hoveredVersion.date) }} {{ formatVersionTime(hoveredVersion.savedAt) }}</span
-                ><span>{{ hoveredVersion.format === 'md' ? 'Markdown' : '纯文本' }}</span>
-              </header>
-              <p v-if="versionLoading" class="history-note">正在读取…</p>
-              <pre v-else>{{ versionContent }}</pre>
-            </aside>
           </div>
           <Transition name="inline-feedback"
             ><div v-if="error && dirty" class="save-error-actions">

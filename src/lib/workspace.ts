@@ -24,7 +24,8 @@ export interface Document {
 }
 export const api = {
   recent: () => invoke<string | null>('recent_workspace'),
-  open: (path: string) => invoke<Workspace>('open_workspace', { path }),
+  open: (path: string, syncSettingsFrom?: string) =>
+    invoke<Workspace>('open_workspace', { path, ...(syncSettingsFrom ? { syncSettingsFrom } : {}) }),
   openDirectory: () => invoke<void>('open_workspace_directory'),
   list: () => invoke<Entry[]>('list_entries'),
   backupWarning: () => invoke<string | null>('database_backup_warning'),

@@ -14,6 +14,7 @@ import {
   type DatabaseTransferDirection,
   type DatabaseTransferResult,
 } from '../lib/database'
+import { pushMessage } from '../lib/messages'
 import AppSelect from './AppSelect.vue'
 
 const props = defineProps<{
@@ -163,6 +164,7 @@ async function testConnection() {
     const result = await databaseApi.test(workspacePath, snapshot)
     if (revision !== currentRevision || props.workspacePath !== workspacePath) return
     connectionMessage.value = `${databaseError(result.message || '连接成功', snapshot)}${result.recordCount === undefined ? '' : `，当前工作空间有 ${result.recordCount} 篇日报。`}`
+    pushMessage({ tone: 'success', text: connectionMessage.value })
   } catch (cause) {
     if (revision === currentRevision && props.workspacePath === workspacePath)
       localError.value = `连接测试失败：${databaseError(cause, snapshot)}`
@@ -519,12 +521,6 @@ defineExpose({ validate })
     </Transition>
     <Transition name="status-fade" mode="out-in">
       <p v-if="localError" key="error" class="database-status settings-error" role="alert">{{ localError }}</p>
-      <p v-else-if="transferMessage" key="transfer" class="database-status database-status-success" role="status">
-        {{ transferMessage }}
-      </p>
-      <p v-else-if="connectionMessage" key="connection" class="database-status database-status-success" role="status">
-        {{ connectionMessage }}
-      </p>
     </Transition>
   </div>
 </template>

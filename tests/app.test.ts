@@ -14,17 +14,6 @@ vi.mock('@tauri-apps/api/window', () => ({
 }))
 vi.mock('@tauri-apps/api/event', () => ({ listen: async () => () => {} }))
 vi.mock('@tauri-apps/plugin-dialog', () => ({ open: async () => null }))
-vi.mock('../src/lib/history', () => ({
-  historyApi: {
-    list: vi.fn(async () => [
-      { id: '1700000000000-abcdef12.md', date: '20261024', savedAt: 1700000000000, format: 'md', bytes: 5 },
-      { id: '1699999999000-abcdef13.md', date: '20261024', savedAt: 1699999999000, format: 'md', bytes: 3 },
-      { id: '1699900000000-abcdef14.md', date: '20261023', savedAt: 1699900000000, format: 'md', bytes: 4 },
-    ]),
-    read: vi.fn(async (_date: string, id: string) => (id === '1700000000000-abcdef12.md' ? '第二版内容' : '第一版')),
-  },
-}))
-
 import App from '../src/App.vue'
 import AppRail from '../src/components/AppRail.vue'
 import CalendarPane from '../src/components/CalendarPane.vue'
@@ -75,7 +64,7 @@ describe('app shell', () => {
     await wrapper.find('.workspace-gate md-filled-button').trigger('click')
     await flushPromises()
 
-    expect(wrapper.find('.gate-error').text()).toContain('Tauri 桌面应用')
+    expect(wrapper.find('.app-message').text()).toContain('Tauri 桌面应用')
 
     wrapper.unmount()
   })
@@ -171,28 +160,41 @@ describe('calendar month cells', () => {
 })
 
 describe('function rail', () => {
-  it('offers the six workspace actions and emits them', async () => {
-    const wrapper = mount(AppRail, { props: { disabled: false } })
+  it('offers the workspace actions including the module layout entry', async () => {
+    const wrapper = mount(AppRail, { props: { disabled: false, active: [] } })
     const buttons = wrapper.findAll('.rail-button')
     expect(buttons.map((button) => button.attributes('aria-label'))).toEqual([
-      '设置',
+      '日历',
+      '日报编辑',
+      '数据概览',
+      '历史记录',
+      'Excel 周报',
+      'AI 总结',
+      '布局',
       '切换皮肤',
       '刷新',
-      'AI 总结',
-      'Excel 周报',
-      '历史记录',
+      '设置',
     ])
 
     await buttons[0]!.trigger('click')
-    await buttons[3]!.trigger('click')
+    await buttons[2]!.trigger('click')
+    await buttons[6]!.trigger('click')
+    await buttons[7]!.trigger('click')
+    await buttons[8]!.trigger('click')
+    await buttons[9]!.trigger('click')
+    expect(wrapper.emitted('module')).toEqual([['calendar'], ['overview']])
+    expect(wrapper.emitted('layout')).toHaveLength(1)
+    expect(wrapper.emitted('skin')).toHaveLength(1)
+    expect(wrapper.emitted('refresh')).toHaveLength(1)
     expect(wrapper.emitted('settings')).toHaveLength(1)
-    expect(wrapper.emitted('summary')).toHaveLength(1)
+    // 设置固定在侧边栏最下方。
+    expect(wrapper.find('.rail-bottom .rail-button').attributes('aria-label')).toBe('设置')
 
     wrapper.unmount()
   })
 
   it('disables every action while the workspace is busy', () => {
-    const wrapper = mount(AppRail, { props: { disabled: true } })
+    const wrapper = mount(AppRail, { props: { disabled: true, active: [] } })
     for (const button of wrapper.findAll('.rail-button')) {
       expect(button.attributes('disabled')).toBeDefined()
     }
@@ -201,15 +203,27 @@ describe('function rail', () => {
 })
 
 describe('layout preferences', () => {
-  it('keeps a valid order and falls back for incomplete ones', () => {
-    expect(normalizeUiPreferences({ axis: 'column', order: ['editor', 'calendar'], skin: 'default' })).toEqual({
-      axis: 'column',
-      order: ['editor', 'calendar'],
+  it('normalizes the split layout and falls back for damaged values', () => {
+    const tree = {
+      type: 'split',
+      direction: 'column',
+      ratio: 0.4,
+      first: { type: 'leaf', id: 'editor' },
+      second: { type: 'leaf', id: 'calendar' },
+    }
+    expect(normalizeUiPreferences({ layout: tree, skin: 'default' })).toEqual({
+      layout: tree,
       skin: 'default',
     })
-    expect(normalizeUiPreferences({ axis: 'diagonal', order: ['calendar', 'calendar'], skin: 'neon' })).toEqual(
-      DEFAULT_UI_PREFERENCES,
-    )
+    // 旧 schema 会迁移成树，不再以 columns/modules 出现在运行时模型中。
+    const migrated = normalizeUiPreferences({
+      columns: 1,
+      modules: [{ id: 'editor' }, { id: 'overview' }, { id: 'calendar' }],
+      skin: 'default',
+    })
+    expect(migrated.skin).toBe('default')
+    expect(migrated.layout.type).toBe('split')
+    expect(normalizeUiPreferences({ columns: 9, modules: 'broken', skin: 'neon' })).toEqual(DEFAULT_UI_PREFERENCES)
     expect(normalizeUiPreferences(null)).toEqual(DEFAULT_UI_PREFERENCES)
   })
 })
@@ -271,7 +285,6 @@ describe('journal editor actions', () => {
     const wrapper = mountEditor('')
 
     expect(wrapper.find('.copy-icon').exists()).toBe(false)
-    expect(wrapper.find('.history-icon').exists()).toBe(false)
     const ai = wrapper.find('.ai-toggle')
     expect(ai.text()).toBe('AI')
     expect(ai.attributes('disabled')).toBeDefined()
@@ -300,33 +313,6 @@ describe('journal editor actions', () => {
 
     expect(wrapper.find('.preview-toggle').exists()).toBe(false)
     expect(wrapper.find('.ai-toggle').exists()).toBe(true)
-
-    wrapper.unmount()
-  })
-
-  it('groups saved versions by date and previews one on hover', async () => {
-    const wrapper = mountEditor('今天的日报')
-
-    await wrapper.find('.history-icon').trigger('click')
-    await flushPromises()
-    const panel = wrapper.find('.history-panel')
-    expect(panel.exists()).toBe(true)
-    expect(panel.text()).toContain('3 个版本')
-
-    const groups = panel.findAll('.history-group')
-    expect(groups).toHaveLength(2)
-    expect(groups[0]!.find('.history-group-title').text()).toBe('2026-10-24')
-    expect(groups[1]!.find('.history-group-title').text()).toBe('2026-10-23')
-    expect(panel.findAll('.history-item')).toHaveLength(3)
-
-    await panel.findAll('.history-item')[0]!.trigger('mouseenter')
-    await flushPromises()
-    const detail = wrapper.find('.history-detail').text()
-    expect(detail).toContain('2026-10-24')
-    expect(detail).toContain('第二版内容')
-
-    await wrapper.find('.history-backdrop').trigger('pointerdown')
-    expect(wrapper.find('.history-panel').exists()).toBe(false)
 
     wrapper.unmount()
   })

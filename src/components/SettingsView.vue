@@ -17,6 +17,7 @@ import {
 import { aiApi, type AiProvider, type DetectedCli } from '../lib/ai'
 import type { Workspace } from '../lib/workspace'
 import { useSettingsDraft, type WorkspaceSettings } from '../lib/settingsDraft'
+import { pushMessage } from '../lib/messages'
 import ModelPicker from './ModelPicker.vue'
 import CliModelPicker from './CliModelPicker.vue'
 import { APPEARANCE_SCALES, DEFAULT_APPEARANCE_SCALE } from '../lib/useAppearance'
@@ -40,8 +41,6 @@ const props = defineProps<{
   loading: boolean
   saving: boolean
   databaseBusy: boolean
-  backupWarning: string
-  backupRetrying: boolean
   beforeDatabaseTransfer: () => Promise<boolean>
   error: string
   save: (settings: WorkspaceSettings) => Promise<boolean>
@@ -54,7 +53,6 @@ const props = defineProps<{
 const emit = defineEmits<{
   back: []
   workspace: []
-  retryBackup: []
   databaseBusy: [value: boolean]
   databaseTransferred: [result: DatabaseTransferResult]
   syncHolidays: [year: number]
@@ -151,7 +149,9 @@ async function saveAll(): Promise<boolean> {
     navigate('excel')
     return false
   }
-  return saveDraft()
+  const savedOk = await saveDraft()
+  if (savedOk) pushMessage({ tone: 'success', text: '设置已保存' })
+  return savedOk
 }
 function reset() {
   resetDraft()
@@ -567,12 +567,6 @@ function remove(id: string) {
                   默认 1 GB，滑块每格 1 GB（最大 10 GB）。历史版本超过该容量时，从最旧的一天开始整天清理；单日最多保留
                   100 个版本。
                 </p>
-              </div>
-              <div v-if="backupWarning" class="database-backup-warning database-status settings-error" role="status">
-                <p>{{ backupWarning }}</p>
-                <button type="button" class="text-action" :disabled="busy || !unchanged" @click="emit('retryBackup')">
-                  {{ backupRetrying ? '正在重试备份…' : '重试数据库备份' }}</button
-                ><span v-if="!unchanged" class="field-hint">请先保存连接设置，再重试。</span>
               </div>
               <DatabaseSettings
                 ref="databaseForm"

@@ -254,12 +254,12 @@ export function useJournal() {
     }
   }
 
-  async function open(path: string) {
+  async function open(path: string, syncSettingsFrom?: string) {
     if (busy.value) return false
     busy.value = true
     try {
       if (!(await flush())) return false
-      const nextWorkspace = await api.open(path)
+      const nextWorkspace = await api.open(path, syncSettingsFrom)
       workspace.value = nextWorkspace
       backupWarning.value = ''
       // Clear the old draft immediately after the backend changes workspace.

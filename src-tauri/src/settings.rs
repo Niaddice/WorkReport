@@ -22,16 +22,23 @@ pub struct StoredSettings {
     pub summary: crate::summary::Settings,
     #[serde(default)]
     pub database: crate::database::Settings,
-    /// 主界面模块排列；只影响界面，不参与业务校验。
+    /// 主界面模块布局；只影响界面，不参与业务校验。
+    /// 统一保存设置时前端可能不带 ui 字段，因此这里用 Option 区分“未提交”与“已清空”。
     #[serde(default)]
-    pub ui: crate::ui::Preferences,
+    pub ui: Option<crate::ui::Preferences>,
 }
 
 pub fn load(path: &Path) -> Result<Option<StoredSettings>, String> {
     match fs::read(path) {
-        Ok(bytes) => serde_json::from_slice(&bytes)
-            .map(Some)
-            .map_err(|_| "设置文件 workreport.json 内容无效，请修正或删除该文件后重试".to_string()),
+        Ok(bytes) => {
+            let mut stored: StoredSettings = serde_json::from_slice(&bytes).map_err(|_| {
+                "设置文件 workreport.json 内容无效，请修正或删除该文件后重试".to_string()
+            })?;
+            // 旧文件的 ui 是 axis/order 结构，读入时立即迁移成新的模块化布局，
+            // 这样任何“读取后整体写回”的保存路径都不会丢掉既有布局。
+            stored.ui = stored.ui.map(crate::ui::normalize);
+            Ok(Some(stored))
+        }
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
         Err(error) => Err(format!("无法读取设置文件 workreport.json：{error}")),
     }
@@ -102,7 +109,7 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join(FILE_NAME);
         let settings = StoredSettings {
-            ui: Default::default(),
+            ui: None,
             database: crate::database::Settings::default(),
             appearance: crate::appearance::Settings { scale: 110 },
             ai: crate::ai::Settings {
@@ -140,7 +147,7 @@ mod tests {
         save(
             &path,
             &StoredSettings {
-                ui: Default::default(),
+                ui: None,
                 database: crate::database::Settings::default(),
                 appearance: crate::appearance::Settings { scale: 120 },
                 ai: crate::ai::Settings::default(),
@@ -175,6 +182,8 @@ mod tests {
         assert!(!restored.excel.enabled);
         assert!(restored.excel.template_path.is_empty());
         assert_eq!(restored.summary.output_directory, "总结");
+        // 旧文件没有 ui 段：读取后是 None，由界面层回退默认布局。
+        assert!(restored.ui.is_none());
     }
 
     #[test]
@@ -190,7 +199,7 @@ mod tests {
         save(
             &path,
             &StoredSettings {
-                ui: Default::default(),
+                ui: None,
                 database: crate::database::Settings::default(),
                 appearance: crate::appearance::Settings { scale: 90 },
                 ai: crate::ai::Settings::default(),
@@ -225,5 +234,63 @@ mod tests {
         assert_eq!(restored.excel.prompt, "保留 Excel 提示词");
         assert_eq!(restored.excel.template_path, "/weekly.xlsx");
         assert!(!root.path().join("总结").exists());
+    }
+
+    fn layout() -> crate::ui::Preferences {
+        crate::ui::Preferences {
+            columns: 1,
+            modules: vec![
+                crate::ui::Placement { id: "editor".into() },
+                crate::ui::Placement { id: "calendar".into() },
+            ],
+            skin: crate::ui::DEFAULT_SKIN.into(),
+            ..crate::ui::Preferences::default()
+        }
+    }
+
+    #[test]
+    fn ui_preferences_round_trip_and_stay_optional() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join(FILE_NAME);
+
+        // 没有提交过布局时，ui 段保持缺失而不是被写入默认布局。
+        save(&path, &StoredSettings::default()).unwrap();
+        assert!(load(&path).unwrap().unwrap().ui.is_none());
+
+        save(&path, &StoredSettings { ui: Some(layout()), ..StoredSettings::default() }).unwrap();
+        assert_eq!(load(&path).unwrap().unwrap().ui, Some(layout()));
+
+        let written: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(written["ui"]["columns"], 1);
+        assert_eq!(written["ui"]["modules"][0]["id"], "editor");
+        assert_eq!(written["ui"]["skin"], "default");
+        assert!(written["ui"]["modules"][0].get("span").is_none());
+        assert!(written["ui"].get("axis").is_none());
+        assert!(written["ui"].get("order").is_none());
+    }
+
+    #[test]
+    fn legacy_ui_layout_is_migrated_as_soon_as_the_file_is_loaded() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join(FILE_NAME);
+        fs::write(
+            &path,
+            r#"{"ui":{"axis":"column","order":["editor","calendar"],"skin":"default"}}"#,
+        )
+        .unwrap();
+
+        let stored = load(&path).unwrap().unwrap();
+        let ui = stored.ui.as_ref().expect("旧布局应被读取并迁移");
+        assert_eq!(ui.columns, 1);
+        let ids: Vec<&str> = ui.modules.iter().map(|module| module.id.as_str()).collect();
+        assert_eq!(ids, vec!["editor", "calendar"]);
+        assert_eq!(ui.axis, None);
+        assert!(ui.order.is_empty());
+
+        // 重新保存后文件里只有新 schema。
+        save(&path, &stored).unwrap();
+        let text = fs::read_to_string(&path).unwrap();
+        assert!(!text.contains("axis") && !text.contains("order"));
     }
 }

@@ -192,6 +192,8 @@ function clearSelection() {
 }
 function onGlobalKeyDown(event: KeyboardEvent) {
   if (event.key !== 'Escape' || props.disabled) return
+  // 取消模块拖放由模块板处理，这里不要顺带清空日历框选。
+  if (document.body.classList.contains('is-module-dragging')) return
   if (dragging.value) finishDrag()
   clearSelection()
 }
@@ -267,7 +269,10 @@ watch(
           :class="{ 'week-view': view === 'week', 'six-week-month': days.length === 42 }"
         >
           <div class="weekday-row">
-            <span v-for="(name, index) in weekdays" :key="name" :class="{ weekend: index > 4 }">周{{ name }}</span>
+            <span v-for="(name, index) in weekdays" :key="name" :class="{ weekend: index > 4 }"
+              ><span class="weekday-full">周{{ name }}</span
+              ><span class="weekday-short">{{ name }}</span></span
+            >
           </div>
           <div class="month-grid" :style="{ '--week-count': days.length / 7 }">
             <button
@@ -366,11 +371,13 @@ watch(
         ><Transition name="inline-fade" mode="out-in"
           ><span v-if="range.dates.length" key="selection" class="calendar-selection-status" aria-live="polite"
             >已选择 {{ range.dates.length }} 天</span
-          ><span v-else :key="view"
+          ><span v-else :key="view" class="calendar-period-summary"
             >{{ view === 'year' ? '本年' : view === 'week' ? '本周' : '本月' }} {{ count }} 篇<span
               class="footer-divider"
               >·</span
-            >{{ multiMode ? '点击或拖拽日期复选' : '点击打开 · 拖拽框选' }}</span
+            ><span class="calendar-footer-hint">{{
+              multiMode ? '点击或拖拽日期复选' : '点击打开 · 拖拽框选'
+            }}</span></span
           ></Transition
         ></span
       >

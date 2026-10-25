@@ -69,6 +69,8 @@ export function useAi() {
   const summaryGenerating = ref(false)
   const summaryElapsedSeconds = ref(0)
   const summaryDates = ref<string[]>([])
+  /** 完整框选范围，包含没有日报的日期；summaryDates 仅包含实际参与总结的日报。 */
+  const summaryScopeDates = ref<string[]>([])
   const summaryResult = ref('')
   const summaryError = ref('')
   const summaryMode = ref<SummaryMode>('')
@@ -202,10 +204,11 @@ export function useAi() {
     summaryError.value = ''
     summaryResult.value = summaryDirectContent
   }
-  function openSummary(contents: { ai: string; direct: string }, dates: string[]) {
+  function openSummary(contents: { ai: string; direct: string }, dates: string[], scopeDates: string[] = dates) {
     summaryContent = contents.ai
     summaryDirectContent = contents.direct
     summaryDates.value = [...dates].sort()
+    summaryScopeDates.value = [...new Set(scopeDates)].sort()
     summaryResult.value = ''
     summaryError.value = ''
     summaryMode.value = ''
@@ -250,6 +253,7 @@ export function useAi() {
     summaryGenerating,
     summaryElapsedSeconds,
     summaryDates,
+    summaryScopeDates,
     summaryResult,
     summaryError,
     summaryMode,

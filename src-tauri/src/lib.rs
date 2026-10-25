@@ -9,7 +9,7 @@ mod summary;
 mod ui;
 mod workspace;
 
-use std::{fs, sync::{Arc, Mutex}};
+use std::{fs, io::Write, sync::{Arc, Mutex}};
 use tauri::{Emitter, Manager, State};
 use tauri_plugin_opener::OpenerExt;
 use workspace::{Document, Entry, Format, Preview, Workspace, WorkspaceInfo};
@@ -92,7 +92,8 @@ fn stored_settings_at(
     }
     let legacy = legacy_config_dir(app)?;
     Ok(settings::StoredSettings {
-        ui: ui::Preferences::default(),
+        // 旧版应用配置目录里没有界面布局，首次保存时留空，由界面回退默认布局。
+        ui: None,
         appearance: appearance::load(&legacy)?,
         ai: ai::load(&legacy)?,
         excel: excel::Settings::default(),
@@ -129,21 +130,42 @@ async fn open_workspace(
     app: tauri::AppHandle,
     state: State<'_, AppState>,
     path: String,
+    sync_settings_from: Option<String>,
 ) -> Result<WorkspaceInfo, String> {
     let shared = state.0.clone();
     tauri::async_runtime::spawn_blocking(move || {
+    let mut current = shared.lock().map_err(|_| "工作空间忙，请重试")?;
+    let source_settings = if let Some(expected) = sync_settings_from {
+        let source = current.as_ref().ok_or("原工作空间已关闭，请重新选择")?;
+        summary::validate_workspace(source.root(), &expected)
+            .map_err(|_| "原工作空间已切换，请重新选择目标文件夹".to_string())?;
+        let mut stored = stored_settings_at(&app, source.root())?;
+        stored.summary = summary::normalize_settings(source.root(), &stored.summary)?;
+        Some((source.root().to_path_buf(), stored))
+    } else { None };
     let mut workspace = Workspace::open(&path)?;
     // Validate the index before replacing the currently active workspace.
     workspace.validate_open()?;
     let info = workspace.info();
     let config = app.path().app_config_dir().map_err(|e| e.to_string())?;
     fs::create_dir_all(&config).map_err(|e| e.to_string())?;
-    fs::write(
-        config.join("workspace.json"),
-        serde_json::to_string(&info.path).map_err(|e| e.to_string())?,
-    )
-    .map_err(|e| e.to_string())?;
-    *shared.lock().map_err(|_| "工作空间忙，请重试")? = Some(workspace);
+    // Prepare the recent-workspace record before modifying any target settings.
+    let mut recent = tempfile::NamedTempFile::new_in(&config).map_err(|e| e.to_string())?;
+    recent.write_all(serde_json::to_string(&info.path).map_err(|e| e.to_string())?.as_bytes())
+        .map_err(|e| e.to_string())?;
+    recent.as_file().sync_all().map_err(|e| e.to_string())?;
+    let mut synced = false;
+    if let Some((source_root, stored)) = source_settings {
+        if source_root != workspace.root() {
+            sync_workspace_settings_at(&mut workspace, stored)?;
+            synced = true;
+        }
+    }
+    recent.persist(config.join("workspace.json")).map_err(|e| {
+        if synced { format!("设置已同步，但无法记录新的工作空间，当前仍使用原工作空间：{}", e.error) }
+        else { format!("无法记录新的工作空间：{}", e.error) }
+    })?;
+    *current = Some(workspace);
     Ok(info)
     }).await.map_err(|_| "无法打开工作空间".to_string())?
 }
@@ -338,19 +360,24 @@ fn validate_excel_settings(
 async fn load_ui_preferences(state: State<'_, AppState>) -> Result<ui::Preferences, String> {
     with_workspace(&state, |workspace| {
         let path = workspace.root().join(settings::FILE_NAME);
-        Ok(settings::load(&path)?.map(|stored| stored.ui).unwrap_or_default())
+        Ok(ui::normalize(
+            settings::load(&path)?.and_then(|stored| stored.ui).unwrap_or_default(),
+        ))
     })
 }
 
 #[tauri::command]
 async fn save_ui_preferences(
     state: State<'_, AppState>,
+    workspace_path: String,
     preferences: ui::Preferences,
 ) -> Result<(), String> {
     with_workspace(&state, |workspace| {
+        // 迟到的布局保存不能写进已经切换的工作空间。
+        summary::validate_workspace(workspace.root(), &workspace_path)?;
         let path = workspace.root().join(settings::FILE_NAME);
         let mut stored = settings::load(&path)?.unwrap_or_default();
-        stored.ui = ui::normalize(preferences);
+        stored.ui = Some(ui::normalize(preferences));
         settings::save(&path, &stored)
     })
 }
@@ -369,11 +396,17 @@ fn save_workspace_settings_at(
     validate_excel_settings(&stored.excel, &stored.ai)?;
     stored.summary = summary::normalize_settings(workspace.root(), &stored.summary)?;
     let path = workspace.root().join(settings::FILE_NAME);
+    let current = settings::load(&path)?;
     // Match section saves: a damaged existing file must not be silently replaced.
-    if let Some(current) = settings::load(&path)? {
+    if let Some(current) = &current {
         if current.database != *workspace.database_settings() {
             return Err("数据库配置已被外部修改，请重新打开工作空间后重试".into());
         }
+    }
+    // 统一设置保存的载荷通常不带 ui 字段（反序列化为 None），此时沿用磁盘上已有的布局，
+    // 避免“保存一次设置就把首页拖放结果清空”。只有从未保存过布局时才保持 None。
+    if stored.ui.is_none() {
+        stored.ui = current.and_then(|current| current.ui);
     }
     let (database_settings, connection) = workspace.prepare_database_settings(&stored.database)?;
     stored.database = database_settings;
@@ -382,6 +415,18 @@ fn save_workspace_settings_at(
     // 上限调小后立即整理历史版本，不必等到下一次写日报。
     crate::history::enforce(workspace.root(), stored.database.history_limit_bytes);
     Ok(stored)
+}
+
+/// Copy configuration only. The destination keeps its own database namespace,
+/// so importing a connection never joins the source workspace's journal records.
+fn sync_workspace_settings_at(
+    workspace: &mut Workspace,
+    mut stored: settings::StoredSettings,
+) -> Result<settings::StoredSettings, String> {
+    stored.database.workspace_id = workspace.database_settings().workspace_id.clone();
+    stored.ui = Some(ui::normalize(stored.ui.unwrap_or_default()));
+    let path = workspace.root().to_string_lossy().into_owned();
+    save_workspace_settings_at(workspace, &path, stored)
 }
 
 #[tauri::command]
@@ -840,6 +885,95 @@ pub fn run() {
 mod excel_integration_tests {
     use super::*;
 
+    #[test]
+    fn workspace_sync_copies_settings_and_layout_without_copying_source_journals() {
+        let source = tempfile::tempdir().unwrap();
+        let target = tempfile::tempdir().unwrap();
+        let mut source_workspace = Workspace::open(source.path().to_str().unwrap()).unwrap();
+        source_workspace.create_with_content("20261021", Format::Md, "源日报保持独立").unwrap();
+        let mut stored = configured_settings(source.path());
+        stored.appearance.scale = 120;
+        stored.ai.generation_preference = "保留事实".into();
+        stored.summary.output_directory = "归档/总结".into();
+        stored.database.default_format = Format::Txt;
+        stored.database.workspace_id = uuid::Uuid::new_v4().to_string();
+        stored.ui = Some(serde_json::from_value(serde_json::json!({
+            "skin": "default",
+            "layout": { "type": "leaf", "id": "summary" }
+        })).unwrap());
+        let source_path = source.path().join(settings::FILE_NAME);
+        settings::save(&source_path, &stored).unwrap();
+        let original = fs::read(&source_path).unwrap();
+        let mut workspace = Workspace::open(target.path().to_str().unwrap()).unwrap();
+        workspace.create_with_content("20261020", Format::Md, "目标原有日报").unwrap();
+
+        let saved = sync_workspace_settings_at(&mut workspace, stored.clone()).unwrap();
+        stored.database.workspace_id.clear();
+        stored.ui = Some(ui::normalize(stored.ui.unwrap_or_default()));
+        assert_eq!(serde_json::to_value(saved).unwrap(), serde_json::to_value(stored).unwrap());
+        assert_eq!(fs::read(source_path).unwrap(), original);
+        assert_eq!(workspace.list().unwrap().len(), 1);
+        assert_eq!(workspace.read("20261020", Format::Md).unwrap().content, "目标原有日报");
+        assert!(!target.path().join("2026/20261021.md").exists());
+    }
+
+    #[test]
+    fn workspace_sync_keeps_an_existing_target_database_identity_and_records() {
+        let target = tempfile::tempdir().unwrap();
+        let mut workspace = Workspace::open(target.path().to_str().unwrap()).unwrap();
+        let mut original = settings::StoredSettings::default();
+        original.database.enabled = true;
+        let original = save_workspace_settings_at(&mut workspace, target.path().to_str().unwrap(), original).unwrap();
+        workspace.create_with_content("20261020", Format::Md, "目标数据库日报").unwrap();
+        let mut imported = original.clone();
+        imported.database.workspace_id = uuid::Uuid::new_v4().to_string();
+        imported.appearance.scale = 110;
+        let saved = sync_workspace_settings_at(&mut workspace, imported).unwrap();
+
+        assert_eq!(saved.database.workspace_id, original.database.workspace_id);
+        assert_eq!(workspace.read("20261020", Format::Md).unwrap().content, "目标数据库日报");
+        assert_eq!(saved.appearance.scale, 110);
+    }
+
+    #[test]
+    fn workspace_sync_generates_a_fresh_database_identity_for_a_new_target() {
+        let target = tempfile::tempdir().unwrap();
+        let mut workspace = Workspace::open(target.path().to_str().unwrap()).unwrap();
+        workspace.create_with_content("20261020", Format::Md, "只备份目标自己的日报").unwrap();
+        let mut imported = settings::StoredSettings::default();
+        imported.database.enabled = true;
+        imported.database.workspace_id = uuid::Uuid::new_v4().to_string();
+        let source_id = imported.database.workspace_id.clone();
+        let saved = sync_workspace_settings_at(&mut workspace, imported).unwrap();
+
+        database::validate_workspace_id(&saved.database.workspace_id).unwrap();
+        assert_ne!(saved.database.workspace_id, source_id);
+        let connection = database::run_blocking(|| database::Database::connect(target.path(), &saved.database, &saved.database.workspace_id)).unwrap();
+        let records = database::run_blocking(|| connection.list()).unwrap();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].content, "只备份目标自己的日报");
+        assert!(saved.ui.is_some());
+    }
+
+    #[test]
+    fn workspace_sync_validation_failure_preserves_target_settings_and_reports() {
+        let target = tempfile::tempdir().unwrap();
+        let path = target.path().join(settings::FILE_NAME);
+        let mut original = settings::StoredSettings::default();
+        original.appearance.scale = 90;
+        settings::save(&path, &original).unwrap();
+        let bytes = fs::read(&path).unwrap();
+        let mut workspace = Workspace::open(target.path().to_str().unwrap()).unwrap();
+        workspace.create_with_content("20261020", Format::Md, "原有日报").unwrap();
+        let mut imported = settings::StoredSettings::default();
+        imported.appearance.scale = 999;
+
+        assert!(sync_workspace_settings_at(&mut workspace, imported).is_err());
+        assert_eq!(fs::read(path).unwrap(), bytes);
+        assert_eq!(workspace.read("20261020", Format::Md).unwrap().content, "原有日报");
+        assert_eq!(workspace.database_settings(), &original.database);
+    }
+
     fn configured_settings(root: &std::path::Path) -> settings::StoredSettings {
         let template = root.join("weekly.xlsx");
         fs::write(&template, "template parsed only during export").unwrap();
@@ -1248,6 +1382,42 @@ mod excel_integration_tests {
         assert_eq!(fs::read_dir(root.path().join("output")).unwrap().count(), 1);
         assert!(std::path::Path::new(&result.path).is_file());
         assert_eq!(result.cells, 1);
+    }
+
+    #[test]
+    fn unified_settings_save_without_ui_keeps_the_saved_layout() {
+        let root = tempfile::tempdir().unwrap();
+        let mut workspace = Workspace::open(root.path().to_str().unwrap()).unwrap();
+        let path = workspace.root().join(settings::FILE_NAME);
+        let layout = ui::normalize(ui::Preferences {
+            columns: 1,
+            modules: vec![ui::Placement { id: "editor".into() }, ui::Placement { id: "calendar".into() }],
+            ..ui::Preferences::default()
+        });
+        settings::save(
+            &path,
+            &settings::StoredSettings {
+                ui: Some(layout.clone()),
+                ..settings::StoredSettings::default()
+            },
+        )
+        .unwrap();
+
+        // 设置页提交的统一设置载荷没有 ui 字段，反序列化后为 None；保存时必须沿用磁盘上的布局。
+        let payload: settings::StoredSettings = serde_json::from_value(serde_json::json!({})).unwrap();
+        assert!(payload.ui.is_none());
+        let saved =
+            save_workspace_settings_at(&mut workspace, root.path().to_str().unwrap(), payload).unwrap();
+        assert_eq!(saved.ui, Some(layout.clone()));
+
+        let restored = settings::load(&path).unwrap().unwrap();
+        let ui = restored.ui.expect("保存统一设置不应清空已有布局");
+        assert_eq!(ui, layout);
+        assert_eq!(ui.columns, 1);
+        assert_eq!(
+            ui.modules.iter().map(|module| module.id.as_str()).collect::<Vec<_>>(),
+            vec!["editor", "calendar"]
+        );
     }
 
 }

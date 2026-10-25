@@ -1,28 +1,63 @@
 <script setup lang="ts">
 import {
   PhArrowClockwise,
+  PhCalendarDots,
+  PhChartLine,
   PhClockCounterClockwise,
   PhFileXls,
   PhGearSix,
+  PhNotePencil,
   PhPalette,
   PhSparkle,
+  PhSquaresFour,
 } from '@phosphor-icons/vue'
+import type { ModuleId } from '../modules/types'
 
-defineProps<{ disabled: boolean }>()
-const emit = defineEmits<{ refresh: []; settings: []; skin: []; summary: []; excel: []; history: [] }>()
+defineProps<{ disabled: boolean; active: ModuleId[]; settingsActive?: boolean; settingsBusy?: boolean }>()
+const emit = defineEmits<{
+  module: [id: ModuleId]
+  refresh: []
+  settings: []
+  skin: []
+  layout: []
+}>()
+
+const moduleButtons = [
+  { id: 'calendar', label: '日历', icon: PhCalendarDots },
+  { id: 'editor', label: '日报编辑', icon: PhNotePencil },
+  { id: 'overview', label: '数据概览', icon: PhChartLine },
+  { id: 'history', label: '历史记录', icon: PhClockCounterClockwise },
+  { id: 'excel', label: 'Excel 周报', icon: PhFileXls },
+  { id: 'summary', label: 'AI 总结', icon: PhSparkle },
+] as const
 </script>
 
 <template>
-  <aside class="app-rail" aria-label="功能区">
+  <aside class="app-rail" aria-label="功能与模块">
+    <button
+      v-for="item in moduleButtons"
+      :key="item.id"
+      type="button"
+      class="rail-button"
+      :class="{ 'is-active': active.includes(item.id) }"
+      :aria-label="item.label"
+      :aria-pressed="active.includes(item.id)"
+      :title="active.includes(item.id) ? `${item.label}（已在首页）` : `添加${item.label}模块`"
+      :disabled="disabled"
+      @click="emit('module', item.id)"
+    >
+      <component :is="item.icon" :size="19" aria-hidden="true" />
+    </button>
+    <span class="rail-divider" aria-hidden="true"></span>
     <button
       type="button"
       class="rail-button"
-      aria-label="设置"
-      title="设置"
+      aria-label="布局"
+      title="布局与分栏"
       :disabled="disabled"
-      @click="emit('settings')"
+      @click="emit('layout')"
     >
-      <PhGearSix :size="19" aria-hidden="true" />
+      <PhSquaresFour :size="19" aria-hidden="true" />
     </button>
     <button
       type="button"
@@ -44,36 +79,21 @@ const emit = defineEmits<{ refresh: []; settings: []; skin: []; summary: []; exc
     >
       <PhArrowClockwise :size="19" aria-hidden="true" />
     </button>
-    <span class="rail-divider" aria-hidden="true"></span>
-    <button
-      type="button"
-      class="rail-button"
-      aria-label="AI 总结"
-      title="AI 总结"
-      :disabled="disabled"
-      @click="emit('summary')"
-    >
-      <PhSparkle :size="19" aria-hidden="true" />
-    </button>
-    <button
-      type="button"
-      class="rail-button"
-      aria-label="Excel 周报"
-      title="Excel 周报"
-      :disabled="disabled"
-      @click="emit('excel')"
-    >
-      <PhFileXls :size="19" aria-hidden="true" />
-    </button>
-    <button
-      type="button"
-      class="rail-button"
-      aria-label="历史记录"
-      title="历史记录"
-      :disabled="disabled"
-      @click="emit('history')"
-    >
-      <PhClockCounterClockwise :size="19" aria-hidden="true" />
-    </button>
+    <div class="rail-bottom">
+      <span class="rail-divider" aria-hidden="true"></span>
+      <button
+        type="button"
+        class="rail-button"
+        :class="{ 'is-active': settingsActive }"
+        aria-label="设置"
+        :title="settingsActive ? '保存设置并返回首页' : '设置'"
+        :aria-description="settingsActive ? '保存当前设置并返回首页' : '打开设置'"
+        :aria-pressed="!!settingsActive"
+        :disabled="disabled || settingsBusy"
+        @click="emit('settings')"
+      >
+        <PhGearSix :size="19" aria-hidden="true" />
+      </button>
+    </div>
   </aside>
 </template>
