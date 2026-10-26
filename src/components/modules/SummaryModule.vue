@@ -38,7 +38,6 @@ const providerName = computed(() => defaultProvider.value?.name ?? '')
 const outputError = computed(
   () => summaryOutput.exportError.value || summaryOutput.openError.value || summaryOutput.error.value,
 )
-const exportedFile = computed(() => summaryOutput.result.value?.filename ?? '')
 
 /** Excel 相关事件在内嵌总结里不可用（excel-enabled 为 false），统一 no-op。 */
 function noop() {}
@@ -92,6 +91,16 @@ watch(
 onBeforeUnmount(() => {
   prepareToken++
 })
+
+// 原文准备好后默认直接合并所选日报；AI 总结改由“总结”按钮确认后触发。
+watch(
+  [prepared, summaryMode, summaryGenerating],
+  ([ready, mode, generating]) => {
+    if (!ready || mode || generating) return
+    actions.directSummary()
+  },
+  { immediate: true },
+)
 </script>
 
 <template>
@@ -114,7 +123,6 @@ onBeforeUnmount(() => {
         :output-loading="outputLoading"
         :output-exporting="outputExporting"
         :output-error="outputError"
-        :exported-file="exportedFile"
         :excel-enabled="false"
         :excel-preparing="false"
         :excel-exporting="false"
@@ -124,7 +132,7 @@ onBeforeUnmount(() => {
         :excel-error="''"
         @close="actions.closeSummary"
         @ai="generateSummary"
-        @direct="actions.directSummary"
+        @configure-ai="actions.openAiSettings"
         @export="actions.exportSummary"
         @excel="noop"
         @excel-unavailable="noop"

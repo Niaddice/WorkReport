@@ -714,6 +714,54 @@ fn discard_excel_preview(runtime: State<'_, excel::Runtime>, preview_id: String)
     runtime.discard(&preview_id);
 }
 #[tauri::command]
+async fn list_excel_exports(
+    workspace_state: State<'_, AppState>,
+    workspace_path: String,
+) -> Result<Vec<excel::ExportFile>, String> {
+    run_workspace(workspace_state.0.clone(), move |workspace| {
+        summary::validate_workspace(workspace.root(), &workspace_path)?;
+        let stored = settings::load(&workspace.root().join(settings::FILE_NAME))?.unwrap_or_default();
+        let directory = stored.excel.output_directory.trim();
+        if directory.is_empty() {
+            return Ok(Vec::new());
+        }
+        excel::list_exports(std::path::Path::new(directory))
+    })
+    .await
+}
+#[tauri::command]
+async fn read_excel_export(
+    workspace_state: State<'_, AppState>,
+    workspace_path: String,
+    path: String,
+) -> Result<excel::ExportPreview, String> {
+    run_workspace(workspace_state.0.clone(), move |workspace| {
+        summary::validate_workspace(workspace.root(), &workspace_path)?;
+        let stored = settings::load(&workspace.root().join(settings::FILE_NAME))?.unwrap_or_default();
+        let directory = std::path::Path::new(stored.excel.output_directory.trim());
+        if !directory.is_absolute() {
+            return Err("请先在设置中配置 Excel 输出目录".into());
+        }
+        let canonical_directory =
+            std::fs::canonicalize(directory).map_err(|_| "Excel 输出目录不存在".to_string())?;
+        let target = std::fs::canonicalize(&path).map_err(|_| "Excel 文件不存在".to_string())?;
+        if !target.starts_with(&canonical_directory) {
+            return Err("只能预览 Excel 输出目录中的文件".into());
+        }
+        let sheets = excel::read_export(&target)?;
+        Ok(excel::ExportPreview {
+            filename: target
+                .file_name()
+                .and_then(|value| value.to_str())
+                .unwrap_or_default()
+                .to_string(),
+            path: target.to_string_lossy().into_owned(),
+            sheets,
+        })
+    })
+    .await
+}
+#[tauri::command]
 async fn detect_ai_clis() -> Vec<ai::DetectedCli> {
     ai::detect().await
 }
@@ -870,6 +918,8 @@ pub fn run() {
             prepare_excel,
             confirm_excel,
             discard_excel_preview,
+            list_excel_exports,
+            read_excel_export,
             detect_ai_clis,
             list_ai_models,
             list_cli_models,

@@ -350,6 +350,142 @@ describe('workspace journal save lifecycle', () => {
     journal.dispose()
   })
 
+  it('keeps undo after autosave and an unchanged focus refresh, while accepting the latest revision', async () => {
+    const journal = await setup()
+    let stored = { ...original }
+    vi.mocked(api.save).mockImplementation(async (date, content) => {
+      stored = { ...stored, date, content, revision: 'saved' }
+      return { ...stored }
+    })
+    vi.mocked(api.read).mockImplementation(async () => ({ ...stored, revision: 'refreshed' }))
+    journal.edit('自动保存后的正文')
+    await vi.advanceTimersByTimeAsync(650)
+    expect(journal.dirty.value).toBe(false)
+
+    await journal.refresh()
+
+    expect(journal.document.value?.revision).toBe('refreshed')
+    expect(journal.canUndo.value).toBe(true)
+    expect(journal.undo()).toBe(true)
+    expect(journal.draft.value).toBe(original.content)
+    expect(await journal.flush()).toBe(true)
+    expect(api.save).toHaveBeenLastCalledWith(original.date, original.content, 'refreshed', 'md')
+    journal.dispose()
+  })
+
+  it('keeps both history stacks when refreshing after undo', async () => {
+    const journal = await setup()
+    let stored = { ...original }
+    vi.mocked(api.save).mockImplementation(async (date, content) => {
+      stored = { ...stored, date, content, revision: content }
+      return { ...stored }
+    })
+    vi.mocked(api.read).mockImplementation(async () => ({ ...stored }))
+    journal.edit('first', true)
+    journal.edit('second', true)
+    await journal.flush()
+    expect(journal.undo()).toBe(true)
+
+    await journal.refresh()
+
+    expect(journal.draft.value).toBe('first')
+    expect(journal.canUndo.value).toBe(true)
+    expect(journal.canRedo.value).toBe(true)
+    expect(journal.redo()).toBe(true)
+    expect(journal.draft.value).toBe('second')
+    expect(journal.undo()).toBe(true)
+    expect(journal.draft.value).toBe('first')
+    journal.dispose()
+  })
+
+  it('keeps redo for a new draft undone to empty without creating a file on refresh', async () => {
+    const journal = await setup()
+    await journal.select('20261019')
+    journal.edit('未落盘的第一版')
+    expect(journal.undo()).toBe(true)
+
+    await journal.refresh()
+
+    expect(journal.isNewDraft.value).toBe(true)
+    expect(journal.canRedo.value).toBe(true)
+    expect(api.create).not.toHaveBeenCalled()
+    expect(journal.redo()).toBe(true)
+    expect(journal.draft.value).toBe('未落盘的第一版')
+    journal.dispose()
+  })
+
+  it('clears both history stacks when a refresh finds externally changed content', async () => {
+    const journal = await setup()
+    vi.mocked(api.save).mockImplementation(async (date, content) => ({ ...original, date, content, revision: 'saved' }))
+    journal.edit('first', true)
+    journal.edit('second', true)
+    journal.undo()
+    await journal.flush()
+    vi.mocked(api.read).mockResolvedValue({ ...original, content: '另一程序修改的正文', revision: 'external' })
+
+    await journal.refresh()
+
+    expect(journal.draft.value).toBe('另一程序修改的正文')
+    expect(journal.canUndo.value).toBe(false)
+    expect(journal.canRedo.value).toBe(false)
+    expect(journal.undo()).toBe(false)
+    expect(journal.redo()).toBe(false)
+    journal.dispose()
+  })
+
+  it('clears history when a refresh finds the report in a different format', async () => {
+    const journal = await setup()
+    vi.mocked(api.save).mockImplementation(async (date, content) => ({ ...original, date, content, revision: 'saved' }))
+    journal.edit('same contents')
+    await journal.flush()
+    vi.mocked(api.list).mockResolvedValue([{ date: original.date, filename: '20261018.txt', format: 'txt' }])
+    vi.mocked(api.read).mockResolvedValue({
+      ...original,
+      filename: '20261018.txt',
+      format: 'txt',
+      content: 'same contents',
+      revision: 'external',
+    })
+
+    await journal.refresh()
+
+    expect(journal.document.value?.format).toBe('txt')
+    expect(journal.canUndo.value).toBe(false)
+    expect(journal.canRedo.value).toBe(false)
+    journal.dispose()
+  })
+
+  it('still discards local history on explicit reload even when saved contents are unchanged', async () => {
+    const journal = await setup()
+    const saved = { ...original, content: 'saved contents', revision: 'saved' }
+    vi.mocked(api.save).mockResolvedValue(saved)
+    journal.edit(saved.content)
+    await journal.flush()
+    vi.mocked(api.read).mockResolvedValue(saved)
+
+    await journal.reload()
+
+    expect(journal.draft.value).toBe(saved.content)
+    expect(journal.canUndo.value).toBe(false)
+    expect(journal.canRedo.value).toBe(false)
+    journal.dispose()
+  })
+
+  it('clears local history when changing workspaces', async () => {
+    const journal = await setup()
+    vi.mocked(api.save).mockImplementation(async (date, content) => ({ ...original, date, content, revision: 'saved' }))
+    journal.edit('saved contents')
+    await journal.flush()
+    vi.mocked(api.open).mockResolvedValue({ path: '/another-workspace', name: 'another' })
+
+    await journal.open('/another-workspace')
+
+    expect(journal.workspace.value?.path).toBe('/another-workspace')
+    expect(journal.canUndo.value).toBe(false)
+    expect(journal.canRedo.value).toBe(false)
+    journal.dispose()
+  })
+
   it('undoes and redoes edits, and resets history when changing date', async () => {
     const journal = await setup()
     vi.mocked(api.save).mockImplementation(async (date, content) => ({ ...original, date, content, revision: 'r2' }))

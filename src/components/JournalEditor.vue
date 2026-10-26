@@ -1,6 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
-import dayjs from 'dayjs'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, useId, watch, type CSSProperties } from 'vue'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
 import { isTauri } from '@tauri-apps/api/core'
@@ -13,9 +12,23 @@ import {
   PhCopy,
   PhCheck,
   PhCircleNotch,
+  PhDotsThree,
+  PhTextItalic,
+  PhTextStrikethrough,
+  PhListNumbers,
+  PhQuotes,
+  PhCode,
+  PhCodeBlock,
+  PhLink,
+  PhMinus,
+  PhTable,
+  PhEye,
+  PhPencilSimple,
 } from '@phosphor-icons/vue'
 import { api, type Document, type FileFormat } from '../lib/workspace'
 import { pushMessage } from '../lib/messages'
+import { markdownEdit, type MarkdownAction } from '../lib/markdownEditing'
+import { selectMenuPosition } from '../lib/select'
 
 const props = defineProps<{
   date: string
@@ -34,13 +47,12 @@ const props = defineProps<{
   storageMode?: 'files' | 'dual' | 'database'
 }>()
 const emit = defineEmits<{
-  edit: [content: string]
+  edit: [content: string, forceHistory?: boolean]
   undo: []
   redo: []
   save: []
   reload: []
   format: [value: FileFormat]
-  ai: []
   restore: []
   error: [value: string]
   'update:preview': [value: boolean]
@@ -50,6 +62,23 @@ const editorBody = ref<HTMLElement>()
 const preview = computed({ get: () => props.preview, set: (value: boolean) => emit('update:preview', value) })
 const previewMarkup = ref('')
 const copied = ref(false)
+const moreOpened = ref(false)
+const moreTrigger = ref<HTMLButtonElement>()
+const moreMenu = ref<HTMLDivElement>()
+const moreMenuId = useId()
+const moreMenuStyle = ref<CSSProperties>({ position: 'fixed', visibility: 'hidden' })
+const moreTools = [
+  { action: 'italic', label: '斜体', icon: PhTextItalic },
+  { action: 'strike', label: '删除线', icon: PhTextStrikethrough },
+  { action: 'orderedList', label: '有序列表', icon: PhListNumbers },
+  { action: 'quote', label: '引用', icon: PhQuotes },
+  { action: 'inlineCode', label: '行内代码', icon: PhCode },
+  { action: 'codeBlock', label: '代码块', icon: PhCodeBlock },
+  { action: 'link', label: '链接', icon: PhLink },
+  { action: 'divider', label: '分隔线', icon: PhMinus },
+  { action: 'table', label: '表格', icon: PhTable },
+] satisfies { action: MarkdownAction; label: string; icon: unknown }[]
+let rememberedSelection = { start: 0, end: 0 }
 let copiedTimer: ReturnType<typeof setTimeout> | undefined
 let dateAnimation: Animation | undefined
 const newEmpty = computed(() => props.isNew && !props.content.trim())
@@ -81,6 +110,7 @@ watch(
   () => props.document?.format,
   () => {
     preview.value = false
+    closeMore()
   },
 )
 watch(
@@ -93,6 +123,8 @@ watch(
 watch(
   () => props.date,
   () => {
+    rememberedSelection = { start: 0, end: 0 }
+    closeMore()
     dateAnimation?.cancel()
     const body = editorBody.value
     if (!body || typeof body.animate !== 'function' || window.matchMedia?.('(prefers-reduced-motion: reduce)').matches)
@@ -110,19 +142,113 @@ watch(
 onBeforeUnmount(() => {
   dateAnimation?.cancel()
   clearTimeout(copiedTimer)
+  document.removeEventListener('pointerdown', onOutsidePointer)
+  document.removeEventListener('focusin', onOutsideFocus)
+  window.removeEventListener('resize', closeMore)
+  window.removeEventListener('scroll', onScroll, true)
 })
-async function insert(before: string, after = '') {
+onMounted(() => {
+  document.addEventListener('pointerdown', onOutsidePointer)
+  document.addEventListener('focusin', onOutsideFocus)
+  window.addEventListener('resize', closeMore)
+  window.addEventListener('scroll', onScroll, true)
+})
+watch(
+  () => props.disabled,
+  (disabled) => {
+    if (disabled) closeMore()
+  },
+)
+function rememberSelection() {
+  if (preview.value || !textarea.value) return
+  rememberedSelection = { start: textarea.value.selectionStart, end: textarea.value.selectionEnd }
+}
+async function applyMarkdown(action: MarkdownAction) {
+  if (props.disabled || props.document?.format !== 'md') return
+  rememberSelection()
+  const result = markdownEdit(props.content, rememberedSelection.start, rememberedSelection.end, action)
   preview.value = false
+  closeMore()
+  emit('edit', result.content, true)
   await nextTick()
   const input = textarea.value
   if (!input) return
-  const start = input.selectionStart
-  const end = input.selectionEnd
-  const text = input.value.slice(start, end)
-  emit('edit', input.value.slice(0, start) + before + text + after + input.value.slice(end))
+  input.focus({ preventScroll: true })
+  input.setSelectionRange(result.selectionStart, result.selectionEnd)
+  rememberedSelection = { start: result.selectionStart, end: result.selectionEnd }
+}
+function closeMore() {
+  moreOpened.value = false
+}
+async function openMore(last = false) {
+  if (props.disabled || props.document?.format !== 'md') return
+  rememberSelection()
+  moreMenuStyle.value = { position: 'fixed', visibility: 'hidden' }
+  moreOpened.value = true
   await nextTick()
-  input.focus()
-  input.setSelectionRange(start + before.length, start + before.length + text.length)
+  if (!moreOpened.value || !moreTrigger.value || !moreMenu.value) return
+  const anchor = moreTrigger.value.getBoundingClientRect()
+  const viewport = { width: document.documentElement.clientWidth, height: window.innerHeight }
+  const desiredAnchor = { ...anchor, top: anchor.top, bottom: anchor.bottom, left: anchor.left, width: 220 }
+  const width = selectMenuPosition(desiredAnchor, viewport, 0).width
+  moreMenu.value.style.width = `${width}px`
+  const position = selectMenuPosition(desiredAnchor, viewport, moreMenu.value.scrollHeight)
+  moreMenuStyle.value = {
+    position: 'fixed',
+    visibility: 'visible',
+    left: `${position.left}px`,
+    top: `${position.top}px`,
+    width: `${position.width}px`,
+    maxHeight: `${position.maxHeight}px`,
+  }
+  const options = moreMenu.value.querySelectorAll<HTMLButtonElement>('button')
+  options[last ? options.length - 1 : 0]?.focus({ preventScroll: true })
+}
+function toggleMore() {
+  if (moreOpened.value) closeMore()
+  else void openMore()
+}
+function onMoreKeydown(event: KeyboardEvent) {
+  if (event.isComposing || event.altKey || event.ctrlKey || event.metaKey) return
+  if (event.key === 'Escape') {
+    event.preventDefault()
+    event.stopPropagation()
+    closeMore()
+    moreTrigger.value?.focus({ preventScroll: true })
+    return
+  }
+  if (event.key === 'Tab') {
+    closeMore()
+    moreTrigger.value?.focus({ preventScroll: true })
+    return
+  }
+  const keys = ['ArrowDown', 'ArrowUp', 'Home', 'End']
+  if (!keys.includes(event.key)) return
+  event.preventDefault()
+  if (!moreOpened.value) {
+    void openMore(event.key === 'ArrowUp' || event.key === 'End')
+    return
+  }
+  const options = Array.from(moreMenu.value?.querySelectorAll<HTMLButtonElement>('button') ?? [])
+  const current = options.indexOf(document.activeElement as HTMLButtonElement)
+  const next =
+    event.key === 'Home'
+      ? 0
+      : event.key === 'End'
+        ? options.length - 1
+        : (current + (event.key === 'ArrowUp' ? -1 : 1) + options.length) % options.length
+  options[next]?.focus({ preventScroll: true })
+}
+function onOutsidePointer(event: PointerEvent) {
+  const target = event.target as Node | null
+  if (target && !moreTrigger.value?.contains(target) && !moreMenu.value?.contains(target)) closeMore()
+}
+function onOutsideFocus(event: FocusEvent) {
+  const target = event.target as Node | null
+  if (target && !moreTrigger.value?.contains(target) && !moreMenu.value?.contains(target)) closeMore()
+}
+function onScroll(event: Event) {
+  if (moreOpened.value && !(event.target instanceof Node && moreMenu.value?.contains(event.target))) closeMore()
 }
 async function copyDraft() {
   try {
@@ -147,61 +273,45 @@ defineExpose({ focus })
 <template>
   <!-- eslint-disable vue/no-v-html -- Markdown 预览先经 DOMPurify 清洗再渲染 -->
   <aside class="editor-panel" aria-label="日报编辑区" :aria-busy="disabled">
-    <header class="editor-heading">
-      <Transition name="inline-fade" mode="out-in"
-        ><div :key="date" class="editor-date-heading">
-          <div class="editor-eyebrow">{{ dayjs(date).format('dddd') }}</div>
-          <h2>{{ dayjs(date).format('M 月 D 日') }}<span>的日报</span></h2>
-        </div></Transition
-      >
-      <div class="editor-file-row">
-        <span class="file-label"><PhFileText :size="14" />{{ document?.filename ?? `${date}.md` }}</span>
-        <div v-if="document" class="format-switch" role="group" aria-label="日报文件格式">
-          <button
-            :disabled="disabled"
-            :aria-pressed="document.format === 'md'"
-            @click="document.format !== 'md' && emit('format', 'md')"
-          >
-            Markdown</button
-          ><button
-            :disabled="disabled"
-            :aria-pressed="document.format === 'txt'"
-            @click="document.format !== 'txt' && emit('format', 'txt')"
-          >
-            TXT
-          </button>
-        </div>
-      </div>
-    </header>
     <div class="editor-state-stage">
       <Transition name="editor-state">
         <div v-if="document" key="document" class="editor-content">
           <div class="editor-toolbar">
             <div v-if="document.format === 'md'" class="format-actions" aria-label="Markdown 格式工具">
-              <md-icon-button aria-label="插入标题" title="标题" :disabled="disabled" @click="insert('## ')"
+              <md-icon-button aria-label="插入标题" title="标题" :disabled="disabled" @click="applyMarkdown('heading')"
                 ><PhTextH :size="18" /></md-icon-button
-              ><md-icon-button aria-label="加粗" title="加粗" :disabled="disabled" @click="insert('**', '**')"
+              ><md-icon-button aria-label="加粗" title="加粗" :disabled="disabled" @click="applyMarkdown('bold')"
                 ><PhTextB :size="18" /></md-icon-button
-              ><md-icon-button aria-label="插入列表" title="列表" :disabled="disabled" @click="insert('- ')"
+              ><md-icon-button
+                aria-label="插入列表"
+                title="无序列表"
+                :disabled="disabled"
+                @click="applyMarkdown('bulletList')"
                 ><PhListBullets :size="18" /></md-icon-button
-              ><md-icon-button aria-label="插入待办" title="待办" :disabled="disabled" @click="insert('- [ ] ')"
+              ><md-icon-button
+                aria-label="插入待办"
+                title="待办"
+                :disabled="disabled"
+                @click="applyMarkdown('taskList')"
                 ><PhCheckSquare :size="18"
               /></md-icon-button>
+              <button
+                ref="moreTrigger"
+                type="button"
+                class="markdown-tools-trigger"
+                aria-label="更多 Markdown 工具"
+                title="更多 Markdown 工具"
+                aria-haspopup="menu"
+                :aria-expanded="moreOpened"
+                :aria-controls="moreOpened ? moreMenuId : undefined"
+                :disabled="disabled"
+                @click="toggleMore"
+                @keydown="onMoreKeydown"
+              >
+                <PhDotsThree :size="18" aria-hidden="true" />
+              </button>
             </div>
             <span v-else class="editor-context-label">纯文本编辑</span>
-            <div class="editor-toolbar-actions">
-              <button
-                v-if="document.format === 'md'"
-                class="preview-toggle"
-                :aria-pressed="preview"
-                @click="preview = !preview"
-              >
-                <Transition name="button-label" mode="out-in"
-                  ><span :key="String(preview)">{{ preview ? '编辑' : '预览' }}</span></Transition
-                >
-              </button>
-              <button class="ai-toggle" :disabled="disabled || !hasContent" @click="emit('ai')">AI</button>
-            </div>
           </div>
           <div ref="editorBody" class="editor-body">
             <Transition name="editor-mode"
@@ -224,23 +334,55 @@ defineExpose({ focus })
                 aria-label="日报文本内容"
                 placeholder="写下今天的工作…"
                 @input="emit('edit', ($event.target as HTMLTextAreaElement).value)"
+                @select="rememberSelection"
+                @keyup="rememberSelection"
+                @click="rememberSelection"
+                @blur="rememberSelection"
                 @keydown.meta.s.prevent="emit('save')"
                 @keydown.ctrl.s.prevent="emit('save')"
               ></textarea>
             </Transition>
-            <button
-              v-if="hasContent"
-              type="button"
-              class="copy-icon"
-              :title="copied ? '已复制' : '复制日报'"
-              :aria-label="copied ? '已复制' : '复制日报'"
-              :disabled="disabled"
-              @click="copyDraft"
+            <span class="editor-watermark" aria-hidden="true"
+              ><PhFileText :size="14" />{{ document?.filename ?? `${date}.md` }}</span
             >
-              <Transition name="button-label" mode="out-in"
-                ><PhCheck v-if="copied" key="copied" :size="14" /><PhCopy v-else key="copy" :size="14"
-              /></Transition>
-            </button>
+            <div class="editor-body-tools">
+              <button
+                v-if="document"
+                type="button"
+                class="editor-tool-button format-toggle"
+                :aria-label="`当前格式 ${document.format === 'md' ? 'Markdown' : '纯文本'}，点击切换`"
+                :title="`切换为 ${document.format === 'md' ? 'TXT' : 'Markdown'}`"
+                :disabled="disabled"
+                @click="emit('format', document.format === 'md' ? 'txt' : 'md')"
+              >
+                {{ document.format === 'md' ? 'MD' : 'TXT' }}
+              </button>
+              <button
+                v-if="document.format === 'md'"
+                type="button"
+                class="editor-tool-button preview-toggle"
+                :aria-label="preview ? '编辑' : '预览'"
+                :title="preview ? '编辑' : '预览'"
+                :aria-pressed="preview"
+                @click="preview = !preview"
+              >
+                <PhPencilSimple v-if="preview" :size="15" aria-hidden="true" />
+                <PhEye v-else :size="15" aria-hidden="true" />
+              </button>
+              <button
+                v-if="hasContent"
+                type="button"
+                class="editor-tool-button copy-icon"
+                :title="copied ? '已复制' : '复制日报'"
+                :aria-label="copied ? '已复制' : '复制日报'"
+                :disabled="disabled"
+                @click="copyDraft"
+              >
+                <Transition name="button-label" mode="out-in"
+                  ><PhCheck v-if="copied" key="copied" :size="14" /><PhCopy v-else key="copy" :size="14"
+                /></Transition>
+              </button>
+            </div>
           </div>
           <Transition name="inline-feedback"
             ><div v-if="error && dirty" class="save-error-actions">
@@ -264,4 +406,30 @@ defineExpose({ focus })
       </Transition>
     </div>
   </aside>
+  <Teleport to="body">
+    <Transition name="select-popover">
+      <div
+        v-if="moreOpened"
+        :id="moreMenuId"
+        ref="moreMenu"
+        class="markdown-tools-menu"
+        role="menu"
+        aria-label="更多 Markdown 工具"
+        :style="moreMenuStyle"
+        @keydown="onMoreKeydown"
+      >
+        <button
+          v-for="tool in moreTools"
+          :key="tool.action"
+          type="button"
+          class="markdown-tool-option"
+          role="menuitem"
+          :disabled="disabled"
+          @click="applyMarkdown(tool.action)"
+        >
+          <component :is="tool.icon" :size="16" aria-hidden="true" /><span>{{ tool.label }}</span>
+        </button>
+      </div>
+    </Transition>
+  </Teleport>
 </template>

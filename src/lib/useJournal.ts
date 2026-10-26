@@ -279,7 +279,7 @@ export function useJournal() {
     }
   }
 
-  async function reload() {
+  async function reload(preserveUnchangedHistory = false) {
     if (busy.value || saving.value || !workspace.value) return
     busy.value = true
     try {
@@ -288,8 +288,26 @@ export function useJournal() {
       const entry =
         entries.value.find((entry) => entry.date === selectedDate.value && entry.format === document.value?.format) ??
         entries.value.find((entry) => entry.date === selectedDate.value)
-      if (entry) applyDocument(await api.read(selectedDate.value, entry.format))
-      else applyDraft(selectedDate.value, format)
+      if (entry) {
+        const value = await api.read(selectedDate.value, entry.format)
+        const unchanged =
+          preserveUnchangedHistory &&
+          !isNewDraft.value &&
+          document.value?.date === value.date &&
+          document.value.format === value.format &&
+          document.value.content === value.content &&
+          draft.value === value.content
+        applyDocument(value, unchanged)
+      } else {
+        // Returning to the app after undoing a new draft to empty must keep redo.
+        const unchangedDraft =
+          preserveUnchangedHistory &&
+          isNewDraft.value &&
+          document.value?.date === selectedDate.value &&
+          document.value.format === format &&
+          draft.value === ''
+        if (!unchangedDraft) applyDraft(selectedDate.value, format)
+      }
       error.value = ''
     } catch (cause) {
       reportError(cause)
@@ -300,7 +318,9 @@ export function useJournal() {
 
   async function refresh() {
     if (busy.value || !workspace.value) return
-    if (await flush()) await reload()
+    // A focus refresh updates revisions and the index without erasing local
+    // editing history when the same report's saved contents have not changed.
+    if (await flush()) await reload(true)
   }
 
   async function switchFormat(format: FileFormat) {

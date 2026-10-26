@@ -37,11 +37,11 @@ export interface ModuleActions {
   confirmExcel(): Promise<void>
   discardExcelPreview(): void
   openExcelOutputDirectory(): Promise<void>
-  requestAi(): void
   requestFormat(format: FileFormat): void
   requestReload(): void
   requestRestore(): void
   openAiSettings(): void
+  openExcelSettings(): void
   openHolidaySettings(): void
   openWorkspaceDirectory(): void
   syncHolidays(year: number): void

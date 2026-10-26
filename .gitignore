@@ -13,5 +13,8 @@ __pycache__/
 release.sh
 release.command
 
+# 开发启停脚本的运行时状态
+.dev.pid
+
 # 本地助手数据
 .workbuddy/

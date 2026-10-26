@@ -131,6 +131,11 @@ fn add_range(regions: &mut Vec<CellRange>, range: CellRange) {
     }
 }
 
+/// 读取已导出工作簿的静态预览，不做任何填充。
+pub fn extract_static(workbook: &Workbook) -> Result<Vec<ExcelSheetPreview>, String> {
+    extract(workbook, &FillPlan { cells: Vec::new(), styles: Vec::new() }, None)
+}
+
 pub(super) fn extract(
     workbook: &Workbook,
     plan: &FillPlan,

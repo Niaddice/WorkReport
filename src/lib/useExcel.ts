@@ -35,6 +35,17 @@ export interface ExcelPreview {
   }[]
   sheets: ExcelSheetPreviewData[]
 }
+export interface ExcelExportFile {
+  filename: string
+  path: string
+  modified: number
+  size: number
+}
+export interface ExcelExportPreview {
+  filename: string
+  path: string
+  sheets: ExcelSheetPreviewData[]
+}
 export const EXCEL_STORAGE_KEY = 'work-report.excel-preview'
 export const DEFAULT_EXCEL_SETTINGS: ExcelSettings = {
   enabled: false,
@@ -106,6 +117,12 @@ export function useExcel() {
   const preview = ref<ExcelPreview | null>(null)
   const result = ref<ExcelExportResult | null>(null)
   const exportError = ref('')
+  const exports = ref<ExcelExportFile[]>([])
+  const exportsLoading = ref(false)
+  const exportsError = ref('')
+  const exportPreview = ref<ExcelExportPreview | null>(null)
+  const previewOpening = ref(false)
+  const previewOpenError = ref('')
   let loadTask: Promise<boolean> | undefined
   let scope = 0
   let requestId = ''
@@ -136,10 +153,56 @@ export function useExcel() {
     return cancel()
   }
 
+  function closeExportPreview() {
+    exportPreview.value = null
+    previewOpening.value = false
+    previewOpenError.value = ''
+  }
+
+  /** 列出输出目录中已导出的周报。 */
+  async function loadExports(workspacePath: string): Promise<boolean> {
+    if (!isTauri() || !workspacePath) {
+      exports.value = []
+      return false
+    }
+    exportsLoading.value = true
+    exportsError.value = ''
+    try {
+      const value = await invoke<ExcelExportFile[]>('list_excel_exports', { workspacePath })
+      exports.value = Array.isArray(value) ? value : []
+      return true
+    } catch (cause) {
+      exportsError.value = `读取已导出周报失败：${String(cause)}`
+      return false
+    } finally {
+      exportsLoading.value = false
+    }
+  }
+
+  /** 读取某个已导出文件，供只读预览。 */
+  async function openExport(workspacePath: string, path: string): Promise<boolean> {
+    if (!isTauri() || !workspacePath) return false
+    previewOpening.value = true
+    previewOpenError.value = ''
+    exportPreview.value = null
+    try {
+      const value = await invoke<ExcelExportPreview>('read_excel_export', { workspacePath, path })
+      exportPreview.value = value && Array.isArray(value.sheets) ? value : null
+      return !!exportPreview.value
+    } catch (cause) {
+      previewOpenError.value = `读取 Excel 内容失败：${String(cause)}`
+      return false
+    } finally {
+      previewOpening.value = false
+    }
+  }
+
   function clearExport() {
     void cancel()
     result.value = null
     exportError.value = ''
+    exports.value = []
+    closeExportPreview()
   }
 
   function load(): Promise<boolean> {
@@ -303,6 +366,15 @@ export function useExcel() {
     exporting,
     result,
     exportError,
+    exports,
+    exportsLoading,
+    exportsError,
+    exportPreview,
+    previewOpening,
+    previewOpenError,
+    loadExports,
+    openExport,
+    closeExportPreview,
     acceptSaved,
   }
 }

@@ -58,6 +58,7 @@ function context(overrides: Record<string, unknown> = {}) {
       confirmExcel: vi.fn(),
       discardExcelPreview: vi.fn(),
       openExcelOutputDirectory: vi.fn(),
+      openExcelSettings: vi.fn(),
     },
     ...overrides,
   }
@@ -155,7 +156,7 @@ describe('inline modules', () => {
     wrapper.unmount()
   })
 
-  it('automatically prepares the summary inside the same inline panel', async () => {
+  it('automatically prepares the summary and shows the merged text inline', async () => {
     const value = context()
     vi.mocked(value.actions.requestSummary).mockImplementation(async () => {
       value.ai.summaryVisible.value = true
@@ -165,54 +166,36 @@ describe('inline modules', () => {
     const wrapper = mountWithContext(SummaryModule, value)
     await flushPromises()
 
-    // 打开即显示总结面板，自动读取日报原文，不再有单独的 setup/准备按钮。
+    // 打开即显示总结面板，自动读取日报原文并直接合并。
     expect(value.actions.requestSummary).toHaveBeenCalledWith(['20261025'])
     expect(wrapper.find('.summary-module-panel .summary-dialog.is-inline').exists()).toBe(true)
-    expect(wrapper.find('.summary-prepare').exists()).toBe(false)
-    // 总结方式收进菜单；空结果时仍保留中性的 AI 图标。
-    expect(wrapper.find('.summary-ai-menu').exists()).toBe(false)
-    expect(wrapper.find('.summary-modes .summary-direct-action').exists()).toBe(false)
     expect(wrapper.find('.ai-dialog-heading').exists()).toBe(false)
-    expect(wrapper.find('.summary-result-actions .summary-ai-status').classes()).toContain('summary-result-icon')
-    expect(wrapper.find('.summary-ai-status').classes()).not.toContain('is-missing')
-    expect(wrapper.find('.summary-directory').exists()).toBe(false)
     expect(wrapper.find('.summary-header .ai-dialog-description').text()).toBe('2026 年 10 月 25 日 · 1 天有日报')
-    expect(wrapper.find('.summary-mode-hint').exists()).toBe(false)
-    expect(wrapper.find('.summary-header .summary-ai-status').exists()).toBe(true)
-
-    await wrapper.find('.summary-ai-status').trigger('click')
-    expect(wrapper.find('.summary-ai-menu').exists()).toBe(true)
-    expect(wrapper.find('.summary-ai-action').attributes('aria-disabled')).toBe('true')
-    await wrapper.find('.summary-ai-action').trigger('click')
-    expect(value.actions.generateSummary).not.toHaveBeenCalled()
-    expect(value.actions.openAiSettings).not.toHaveBeenCalled()
-    expect(messages.value.at(-1)?.text).toContain('AI 总结暂不可用')
-    messages.value.at(-1)?.actions[0]?.run()
-    expect(value.actions.openAiSettings).toHaveBeenCalledTimes(1)
-
-    // 没有 AI 配置也能直接总结；选中后菜单关闭。
-    await wrapper.find('.summary-ai-status').trigger('click')
-    expect(wrapper.find('.summary-direct-action').attributes('disabled')).toBeUndefined()
-    await wrapper.find('.summary-direct-action').trigger('click')
+    expect(wrapper.find('.summary-run-button').text()).toContain('总结')
     expect(value.actions.directSummary).toHaveBeenCalledTimes(1)
     expect(value.actions.generateSummary).not.toHaveBeenCalled()
-    expect(wrapper.find('.summary-ai-menu').exists()).toBe(false)
+
+    // 未配置 AI：点击总结按钮只弹确认 popover，并引导前往配置。
+    await wrapper.find('.summary-run-button').trigger('click')
+    expect(wrapper.find('.summary-confirm-menu').exists()).toBe(true)
+    expect(wrapper.find('.summary-confirm-copy').text()).toContain('尚未配置 AI 设置')
+    await wrapper.find('.summary-confirm-primary').trigger('click')
+    expect(value.actions.openAiSettings).toHaveBeenCalledTimes(1)
+    expect(value.actions.generateSummary).not.toHaveBeenCalled()
+    expect(wrapper.find('.summary-confirm-menu').exists()).toBe(false)
 
     value.ai.summaryResult.value = '已合并的总结'
     value.ai.summaryMode.value = 'direct'
     await nextTick()
     expect(wrapper.text()).toContain('已合并的总结')
-    // 复制与 AI 菜单共用日期行，文本区使用下方全部宽度。
+    // 复制与总结按钮共用日期行，文本区使用下方全部宽度。
     expect(wrapper.find('.summary-copy-icon').exists()).toBe(true)
     expect(wrapper.find('.summary-result .summary-result-actions').exists()).toBe(false)
-    expect(
-      wrapper.findAll('.summary-dialog-actions .text-action').some((button) => button.text().includes('复制')),
-    ).toBe(false)
 
     wrapper.unmount()
   })
 
-  it('generates an AI summary from the menu when a default AI is configured', async () => {
+  it('asks for confirmation before generating an AI summary when configured', async () => {
     const value = context()
     value.ai.settings.value = {
       providers: [
@@ -237,18 +220,18 @@ describe('inline modules', () => {
     })
     const wrapper = mountWithContext(SummaryModule, value)
     await flushPromises()
-    await wrapper.find('.summary-ai-status').trigger('click')
-    expect(wrapper.find('.summary-ai-action').exists()).toBe(true)
-    expect(wrapper.find('.summary-ai-action').attributes('aria-disabled')).toBe('false')
-    expect(wrapper.find('.summary-ai-status').classes()).not.toContain('is-missing')
-    await wrapper.find('.summary-ai-action').trigger('click')
+
+    await wrapper.find('.summary-run-button').trigger('click')
+    expect(wrapper.find('.summary-confirm-menu').exists()).toBe(true)
+    expect(wrapper.find('.summary-confirm-copy').text()).toContain('默认 AI')
+    await wrapper.find('.summary-confirm-primary').trigger('click')
     expect(value.actions.generateSummary).toHaveBeenCalledTimes(1)
-    expect(value.actions.directSummary).not.toHaveBeenCalled()
-    expect(wrapper.find('.summary-ai-menu').exists()).toBe(false)
+    expect(value.actions.openAiSettings).not.toHaveBeenCalled()
+    expect(wrapper.find('.summary-confirm-menu').exists()).toBe(false)
     wrapper.unmount()
   })
 
-  it('keeps summary and export menus exclusive and supports keyboard and outside dismissal', async () => {
+  it('keeps the export menu and summary confirmation exclusive and dismissible', async () => {
     const value = context()
     vi.mocked(value.actions.requestSummary).mockImplementation(async () => {
       value.ai.summaryVisible.value = true
@@ -265,20 +248,17 @@ describe('inline modules', () => {
 
     await wrapper.find('.summary-export-icon').trigger('click')
     expect(wrapper.find('#summary-export-menu').exists()).toBe(true)
-    await wrapper.find('.summary-ai-status').trigger('click')
+    await wrapper.find('.summary-run-button').trigger('click')
     expect(wrapper.find('#summary-export-menu').exists()).toBe(false)
-    expect(wrapper.find('.summary-ai-menu').exists()).toBe(true)
-    expect(document.activeElement).toBe(wrapper.find('.summary-ai-action').element)
-    await wrapper.find('.summary-ai-control').trigger('keydown', { key: 'ArrowDown' })
-    expect(document.activeElement).toBe(wrapper.find('.summary-direct-action').element)
+    expect(wrapper.find('.summary-confirm-menu').exists()).toBe(true)
     await wrapper.find('.summary-ai-control').trigger('keydown', { key: 'Escape' })
-    expect(wrapper.find('.summary-ai-menu').exists()).toBe(false)
-    expect(document.activeElement).toBe(wrapper.find('.summary-ai-status').element)
+    expect(wrapper.find('.summary-confirm-menu').exists()).toBe(false)
+    expect(document.activeElement).toBe(wrapper.find('.summary-run-button').element)
 
-    await wrapper.find('.summary-ai-status').trigger('click')
+    await wrapper.find('.summary-run-button').trigger('click')
     document.body.dispatchEvent(new Event('pointerdown', { bubbles: true }))
     await nextTick()
-    expect(wrapper.find('.summary-ai-menu').exists()).toBe(false)
+    expect(wrapper.find('.summary-confirm-menu').exists()).toBe(false)
     await wrapper.find('.summary-export-icon').trigger('click')
     await wrapper.findAll('#summary-export-menu [role="menuitem"]')[0]!.trigger('click')
     expect(value.actions.exportSummary).toHaveBeenCalledWith('md')
@@ -288,8 +268,30 @@ describe('inline modules', () => {
 
   it('prepares the Excel preview and renders it inline', async () => {
     const value = context()
+    value.excel.settings.value = {
+      enabled: true,
+      templatePath: '/tmp/workreport-inline/template.xlsx',
+      prompt: '填充本周工作',
+      outputDirectory: '/tmp/workreport-inline/excel',
+    }
+    value.ai.settings.value = {
+      providers: [
+        {
+          id: 'p1',
+          name: '默认 AI',
+          kind: 'http',
+          executable: '',
+          model: 'test',
+          baseUrl: 'https://api.example.com',
+          apiKey: '',
+        },
+      ],
+      defaultProviderId: 'p1',
+      generationPreference: '',
+      summaryPrompt: '',
+    }
     const wrapper = mountWithContext(ExcelModule, value)
-    await wrapper.find('.excel-module-actions md-filled-button').trigger('click')
+    await wrapper.find('.excel-generate-button').trigger('click')
     expect(value.actions.prepareExcel).toHaveBeenCalledTimes(1)
     expect(value.actions.prepareExcel).toHaveBeenCalledWith([
       '20261019',
@@ -314,6 +316,18 @@ describe('inline modules', () => {
     await nextTick()
     expect(wrapper.find('.excel-module-panel .excel-preview-dialog.is-inline').exists()).toBe(true)
 
+    wrapper.unmount()
+  })
+
+  it('guides to Excel settings when the module is not configured', async () => {
+    const value = context()
+    const wrapper = mountWithContext(ExcelModule, value)
+    await wrapper.find('.excel-generate-button').trigger('click')
+    expect(value.actions.prepareExcel).not.toHaveBeenCalled()
+    expect(messages.value.at(-1)?.text).toContain('请先')
+    expect(messages.value.at(-1)?.actions[0]?.label).toBe('前往 Excel 设置')
+    messages.value.at(-1)?.actions[0]?.run()
+    expect(value.actions.openExcelSettings).toHaveBeenCalledTimes(1)
     wrapper.unmount()
   })
 })

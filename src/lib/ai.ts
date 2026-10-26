@@ -1,6 +1,5 @@
 import { computed, ref } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
-import type { FileFormat } from './workspace'
 
 export type ProviderKind = 'codex' | 'claude' | 'opencode' | 'http'
 export interface AiProvider {
@@ -43,8 +42,6 @@ export const aiApi = {
   detect: () => invoke<DetectedCli[]>('detect_ai_clis'),
   models: (baseUrl: string, apiKey: string) => invoke<AiModel[]>('list_ai_models', { baseUrl, apiKey }),
   cliModels: (kind: ProviderKind, executable: string) => invoke<AiModel[]>('list_cli_models', { kind, executable }),
-  polish: (content: string, format: FileFormat, requestId: string) =>
-    invoke<string>('polish_entry', { content, format, requestId }),
   summarize: (content: string, requestId: string) => invoke<string>('summarize_entries', { content, requestId }),
   cancel: (requestId: string) => invoke<void>('cancel_ai', { requestId }),
 }
@@ -59,12 +56,6 @@ export function useAi() {
   const defaultProvider = computed(() =>
     settings.value.providers.find((provider) => provider.id === settings.value.defaultProviderId),
   )
-  const visible = ref(false)
-  const generating = ref(false)
-  const elapsedSeconds = ref(0)
-  const original = ref('')
-  const result = ref('')
-  const resultError = ref('')
   const summaryVisible = ref(false)
   const summaryGenerating = ref(false)
   const summaryElapsedSeconds = ref(0)
@@ -74,32 +65,14 @@ export function useAi() {
   const summaryResult = ref('')
   const summaryError = ref('')
   const summaryMode = ref<SummaryMode>('')
-  let requestId = ''
   let summaryRequestId = ''
   let summaryContent = ''
   let summaryDirectContent = ''
-  let activeFormat: FileFormat = 'md'
   let settingsScope = 0
   let pendingLoad: Promise<boolean> | undefined
-  let progressTimer: ReturnType<typeof setInterval> | undefined
-  let progressStartedAt = 0
   let summaryProgressTimer: ReturnType<typeof setInterval> | undefined
   let summaryProgressStartedAt = 0
 
-  function stopProgress() {
-    if (progressTimer !== undefined) {
-      clearInterval(progressTimer)
-      progressTimer = undefined
-    }
-  }
-  function startProgress() {
-    stopProgress()
-    progressStartedAt = Date.now()
-    elapsedSeconds.value = 0
-    progressTimer = setInterval(() => {
-      elapsedSeconds.value = Math.floor((Date.now() - progressStartedAt) / 1000)
-    }, 1000)
-  }
   function stopSummaryProgress() {
     if (summaryProgressTimer !== undefined) {
       clearInterval(summaryProgressTimer)
@@ -139,7 +112,6 @@ export function useAi() {
     pendingLoad = undefined
     settings.value = { providers: [], defaultProviderId: null, generationPreference: '', summaryPrompt: '' }
     error.value = ''
-    close()
     closeSummary()
     return load()
   }
@@ -148,25 +120,6 @@ export function useAi() {
     pendingLoad = undefined
     settings.value = cloneAiSettings(value)
     error.value = ''
-  }
-  async function generate() {
-    if (generating.value || !visible.value) return
-    const id = crypto.randomUUID()
-    requestId = id
-    generating.value = true
-    resultError.value = ''
-    startProgress()
-    try {
-      const text = await aiApi.polish(original.value, activeFormat, id)
-      if (requestId === id && visible.value) result.value = text
-    } catch (cause) {
-      if (requestId === id && visible.value) resultError.value = String(cause)
-    } finally {
-      if (requestId === id) {
-        generating.value = false
-        stopProgress()
-      }
-    }
   }
   async function generateSummary() {
     if (summaryGenerating.value || !summaryVisible.value) return
@@ -223,32 +176,10 @@ export function useAi() {
     stopSummaryProgress()
     if (id) void aiApi.cancel(id).catch(() => {})
   }
-  /** 只打开弹窗并准备原文；请求由用户点击“开始润色”后才发出。 */
-  function open(content: string, format: FileFormat) {
-    original.value = content
-    result.value = ''
-    activeFormat = format
-    resultError.value = ''
-    visible.value = true
-  }
-  function close() {
-    const id = requestId
-    requestId = ''
-    visible.value = false
-    generating.value = false
-    stopProgress()
-    if (id) void aiApi.cancel(id).catch(() => {})
-  }
   return {
     settings,
     error,
     defaultProvider,
-    visible,
-    generating,
-    elapsedSeconds,
-    original,
-    result,
-    resultError,
     summaryVisible,
     summaryGenerating,
     summaryElapsedSeconds,
@@ -260,9 +191,6 @@ export function useAi() {
     load,
     reload,
     acceptSaved,
-    open,
-    generate,
-    close,
     generateSummary,
     directSummary,
     openSummary,

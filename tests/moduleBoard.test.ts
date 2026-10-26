@@ -57,7 +57,6 @@ function fakeContext() {
       selectDate: vi.fn(async () => {}),
       loadRange: vi.fn(async () => {}),
       requestSummary: noop,
-      requestAi: noop,
       requestFormat: noop,
       requestReload: noop,
       requestRestore: noop,

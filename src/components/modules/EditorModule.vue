@@ -74,7 +74,6 @@ onBeforeUnmount(() => {
         @save="flush"
         @reload="actions.requestReload"
         @format="actions.requestFormat"
-        @ai="actions.requestAi"
         @restore="actions.requestRestore"
         @error="reportError"
       />

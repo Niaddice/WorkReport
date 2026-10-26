@@ -54,6 +54,8 @@ function commandResult(command: string): unknown {
       return { scale: 100 }
     case 'load_excel_settings':
       return { enabled: false, templatePath: '', prompt: '', outputDirectory: '' }
+    case 'list_excel_exports':
+      return []
     case 'load_summary_settings':
       return { outputDirectory: '总结' }
     case 'load_database_settings':
@@ -210,20 +212,18 @@ describe('modular home integration', () => {
       return commandResult(command)
     })
     const wrapper = await openDemoWorkspace()
-    await wrapper.find('.app-rail [aria-label="AI 总结"]').trigger('click')
+    await wrapper.find('.app-rail [aria-label="总结"]').trigger('click')
     await flushPromises()
 
     const summary = wrapper.find('.summary-module')
     expect(summary.find('.summary-result').text()).toBe('')
     expect(summary.find('.summary-error').exists()).toBe(false)
     expect(wrapper.find('.app-message').exists()).toBe(false)
-    await summary.find('.summary-ai-status').trigger('click')
-    for (const selector of ['.summary-ai-action', '.summary-direct-action']) {
-      const button = summary.find(selector)
-      expect((button.element as HTMLButtonElement).disabled).toBe(true)
-      await button.trigger('click')
-    }
+    const runButton = summary.find('.summary-run-button')
+    expect((runButton.element as HTMLButtonElement).disabled).toBe(true)
+    await runButton.trigger('click')
     await flushPromises()
+    expect(summary.find('.summary-confirm-menu').exists()).toBe(false)
     expect(summary.find('.summary-result').text()).toBe('')
     expect(wrapper.find('.app-message').exists()).toBe(false)
     expect(invoke.mock.calls.some(([command]) => command === 'summarize_entries')).toBe(false)
@@ -326,7 +326,7 @@ describe('modular home integration', () => {
 
   it('adds history, AI summary and Excel modules from the right rail', async () => {
     const wrapper = await openDemoWorkspace()
-    for (const label of ['历史记录', 'AI 总结', 'Excel 周报']) {
+    for (const label of ['历史记录', '总结', 'Excel 周报']) {
       await wrapper.find(`.app-rail [aria-label="${label}"]`).trigger('click')
       await flushPromises()
     }
@@ -335,7 +335,7 @@ describe('modular home integration', () => {
     expect(wrapper.find('.history-module').exists()).toBe(true)
     expect(wrapper.find('.summary-module').exists()).toBe(true)
     expect(wrapper.find('.excel-module').exists()).toBe(true)
-    expect(wrapper.find('.app-rail [aria-label="AI 总结"]').attributes('aria-pressed')).toBe('true')
+    expect(wrapper.find('.app-rail [aria-label="总结"]').attributes('aria-pressed')).toBe('true')
     wrapper.unmount()
   })
 
@@ -422,7 +422,7 @@ describe('modular home integration', () => {
         return commandResult(command)
       })
       const wrapper = await openDemoWorkspace()
-      await wrapper.find('.app-rail [aria-label="AI 总结"]').trigger('click')
+      await wrapper.find('.app-rail [aria-label="总结"]').trigger('click')
       await flushPromises()
 
       const cells = wrapper.findAll('.calendar-panel .day-cell')
@@ -437,10 +437,12 @@ describe('modular home integration', () => {
       expect(range.findAll('button').map((button) => button.text())).toEqual(['预览'])
       expect(range.find('.editor-text-actions').exists()).toBe(false)
       const summary = wrapper.find('.summary-module')
-      await summary.find('.summary-ai-status').trigger('click')
-      const action = summary.find(mode === 'ai' ? '.summary-ai-action' : '.summary-direct-action')
-      expect((action.element as HTMLButtonElement).disabled).toBe(false)
-      await action.trigger('click')
+      if (mode === 'ai') {
+        const runButton = summary.find('.summary-run-button')
+        expect((runButton.element as HTMLButtonElement).disabled).toBe(false)
+        await runButton.trigger('click')
+        await summary.find('.summary-confirm-primary').trigger('click')
+      }
       await flushPromises()
 
       const requests = invoke.mock.calls.filter(([command]) => command === 'summarize_entries')

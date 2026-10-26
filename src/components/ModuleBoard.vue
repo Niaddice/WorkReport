@@ -621,6 +621,7 @@ onBeforeUnmount(() => {
         :id="slot.id"
         :title="moduleById(slot.id).title"
         :icon="moduleById(slot.id).icon"
+        :help="moduleById(slot.id).help"
         :can-remove="items.length > 1"
         :dragging="drag?.id === slot.id"
         :maximized="maximized === slot.id"
@@ -628,6 +629,9 @@ onBeforeUnmount(() => {
         @remove="emit('remove', slot.id)"
         @toggle-maximize="toggleMaximize(slot.id)"
       >
+        <template v-if="moduleById(slot.id).titleExtra" #subtitle>
+          <component :is="moduleById(slot.id).titleExtra!" />
+        </template>
         <component :is="moduleById(slot.id).component" />
       </ModulePanel>
     </div>

@@ -41,7 +41,6 @@ const props = defineProps<{
   outputLoading: boolean
   outputExporting: boolean
   outputError: string
-  exportedFile: string
   excelEnabled: boolean
   excelPreparing: boolean
   excelExporting: boolean
@@ -53,7 +52,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   close: []
   ai: []
-  direct: []
+  configureAi: []
   export: [format: FileFormat]
   excel: []
   excelUnavailable: []
@@ -69,16 +68,16 @@ const excelConfirmation = ref<HTMLDialogElement>()
 const excelConfirmationMotion = createDialogMotion(() => excelConfirmation.value)
 const excelConfirming = ref(false)
 const copied = ref(false)
-type MenuKind = 'export' | 'ai'
+type MenuKind = 'export'
 const activeMenu = ref<MenuKind | null>(null)
 const exportMenuOpen = computed(() => activeMenu.value === 'export')
-const aiMenuOpen = computed(() => activeMenu.value === 'ai')
 const exportControl = ref<HTMLElement>()
 const exportButton = ref<HTMLButtonElement>()
 const exportMenu = ref<HTMLElement>()
-const aiControl = ref<HTMLElement>()
-const aiButton = ref<HTMLButtonElement>()
-const aiMenu = ref<HTMLElement>()
+/* 总结按钮的确认 popover：先询问，再决定是否调用 AI。 */
+const summaryConfirmOpen = ref(false)
+const summaryControl = ref<HTMLElement>()
+const summaryButton = ref<HTMLButtonElement>()
 const excelBusy = computed(() => props.excelPreparing || props.excelExporting)
 const summaryActionDisabled = computed(
   () => !props.prepared || props.preparing || props.generating || props.outputExporting || excelBusy.value,
@@ -136,20 +135,19 @@ watch(exportDisabled, (disabled) => {
   if (disabled && exportMenuOpen.value) closeMenu()
 })
 function closeMenu(focus = false) {
-  const button = activeMenu.value === 'ai' ? aiButton.value : exportButton.value
+  const button = exportButton.value
   activeMenu.value = null
   if (focus) button?.focus()
 }
-function menuItems(kind: MenuKind) {
-  const menu = kind === 'ai' ? aiMenu.value : exportMenu.value
-  return [...(menu?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]:not(:disabled)') ?? [])]
+function menuItems() {
+  return [...(exportMenu.value?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]:not(:disabled)') ?? [])]
 }
 async function showMenu(kind: MenuKind, last = false) {
-  if (kind === 'export' && exportDisabled.value) return
+  if (exportDisabled.value) return
   activeMenu.value = kind
   await nextTick()
   if (activeMenu.value !== kind) return
-  const items = menuItems(kind)
+  const items = menuItems()
   items[last ? items.length - 1 : 0]?.focus()
 }
 function onMenuKeydown(kind: MenuKind, event: KeyboardEvent) {
@@ -169,7 +167,7 @@ function onMenuKeydown(kind: MenuKind, event: KeyboardEvent) {
     void showMenu(kind, event.key === 'ArrowUp' || event.key === 'End')
     return
   }
-  const items = menuItems(kind)
+  const items = menuItems()
   if (!items.length) return
   const index = items.indexOf(document.activeElement as HTMLButtonElement)
   const next =
@@ -184,15 +182,34 @@ function exportAs(format: FileFormat) {
   closeMenu(true)
   emit('export', format)
 }
-function summarize(mode: 'ai' | 'direct') {
-  if (!props.visible || summaryActionDisabled.value) return
-  closeMenu(true)
-  if (mode === 'ai') emit('ai')
-  else emit('direct')
+/* —— 总结确认 popover：先询问，再执行 AI 总结或引导配置 —— */
+function openSummaryConfirm() {
+  if (summaryActionDisabled.value) return
+  activeMenu.value = null
+  summaryConfirmOpen.value = true
+}
+function closeSummaryConfirm(focus = false) {
+  const wasOpen = summaryConfirmOpen.value
+  summaryConfirmOpen.value = false
+  if (focus && wasOpen) summaryButton.value?.focus()
+}
+function confirmAiSummary() {
+  if (!props.aiAvailable) {
+    confirmConfigureAi()
+    return
+  }
+  if (summaryActionDisabled.value) return
+  summaryConfirmOpen.value = false
+  emit('ai')
+}
+function confirmConfigureAi() {
+  summaryConfirmOpen.value = false
+  emit('configureAi')
 }
 function onOutsidePointer(event: PointerEvent) {
-  const control = activeMenu.value === 'ai' ? aiControl.value : exportControl.value
-  if (!control?.contains(event.target as Node)) closeMenu()
+  const target = event.target as Node
+  if (summaryConfirmOpen.value && !summaryControl.value?.contains(target)) closeSummaryConfirm()
+  if (activeMenu.value && !exportControl.value?.contains(target)) closeMenu()
 }
 onMounted(() => document.addEventListener('pointerdown', onOutsidePointer))
 onBeforeUnmount(() => {
@@ -242,7 +259,7 @@ async function copySummary() {
       :aria-modal="inline ? undefined : 'true'"
       class="ai-dialog summary-dialog"
       :class="{ 'is-inline': inline }"
-      aria-label="AI 总结"
+      aria-label="总结"
       aria-describedby="summary-dialog-description"
       @cancel.prevent="!outputExporting && !excelExporting && emit('close')"
     >
@@ -299,51 +316,44 @@ async function copySummary() {
               </div></Transition
             >
           </div>
-          <div ref="aiControl" class="summary-export summary-ai-control" @keydown="onMenuKeydown('ai', $event)">
+          <div
+            ref="summaryControl"
+            class="summary-export summary-ai-control"
+            @keydown.esc.stop.prevent="closeSummaryConfirm(true)"
+          >
             <button
-              ref="aiButton"
+              ref="summaryButton"
               type="button"
-              class="summary-result-icon summary-ai-status"
-              title="选择总结方式"
-              aria-label="选择总结方式"
-              aria-haspopup="menu"
-              :aria-expanded="aiMenuOpen"
-              aria-controls="summary-ai-menu"
-              @click="aiMenuOpen ? closeMenu() : showMenu('ai')"
+              class="summary-run-button"
+              :disabled="summaryActionDisabled"
+              :title="aiAvailable ? '使用默认 AI 生成总结' : '尚未设置默认 AI，点击查看配置提示'"
+              aria-haspopup="dialog"
+              :aria-expanded="summaryConfirmOpen"
+              @click="summaryConfirmOpen ? closeSummaryConfirm() : openSummaryConfirm()"
             >
-              <PhSparkle :size="14" aria-hidden="true" />
+              <PhSparkle :size="14" aria-hidden="true" /><span>总结</span>
             </button>
             <Transition name="status-fade">
               <div
-                v-if="aiMenuOpen"
-                id="summary-ai-menu"
-                ref="aiMenu"
-                class="summary-export-menu summary-ai-menu"
-                role="menu"
-                aria-label="选择总结方式"
+                v-if="summaryConfirmOpen"
+                class="summary-export-menu summary-confirm-menu"
+                role="dialog"
+                aria-label="确认执行 AI 总结"
               >
-                <button
-                  type="button"
-                  role="menuitem"
-                  class="summary-ai-action"
-                  :disabled="summaryActionDisabled"
-                  :aria-disabled="!aiAvailable || summaryActionDisabled"
-                  :title="aiAvailable ? '使用默认 AI 生成总结' : '尚未设置默认 AI，点击查看设置提示'"
-                  @click="summarize('ai')"
-                >
-                  <PhSparkle :size="16" aria-hidden="true" /><span
-                    >AI 总结<small v-if="!aiAvailable">需设置</small></span
-                  >
-                </button>
-                <button
-                  type="button"
-                  role="menuitem"
-                  class="summary-direct-action"
-                  :disabled="summaryActionDisabled"
-                  @click="summarize('direct')"
-                >
-                  <PhFileText :size="16" aria-hidden="true" /><span>直接总结</span>
-                </button>
+                <template v-if="aiAvailable">
+                  <p class="summary-confirm-copy">使用默认 AI「{{ provider }}」总结所选 {{ dates.length }} 天日报？</p>
+                  <div class="summary-confirm-actions">
+                    <button type="button" class="summary-confirm-cancel" @click="closeSummaryConfirm()">取消</button>
+                    <button type="button" class="summary-confirm-primary" @click="confirmAiSummary">开始总结</button>
+                  </div>
+                </template>
+                <template v-else>
+                  <p class="summary-confirm-copy">尚未配置 AI 设置，是否前往配置？</p>
+                  <div class="summary-confirm-actions">
+                    <button type="button" class="summary-confirm-cancel" @click="closeSummaryConfirm()">取消</button>
+                    <button type="button" class="summary-confirm-primary" @click="confirmConfigureAi">前往设置</button>
+                  </div>
+                </template>
               </div>
             </Transition>
           </div>
@@ -380,15 +390,12 @@ async function copySummary() {
             <template v-else-if="preparing">正在读取所选日报原文…</template>
           </div>
           <div v-else key="empty" class="summary-empty">
-            <span>点击右上角 AI 按钮<br />选择“AI 总结”或“直接总结”</span>
+            <span>暂无总结内容<br />点击右上角「总结」按钮由 AI 生成</span>
           </div>
         </Transition>
       </div>
       <Transition name="status-fade" mode="out-in">
         <p v-if="outputError" key="error" class="summary-export-feedback error-text" role="alert">{{ outputError }}</p>
-        <p v-else-if="exportedFile" key="saved" class="summary-export-feedback settings-success" role="status">
-          已导出：{{ exportedFile }}
-        </p>
       </Transition>
       <section v-if="excelEnabled" id="summary-excel-status" class="summary-excel-feedback" aria-live="polite">
         <p v-if="excelPreparing">

@@ -25,65 +25,6 @@ describe('AI preview lifecycle', () => {
     await ai.load()
     expect(ai.defaultProvider.value).toBeUndefined()
   })
-  it('keeps original text unchanged when regenerating and accepting a result is explicit', async () => {
-    const ai = useAi()
-    const polish = vi
-      .spyOn(aiApi, 'polish')
-      .mockResolvedValueOnce('first result')
-      .mockResolvedValueOnce('second result')
-    ai.open('original text', 'txt')
-    expect(ai.visible.value).toBe(true)
-    expect(polish).not.toHaveBeenCalled()
-    await ai.generate()
-    expect(ai.result.value).toBe('first result')
-    await ai.generate()
-    expect(aiApi.polish).toHaveBeenLastCalledWith('original text', 'txt', expect.any(String))
-    expect(ai.original.value).toBe('original text')
-    expect(ai.result.value).toBe('second result')
-  })
-  it('cancels requests and ignores late results after the preview is closed', async () => {
-    const ai = useAi()
-    let resolve!: (text: string) => void
-    vi.spyOn(aiApi, 'polish').mockReturnValue(
-      new Promise((r) => {
-        resolve = r
-      }),
-    )
-    vi.spyOn(aiApi, 'cancel').mockResolvedValue()
-    ai.open('original', 'md')
-    void ai.generate()
-    ai.close()
-    resolve('late result')
-    await Promise.resolve()
-    expect(aiApi.cancel).toHaveBeenCalledOnce()
-    expect(ai.visible.value).toBe(false)
-    expect(ai.result.value).toBe('')
-  })
-  it('reports elapsed time while generating', async () => {
-    vi.useFakeTimers()
-    try {
-      const ai = useAi()
-      let resolve!: (text: string) => void
-      vi.spyOn(aiApi, 'polish').mockReturnValue(
-        new Promise((done) => {
-          resolve = done
-        }),
-      )
-      ai.open('original', 'md')
-      void ai.generate()
-      vi.advanceTimersByTime(3000)
-      expect(ai.generating.value).toBe(true)
-      expect(ai.elapsedSeconds.value).toBe(3)
-      resolve('result')
-      await Promise.resolve()
-      await Promise.resolve()
-      expect(ai.generating.value).toBe(false)
-      expect(ai.elapsedSeconds.value).toBe(3)
-    } finally {
-      vi.useRealTimers()
-    }
-  })
-
   it('isolates a new workspace from an earlier slow configuration read', async () => {
     const ai = useAi()
     let finishFirst!: (value: AiSettings) => void

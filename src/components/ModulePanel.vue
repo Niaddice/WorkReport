@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import type { Component } from 'vue'
-import { PhCornersIn, PhCornersOut, PhDotsSixVertical, PhX } from '@phosphor-icons/vue'
+import { ref, type Component } from 'vue'
+import { PhCornersIn, PhCornersOut, PhDotsSixVertical, PhQuestion, PhX } from '@phosphor-icons/vue'
+import ModuleHelpDialog from './ModuleHelpDialog.vue'
 import type { ModuleId } from '../modules/types'
 
 withDefaults(
@@ -13,8 +14,10 @@ withDefaults(
     dragging: boolean
     /** 当前是否以浮层最大化显示。 */
     maximized?: boolean
+    /** 使用说明，标题栏的帮助按钮据此展示。 */
+    help?: readonly string[]
   }>(),
-  { maximized: false },
+  { maximized: false, help: () => [] },
 )
 const emit = defineEmits<{
   'drag-start': [event: PointerEvent]
@@ -22,9 +25,14 @@ const emit = defineEmits<{
   'toggle-maximize': []
 }>()
 
+const helpDialog = ref<InstanceType<typeof ModuleHelpDialog>>()
+
 function onPointerDown(event: PointerEvent) {
   if (event.button !== 0) return
   emit('drag-start', event)
+}
+function openHelp() {
+  helpDialog.value?.open()
 }
 </script>
 
@@ -51,7 +59,18 @@ function onPointerDown(event: PointerEvent) {
       </button>
       <component :is="icon" class="module-panel-icon" :size="15" aria-hidden="true" />
       <h2 class="module-panel-title">{{ title }}</h2>
+      <slot name="subtitle" />
       <div class="module-panel-actions">
+        <button
+          v-if="help.length"
+          type="button"
+          class="module-panel-action module-help-button"
+          :aria-label="`查看「${title}」使用说明`"
+          title="使用说明"
+          @click="openHelp"
+        >
+          <PhQuestion :size="15" aria-hidden="true" />
+        </button>
         <button
           type="button"
           class="module-panel-action module-maximize-button"
@@ -77,5 +96,6 @@ function onPointerDown(event: PointerEvent) {
     <div class="module-panel-body">
       <slot />
     </div>
+    <ModuleHelpDialog ref="helpDialog" :title="title" :help="help" />
   </section>
 </template>

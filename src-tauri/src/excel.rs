@@ -170,6 +170,87 @@ pub struct ExportResult {
     pub cells: usize,
 }
 
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExportFile {
+    pub filename: String,
+    pub path: String,
+    pub modified: u64,
+    pub size: u64,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExportPreview {
+    pub filename: String,
+    pub path: String,
+    pub sheets: Vec<ExcelSheetPreview>,
+}
+
+/// 列出输出目录下已导出的 .xlsx，按修改时间从新到旧。
+pub fn list_exports(directory: &Path) -> Result<Vec<ExportFile>, String> {
+    let entries = match fs::read_dir(directory) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(_) => return Err("无法读取 Excel 输出目录".into()),
+    };
+    let mut files = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let is_xlsx = path.is_file()
+            && path
+                .extension()
+                .and_then(|value| value.to_str())
+                .is_some_and(|value| value.eq_ignore_ascii_case("xlsx"));
+        if !is_xlsx {
+            continue;
+        }
+        let Ok(metadata) = entry.metadata() else { continue };
+        let filename = path
+            .file_name()
+            .and_then(|value| value.to_str())
+            .unwrap_or_default()
+            .to_string();
+        let modified = metadata
+            .modified()
+            .ok()
+            .and_then(|value| value.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|value| value.as_millis() as u64)
+            .unwrap_or(0);
+        files.push(ExportFile {
+            filename,
+            path: path.to_string_lossy().into_owned(),
+            modified,
+            size: metadata.len(),
+        });
+    }
+    files.sort_by(|left, right| {
+        right
+            .modified
+            .cmp(&left.modified)
+            .then_with(|| right.filename.cmp(&left.filename))
+    });
+    Ok(files)
+}
+
+/// 读取已导出的工作簿，生成只读预览。
+pub fn read_export(path: &Path) -> Result<Vec<ExcelSheetPreview>, String> {
+    let bytes = fs::read(path).map_err(|_| "无法读取 Excel 文件".to_string())?;
+    if bytes.len() as u64 > MAX_TEMPLATE_BYTES {
+        return Err("Excel 文件过大，无法预览".into());
+    }
+    preflight(&bytes)?;
+    let workbook = catch_unwind(AssertUnwindSafe(|| {
+        umya_spreadsheet::reader::xlsx::read_reader(Cursor::new(bytes), true)
+    }))
+    .map_err(|_| "Excel 文件结构无效".to_string())?
+    .map_err(|_| "无法解析 Excel 文件".to_string())?;
+    if workbook.sheet_collection().is_empty() {
+        return Err("Excel 文件没有工作表".into());
+    }
+    preview::extract_static(&workbook)
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct FillPlan {

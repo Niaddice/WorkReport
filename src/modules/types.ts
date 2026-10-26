@@ -15,6 +15,10 @@ export interface ModuleDefinition {
   description: string
   icon: Component
   component: Component
+  /** 可选：渲染在模块标题栏（标题之后）的动态扩展内容。 */
+  titleExtra?: Component
+  /** 模块使用说明，点击标题栏帮助按钮时展示。 */
+  help: readonly string[]
   /** 新工作空间的默认布局是否启用。 */
   defaultEnabled: boolean
 }

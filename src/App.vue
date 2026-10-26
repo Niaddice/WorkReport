@@ -10,7 +10,6 @@ import AppToolbar from './components/AppToolbar.vue'
 import AppRail from './components/AppRail.vue'
 import SkinDialog from './components/SkinDialog.vue'
 import SettingsView from './components/SettingsView.vue'
-import AiPolishDialog from './components/AiPolishDialog.vue'
 import WorkspaceGate from './components/WorkspaceGate.vue'
 import ConfirmDialog from './components/ConfirmDialog.vue'
 import SettingsLeaveDialog from './components/SettingsLeaveDialog.vue'
@@ -50,7 +49,6 @@ const {
   selectedDate,
   document: activeDocument,
   isNewDraft,
-  draft,
   dirty,
   busy,
   saving,
@@ -85,12 +83,6 @@ const {
   settings: aiSettings,
   error: aiSettingsError,
   defaultProvider,
-  visible: aiVisible,
-  generating,
-  elapsedSeconds,
-  original: aiOriginal,
-  result: aiResult,
-  resultError: aiResultError,
   summaryVisible,
   summaryDates,
   summaryResult,
@@ -155,7 +147,6 @@ const confirmDialog = ref<InstanceType<typeof ConfirmDialog>>()
 const modalKind = ref<'reload' | 'format' | 'restore'>('format')
 const targetFormat = ref<FileFormat>('md')
 const editorPreview = ref(false)
-const polishDialog = ref<InstanceType<typeof AiPolishDialog>>()
 const layoutError = ref('')
 const moduleLayout = useModuleLayout({
   onError: (message) => {
@@ -268,7 +259,6 @@ const greeting = computed(() => (now.value.hour() < 12 ? '上午好' : now.value
 const documentKey = computed(() => `${workspace.value?.path ?? ''}/${selectedDate.value}`)
 const backups = ref<Record<string, string>>({})
 const canRestore = computed(() => backups.value[documentKey.value] !== undefined)
-let aiDocumentKey = ''
 let unlistenClose: (() => void) | undefined
 let unlistenHistory: (() => void) | undefined
 let historyMenuAvailable = false
@@ -296,7 +286,6 @@ async function navigate(target: 'home' | 'settings') {
     settingsReading.value ||
     databaseBusy.value ||
     settingsLeaveBusy.value ||
-    aiVisible.value ||
     summaryOutput.exporting.value ||
     excelBusy.value ||
     page.value === target
@@ -324,7 +313,6 @@ async function toggleSettings() {
     settingsSaving.value ||
     settingsLeaveBusy.value ||
     databaseBusy.value ||
-    aiVisible.value ||
     summaryOutput.exporting.value ||
     excelBusy.value
   )
@@ -344,6 +332,10 @@ async function openHolidaySettings() {
 async function openAiSettings() {
   await navigate('settings')
   if ((page.value as string) === 'settings') await settingsView.value?.navigate('ai')
+}
+async function openExcelSettings() {
+  await navigate('settings')
+  if ((page.value as string) === 'settings') await settingsView.value?.navigate('excel')
 }
 async function loadWorkspaceSettings(reload: boolean): Promise<boolean> {
   const revision = ++settingsLoadRevision
@@ -477,7 +469,6 @@ async function finishSettingsExit(save: boolean) {
 async function closeWindow() {
   if (excelExporting.value) return
   rangeRevision++
-  ai.close()
   ai.closeSummary()
   await excel.cancel()
   if (await journal.flush()) await getCurrentWindow().destroy()
@@ -613,39 +604,6 @@ async function confirmModal() {
 function cancelConfirm() {
   if (!busy.value) void confirmDialog.value?.close()
 }
-function onAiResultEdit(value: string) {
-  aiResult.value = value
-  aiResultError.value = ''
-}
-async function requestAi() {
-  if (requestingAi.value || !activeDocument.value || busy.value || excelBusy.value) return
-  const sourceKey = documentKey.value
-  requestingAi.value = true
-  try {
-    if (!(await journal.flush())) return
-    if (documentKey.value !== sourceKey || page.value !== 'home') return
-    const loaded = await ai.load()
-    if (documentKey.value !== sourceKey || page.value !== 'home') return
-    if (!loaded) {
-      journal.reportError(`无法读取 AI 设置：${aiSettingsError.value}`)
-      return
-    }
-    if (!defaultProvider.value) {
-      await navigate('settings')
-      return
-    }
-    if (!draft.value.trim()) {
-      journal.reportError('请先写下日报内容，再使用 AI 润色。')
-      return
-    }
-    if (!(await journal.flush())) return
-    if (documentKey.value !== sourceKey || page.value !== 'home' || !activeDocument.value) return
-    aiDocumentKey = documentKey.value
-    ai.open(draft.value, activeDocument.value.format)
-  } finally {
-    requestingAi.value = false
-  }
-}
 function clearRange() {
   excel.clearExport()
   rangeRevision++
@@ -696,12 +654,12 @@ function performHistory(action: 'undo' | 'redo') {
     document.execCommand(action)
     return
   }
+  // 总结和 Excel 模块也复用 open 的 dialog，只读内嵌区域不能阻断日报历史。
   if (
     page.value !== 'home' ||
     busy.value ||
-    aiVisible.value ||
     rangeDates.value.length ||
-    document.querySelector('dialog[open]')
+    document.querySelector('dialog[open]:not(.is-inline)')
   )
     return
   if (action === 'undo') journal.undo()
@@ -714,9 +672,8 @@ function onHistoryKeydown(event: KeyboardEvent) {
   if (
     page.value !== 'home' ||
     busy.value ||
-    aiVisible.value ||
     rangeDates.value.length ||
-    document.querySelector('dialog[open]')
+    document.querySelector('dialog[open]:not(.is-inline)')
   )
     return
   const target = event.target
@@ -733,7 +690,7 @@ function onHistoryKeydown(event: KeyboardEvent) {
   performHistory(action)
 }
 async function requestSummary(dates: string[]) {
-  if (requestingAi.value || busy.value || aiVisible.value || excelBusy.value) return
+  if (requestingAi.value || busy.value || excelBusy.value) return
   const workspacePath = workspace.value?.path
   const selectionRevision = rangeRevision
   requestingAi.value = true
@@ -849,26 +806,7 @@ async function startAiSummary() {
     requestingAi.value = false
   }
 }
-async function applyAi(content: string, restore = false) {
-  if (documentKey.value !== aiDocumentKey) {
-    ai.close()
-    journal.reportError('日报已切换，未应用润色结果。')
-    return
-  }
-  if (!restore) backups.value[documentKey.value] ??= aiOriginal.value
-  journal.edit(content, true)
-  ai.close()
-  const closing = polishDialog.value?.close()
-  await journal.flush()
-  if (
-    (await closing) &&
-    page.value === 'home' &&
-    !document.querySelector('dialog[open]') &&
-    documentKey.value === aiDocumentKey
-  )
-    editorHandle.value?.focus()
-}
-const moduleDisabled = computed(() => busy.value || aiVisible.value || requestingAi.value)
+const moduleDisabled = computed(() => busy.value || requestingAi.value)
 const moduleActions: ModuleActions = {
   selectDate,
   loadRange,
@@ -883,12 +821,14 @@ const moduleActions: ModuleActions = {
   confirmExcel: confirmExcelPreview,
   discardExcelPreview,
   openExcelOutputDirectory,
-  requestAi,
   requestFormat,
   requestReload,
   requestRestore,
   openAiSettings: () => {
     void openAiSettings()
+  },
+  openExcelSettings: () => {
+    void openExcelSettings()
   },
   openHolidaySettings: () => {
     void openHolidaySettings()
@@ -961,7 +901,25 @@ watch(layoutError, (value) => {
 watch(
   () => summaryOutput.result.value,
   (value) => {
-    if (value?.filename) pushMessage({ tone: 'success', text: `总结已导出：${value.filename}` })
+    if (!value?.filename) return
+    pushMessage({
+      tone: 'success',
+      text: `总结已导出：${value.filename}`,
+      duration: 5000,
+      actions: [
+        {
+          label: '打开目标目录',
+          run: () => {
+            const path = workspace.value?.path
+            if (!path) return
+            void summaryOutput.openDirectory(path).then((opened) => {
+              if (!opened && summaryOutput.openError.value)
+                pushMessage({ tone: 'error', text: summaryOutput.openError.value })
+            })
+          },
+        },
+      ],
+    })
   },
 )
 watch(
@@ -1020,7 +978,6 @@ function onFocus() {
     !error.value &&
     !confirmDialog.value?.isOpen() &&
     !picking.value &&
-    !aiVisible.value &&
     !excelBusy.value &&
     !rangeDates.value.length &&
     !databaseBusy.value
@@ -1081,7 +1038,6 @@ onBeforeUnmount(() => {
   clearInterval(clockTimer)
   unlistenClose?.()
   unlistenHistory?.()
-  ai.close()
   ai.closeSummary()
   void excel.cancel()
   journal.dispose()
@@ -1211,23 +1167,6 @@ onBeforeUnmount(() => {
         :busy="busy"
         @confirm="confirmModal"
         @cancel="cancelConfirm"
-      />
-      <AiPolishDialog
-        ref="polishDialog"
-        :visible="aiVisible"
-        :generating="generating"
-        :elapsed-seconds="elapsedSeconds"
-        :original="aiOriginal"
-        :result="aiResult"
-        :error="aiResultError"
-        :provider="defaultProvider?.name ?? ''"
-        :provider-kind="defaultProvider?.kind ?? ''"
-        @close="ai.close"
-        @start="ai.generate"
-        @regenerate="ai.generate"
-        @edit="onAiResultEdit"
-        @apply="applyAi(aiResult)"
-        @restore="applyAi(aiOriginal, true)"
       />
       <SkinDialog ref="skinDialog" :active="activeSkin" @select="applySkin" @close="closeSkinDialog" />
       <LayoutDialog ref="layoutDialog" @reset="resetLayout" @close="closeLayoutDialog" />

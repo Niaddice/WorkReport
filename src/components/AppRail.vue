@@ -28,7 +28,7 @@ const moduleButtons = [
   { id: 'overview', label: '数据概览', icon: PhChartLine },
   { id: 'history', label: '历史记录', icon: PhClockCounterClockwise },
   { id: 'excel', label: 'Excel 周报', icon: PhFileXls },
-  { id: 'summary', label: 'AI 总结', icon: PhSparkle },
+  { id: 'summary', label: '总结', icon: PhSparkle },
 ] as const
 </script>
 

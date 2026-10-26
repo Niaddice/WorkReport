@@ -8,6 +8,7 @@ import {
 } from '@phosphor-icons/vue'
 import CalendarModule from '../components/modules/CalendarModule.vue'
 import EditorModule from '../components/modules/EditorModule.vue'
+import EditorModuleSubtitle from '../components/modules/EditorModuleSubtitle.vue'
 import ExcelModule from '../components/modules/ExcelModule.vue'
 import HistoryModule from '../components/modules/HistoryModule.vue'
 import SummaryModule from '../components/modules/SummaryModule.vue'
@@ -27,14 +28,26 @@ export const MODULE_REGISTRY: readonly ModuleDefinition[] = [
     description: '周 / 月 / 年视图、农历与节假日、框选日报。',
     icon: PhCalendarDots,
     component: CalendarModule,
+    help: [
+      '点击任意日期，切换日报编辑区显示的当天内容。',
+      '在日期上按下并拖到另一天，可框选一段连续日期，用于批量查看或生成总结。',
+      '顶部可切换周 / 月 / 年视图；日期上的圆点表示当天已有日报。',
+    ],
     defaultEnabled: true,
   },
   {
     id: 'editor',
     title: '日报编辑',
-    description: 'Markdown / 纯文本编辑、预览、AI 润色与历史版本。',
+    description: 'Markdown / 纯文本编辑、预览与历史版本。',
     icon: PhNotePencil,
     component: EditorModule,
+    titleExtra: EditorModuleSubtitle,
+    help: [
+      '直接在正文区输入内容，停止输入后会自动保存；底部显示保存状态和字数。',
+      '右上角「MD / TXT」切换文件格式；「眼睛」图标在编辑与预览之间切换；「复制」复制全文。',
+      'Markdown 模式下，工具栏提供标题、加粗、列表、待办等快捷插入，「⋯」里还有更多格式。',
+      '按 ⌘S / Ctrl+S 可立即保存。',
+    ],
     defaultEnabled: true,
   },
   {
@@ -43,6 +56,11 @@ export const MODULE_REGISTRY: readonly ModuleDefinition[] = [
     description: '本月、本年与连续记录统计，今日记录状态一目了然。',
     icon: PhChartLine,
     component: OverviewModule,
+    help: [
+      '统计本月与本年已记录的日报数量、字数与连续记录天数。',
+      '顶部显示今天是否已经写过日报，方便快速确认状态。',
+      '统计数据随日报保存自动更新，无需手动刷新。',
+    ],
     defaultEnabled: false,
   },
   {
@@ -51,14 +69,25 @@ export const MODULE_REGISTRY: readonly ModuleDefinition[] = [
     description: '查看当前日报的历史版本，并预览任意版本全文。',
     icon: PhClockCounterClockwise,
     component: HistoryModule,
+    help: [
+      '每次保存都会为当天日报生成一个历史版本，按日期分组展示。',
+      '点击某个版本可查看全文，确认后能把内容恢复到编辑区。',
+      '恢复前会先保存当前内容，避免误覆盖。',
+    ],
     defaultEnabled: false,
   },
   {
     id: 'summary',
-    title: 'AI 总结',
+    title: '总结',
     description: '对当前选中日期或当天日报生成 AI 总结或直接合并总结。',
     icon: PhSparkle,
     component: SummaryModule,
+    help: [
+      '打开模块后会自动合并所选日期的日报，直接显示为可复制的文本。',
+      '点右上角「总结」按钮并确认后，调用默认 AI 生成总结。',
+      '还可以复制结果，或导出为 Markdown / TXT 到设置的总结目录。',
+      '未配置默认 AI 时，点「总结」会引导前往设置。',
+    ],
     defaultEnabled: false,
   },
   {
@@ -67,6 +96,12 @@ export const MODULE_REGISTRY: readonly ModuleDefinition[] = [
     description: '把同一周的日报整理进 Excel 模板，预览确认后输出。',
     icon: PhFileXls,
     component: ExcelModule,
+    help: [
+      '默认读取当前选中日期所在自然周（周一至周日）；也可先在日历框选同一周的多天。',
+      '点「Xls」按钮调用默认 AI 生成填充预览，核对内容后确认才会写入文件。',
+      '已导出的周报会列在模块下方，点击可在最大化视图中查看内容。',
+      '首次使用需在「设置 → Excel 输出」配置模板、提示词和输出目录。',
+    ],
     defaultEnabled: false,
   },
 ]
