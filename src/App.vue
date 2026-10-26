@@ -40,6 +40,9 @@ import { dateKey } from './lib/calendar'
 import { useHolidays } from './lib/holidays'
 import { useHolidayReminder } from './lib/useHolidayReminder'
 import { clearMessages, dismissMessage, pushMessage } from './lib/messages'
+import { useJournalPreview } from './lib/useJournalPreview'
+import JournalPreviewWindow from './components/JournalPreviewWindow.vue'
+import JournalPreviewContent from './components/JournalPreviewContent.vue'
 
 const nativeApp = isTauri()
 const journal = useJournal()
@@ -184,6 +187,9 @@ function closeLayoutDialog() {
 function removeModule(id: ModuleId) {
   moduleLayout.remove(id)
 }
+function editorPreviewAnchor() {
+  return moduleBoard.value?.getModuleRect('editor') ?? null
+}
 async function activateModule(id: ModuleId) {
   if (page.value !== 'home') {
     await navigate('home')
@@ -225,6 +231,12 @@ const rangeDates = ref<string[]>([])
 const rangeDocuments = ref<Document[]>([])
 const rangeLoading = ref(false)
 const rangeError = ref('')
+const journalPreview = useJournalPreview(journal, {
+  dates: rangeDates,
+  documents: rangeDocuments,
+  loading: rangeLoading,
+  error: rangeError,
+})
 const excelBlockedReason = computed(() => {
   if (!sameWeekRange(summarySelectionDates.value))
     return '仅支持同一周内的日期范围（周一至周日），包括没有日报的所选日期。'
@@ -270,7 +282,7 @@ async function restoreRecentWorkspace() {
     const path = await api.recent()
     if (appDisposed) return
     recent.value = path
-    if (path) await journal.open(path)
+    if (path) await openSelectedWorkspace(path)
   } catch (cause) {
     if (!appDisposed) journal.reportError(cause)
   } finally {
@@ -856,6 +868,7 @@ provide(MODULE_CONTEXT, {
   rangeLoading,
   rangeError,
   editorPreview,
+  journalPreview,
   calendar: calendarHandle,
   editor: editorHandle,
   actions: moduleActions,
@@ -1131,8 +1144,9 @@ onBeforeUnmount(() => {
             :busy="busy"
             :recent="recent"
             :recent-name="recentName"
+            :error="error"
             @choose="chooseWorkspace"
-            @open="journal.open"
+            @open="openSelectedWorkspace"
           />
         </Transition>
       </div>
@@ -1170,6 +1184,14 @@ onBeforeUnmount(() => {
       />
       <SkinDialog ref="skinDialog" :active="activeSkin" @select="applySkin" @close="closeSkinDialog" />
       <LayoutDialog ref="layoutDialog" @reset="resetLayout" @close="closeLayoutDialog" />
+      <JournalPreviewWindow
+        :visible="journalPreview.visible.value && page === 'home' && !!workspace"
+        :top-inset="nativeApp && isMac ? 36 : 0"
+        :anchor-rect="editorPreviewAnchor"
+        @close="journalPreview.close"
+      >
+        <JournalPreviewContent />
+      </JournalPreviewWindow>
     </div>
     <AppRail
       v-if="workspace"

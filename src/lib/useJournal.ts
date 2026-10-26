@@ -1,6 +1,7 @@
 import { computed, ref } from 'vue'
 import { api, type Document, type Entry, type Workspace, type FileFormat } from './workspace'
 import { dateKey } from './calendar'
+import { DEFAULT_DATABASE_SETTINGS } from './database'
 
 function emptyDocument(date: string, format: FileFormat): Document {
   return { date, filename: `${date}.${format}`, format, content: '', revision: '' }
@@ -33,10 +34,10 @@ export function useJournal() {
   const pendingPreviews = new Map<string, object>()
   const previewVersions = new Map<string, number>()
   /** 新建日报使用的格式，由「数据存储」中的默认格式设置驱动。 */
-  let defaultFormat: FileFormat = 'md'
+  let defaultFormat: FileFormat = DEFAULT_DATABASE_SETTINGS.defaultFormat
 
   function setDefaultFormat(format: FileFormat) {
-    defaultFormat = format === 'txt' ? 'txt' : 'md'
+    defaultFormat = format === 'md' ? 'md' : 'txt'
   }
 
   function reportError(cause: unknown) {
@@ -259,6 +260,8 @@ export function useJournal() {
     busy.value = true
     try {
       if (!(await flush())) return false
+      // 每次重试都重新报告失败，避免相同错误无法再次触发通知。
+      error.value = ''
       const nextWorkspace = await api.open(path, syncSettingsFrom)
       workspace.value = nextWorkspace
       backupWarning.value = ''
@@ -283,7 +286,7 @@ export function useJournal() {
     if (busy.value || saving.value || !workspace.value) return
     busy.value = true
     try {
-      const format = isNewDraft.value && document.value ? document.value.format : 'md'
+      const format = isNewDraft.value && document.value ? document.value.format : defaultFormat
       await refreshIndex()
       const entry =
         entries.value.find((entry) => entry.date === selectedDate.value && entry.format === document.value?.format) ??

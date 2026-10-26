@@ -187,6 +187,22 @@ describe('legacy layout migration', () => {
     )
     expect(ids(normalizeUiPreferences({ columns: 1, modules }).layout)).toHaveLength(6)
   })
+
+  it('removes the old embedded preview from saved layouts while preserving the editor', () => {
+    expect(
+      normalizeUiPreferences({
+        layout: {
+          type: 'split',
+          direction: 'row',
+          ratio: 0.5,
+          first: leaf('editor'),
+          second: { type: 'leaf', id: 'markdown-preview' },
+        },
+        skin: 'default',
+      }).layout,
+    ).toEqual(leaf('editor'))
+    expect(normalizeUiPreferences({ layout: { type: 'leaf', id: 'markdown-preview' } })).toEqual(DEFAULT_UI_PREFERENCES)
+  })
 })
 
 describe('flattenLayout and layoutIds', () => {

@@ -49,13 +49,15 @@ describe('workspace journal save lifecycle', () => {
     expect(api.open).not.toHaveBeenCalled()
   })
 
-  it('starts a new draft in the configured default format', async () => {
+  it.each(['md', 'txt'] as const)('starts a new draft in the configured %s format', async (format) => {
     const journal = await setup()
-    journal.setDefaultFormat('txt')
+    journal.setDefaultFormat(format)
+    expect(journal.document.value?.format).toBe('md')
     expect(await journal.select('20261020')).toBe(true)
     expect(journal.isNewDraft.value).toBe(true)
-    expect(journal.document.value?.format).toBe('txt')
-    expect(journal.document.value?.filename).toBe('20261020.txt')
+    expect(journal.document.value?.format).toBe(format)
+    expect(journal.document.value?.filename).toBe(`20261020.${format}`)
+    journal.dispose()
   })
 
   it('debounces typing and saves the literal Markdown content', async () => {
@@ -235,8 +237,8 @@ describe('workspace journal save lifecycle', () => {
     expect(await journal.select('20261019')).toBe(true)
     expect(journal.document.value).toMatchObject({
       date: '20261019',
-      filename: '20261019.md',
-      format: 'md',
+      filename: '20261019.txt',
+      format: 'txt',
       content: '',
       revision: '',
     })
@@ -253,15 +255,15 @@ describe('workspace journal save lifecycle', () => {
     await journal.select('20261019')
     const created: Document = {
       date: '20261019',
-      filename: '20261019.md',
-      format: 'md',
+      filename: '20261019.txt',
+      format: 'txt',
       content: '新的工作',
       revision: 'c1',
     }
     vi.mocked(api.create).mockResolvedValue(created)
     journal.edit('新的工作')
     await vi.advanceTimersByTimeAsync(650)
-    expect(api.create).toHaveBeenCalledWith('20261019', 'md', '新的工作')
+    expect(api.create).toHaveBeenCalledWith('20261019', 'txt', '新的工作')
     expect(journal.isNewDraft.value).toBe(false)
     expect(journal.document.value).toEqual(created)
     expect(journal.dirty.value).toBe(false)
@@ -273,20 +275,20 @@ describe('workspace journal save lifecycle', () => {
   it('creates in the format chosen before typing', async () => {
     const journal = await setup()
     await journal.select('20261019')
-    expect(await journal.switchFormat('txt')).toBe(true)
-    expect(journal.document.value?.format).toBe('txt')
+    expect(await journal.switchFormat('md')).toBe(true)
+    expect(journal.document.value?.format).toBe('md')
     expect(api.switchFormat).not.toHaveBeenCalled()
     const created: Document = {
       date: '20261019',
-      filename: '20261019.txt',
-      format: 'txt',
-      content: '纯文本内容',
+      filename: '20261019.md',
+      format: 'md',
+      content: '手动选择格式的内容',
       revision: 'c1',
     }
     vi.mocked(api.create).mockResolvedValue(created)
-    journal.edit('纯文本内容')
+    journal.edit('手动选择格式的内容')
     await vi.advanceTimersByTimeAsync(650)
-    expect(api.create).toHaveBeenCalledWith('20261019', 'txt', '纯文本内容')
+    expect(api.create).toHaveBeenCalledWith('20261019', 'md', '手动选择格式的内容')
     expect(journal.document.value).toEqual(created)
     journal.dispose()
   })

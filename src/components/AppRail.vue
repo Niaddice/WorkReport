@@ -13,7 +13,12 @@ import {
 } from '@phosphor-icons/vue'
 import type { ModuleId } from '../modules/types'
 
-defineProps<{ disabled: boolean; active: ModuleId[]; settingsActive?: boolean; settingsBusy?: boolean }>()
+defineProps<{
+  disabled: boolean
+  active: ModuleId[]
+  settingsActive?: boolean
+  settingsBusy?: boolean
+}>()
 const emit = defineEmits<{
   module: [id: ModuleId]
   refresh: []

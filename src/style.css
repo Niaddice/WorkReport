@@ -230,7 +230,10 @@ md-filled-tonal-button svg[slot='icon'] {
   background: #eef3fb;
   color: #2f5f9e;
 }
-.rail-button:disabled {
+.rail-button:disabled,
+.rail-button.is-active:disabled {
+  background: transparent;
+  color: #9aa6b7;
   opacity: 0.4;
   cursor: default;
 }
@@ -1134,6 +1137,14 @@ md-filled-tonal-button svg[slot='icon'] {
   border-color: #cfe0fb;
   color: #0b57d0;
 }
+.journal-preview-toggle[aria-pressed='true'] {
+  border-color: #cfe0fb;
+  background: #e7f0fe;
+  color: #0b57d0;
+}
+.journal-preview-toggle:disabled {
+  color: #9aa6b7;
+}
 .markdown-editor {
   display: block;
   background: transparent;
@@ -1625,9 +1636,6 @@ md-filled-tonal-button svg[slot='icon'] {
   line-height: 1.5;
   color: #7c8b9f;
 }
-.range-toolbar {
-  padding-inline: var(--editor-inline-padding);
-}
 .range-overview-body {
   flex: 1;
   min-height: 0;
@@ -1650,26 +1658,30 @@ md-filled-tonal-button svg[slot='icon'] {
 .range-error {
   color: #b34232;
 }
-.range-entry + .range-entry {
+.range-entry + .range-entry,
+.journal-preview-entry + .journal-preview-entry {
   margin-top: 28px;
   padding-top: 24px;
   border-top: 1px solid #dfe7f1;
 }
-.range-entry > header {
+.range-entry > header,
+.journal-preview-entry > header {
   display: flex;
   align-items: baseline;
   flex-wrap: wrap;
   gap: 4px 12px;
   margin-bottom: 16px;
 }
-.range-entry > header h3 {
+.range-entry > header h3,
+.journal-preview-entry > header h3 {
   margin: 0;
   color: #7c8a9d;
   font-size: var(--text-subtitle);
   line-height: 1.5;
   font-weight: 400;
 }
-.range-entry header > span {
+.range-entry header > span,
+.journal-preview-entry header > span {
   color: #8a98ab;
   font-family: 'SFMono-Regular', Consolas, monospace;
   font-size: var(--text-small);
@@ -5430,6 +5442,21 @@ body.is-module-resizing * {
     gap: 0;
   }
 }
+.module-panel-body .range-heading {
+  position: relative;
+  padding: 0.5rem calc(var(--editor-inline-padding) + 4.25rem) 0.5rem var(--editor-inline-padding);
+  border-bottom: 1px solid #eef2f7;
+}
+.module-panel-body .range-heading h2 {
+  margin: 0;
+  font-size: var(--text-title);
+  line-height: 1.6;
+  letter-spacing: 0;
+}
+.range-heading .editor-body-tools {
+  top: 50%;
+  transform: translateY(-50%);
+}
 body.is-module-dragging,
 body.is-module-dragging * {
   cursor: grabbing !important;
@@ -5799,7 +5826,218 @@ body.is-module-maximized * {
   color: #0b57d0;
 }
 
-/* ===== 内嵌模块：历史记录 / AI 总结 / Excel 周报 ===== */
+/* 日报预览使用独立悬浮窗口，编辑区保持可操作。 */
+.journal-preview-window {
+  position: fixed;
+  z-index: 100;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid #dbe5f1;
+  border-radius: 16px;
+  background: var(--skin-surface);
+  box-shadow:
+    0 18px 60px rgba(23, 42, 70, 0.22),
+    0 4px 14px rgba(23, 42, 70, 0.08);
+}
+.journal-preview-window.is-animating-geometry {
+  transition:
+    left var(--motion-page) var(--motion-ease),
+    top var(--motion-page) var(--motion-ease),
+    width var(--motion-page) var(--motion-ease),
+    height var(--motion-page) var(--motion-ease);
+}
+.journal-preview-window.journal-preview-enter-active {
+  transition:
+    opacity var(--motion-duration) ease,
+    transform var(--motion-page) var(--motion-ease);
+  will-change: opacity, transform;
+}
+.journal-preview-window.journal-preview-leave-active {
+  pointer-events: none;
+  transition:
+    opacity var(--motion-fast) ease,
+    transform var(--motion-duration) var(--motion-ease);
+  will-change: opacity, transform;
+}
+.journal-preview-enter-from,
+.journal-preview-leave-to {
+  opacity: 0;
+  transform: translate(var(--preview-enter-x, -10px), -4px) scale(0.97);
+}
+.journal-preview-window-header {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 38px;
+  padding: 5px 10px 5px 14px;
+  border-bottom: 1px solid #e9eef5;
+  background: #f8fafd;
+  color: #667c9d;
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+.journal-preview-window.is-maximized .journal-preview-window-header {
+  cursor: default;
+}
+.journal-preview-window-header h2 {
+  margin: 0;
+  font-size: var(--text-subtitle);
+  line-height: 1.5;
+  font-weight: 500;
+}
+.journal-preview-window-actions {
+  display: flex;
+  gap: 4px;
+  margin-left: auto;
+}
+.journal-preview-window-actions button {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: #8190a5;
+  transition:
+    background-color var(--motion-fast) ease,
+    color var(--motion-fast) ease,
+    transform var(--motion-fast) var(--motion-ease);
+}
+.journal-preview-window-actions button:hover {
+  background: #e8effa;
+  color: #3568a8;
+}
+.journal-preview-window-actions button:active {
+  transform: scale(0.92);
+}
+.journal-preview-window-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  overflow: hidden;
+}
+.journal-preview-window .journal-prose,
+.journal-preview-window .range-text {
+  color: #39485d;
+  line-height: 1.85;
+}
+.journal-preview-window .journal-prose pre {
+  background: #f4f7fc;
+}
+.journal-preview-window-resize {
+  position: absolute;
+  bottom: 2px;
+  right: 2px;
+  z-index: 2;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  cursor: nwse-resize;
+  touch-action: none;
+}
+.journal-preview-window-resize::after {
+  content: '';
+  position: absolute;
+  right: 5px;
+  bottom: 5px;
+  width: 8px;
+  height: 8px;
+  border-right: 2px solid #9eafc5;
+  border-bottom: 2px solid #9eafc5;
+}
+.journal-preview-window-resize:focus-visible {
+  outline-offset: -2px;
+}
+body.is-preview-window-moving,
+body.is-preview-window-moving * {
+  cursor: grabbing !important;
+  user-select: none !important;
+}
+body.is-preview-window-resizing,
+body.is-preview-window-resizing * {
+  cursor: nwse-resize !important;
+  user-select: none !important;
+}
+@media (prefers-reduced-motion: reduce) {
+  .journal-preview-window,
+  .journal-preview-window-actions button {
+    transition: none !important;
+    transform: none !important;
+  }
+  .journal-preview-enter-from,
+  .journal-preview-leave-to {
+    opacity: 1;
+  }
+}
+
+/* ===== 内容预览与内嵌模块 ===== */
+.markdown-preview-module {
+  --editor-body-font: var(--md-ref-typeface-plain);
+  --editor-body-size: var(--text-body);
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.markdown-preview-module-heading {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.5rem 1rem;
+  border-bottom: 1px solid #eef2f7;
+  color: #8190a5;
+  font-size: var(--text-small);
+  line-height: 1.6;
+}
+.markdown-preview-module-heading > span:first-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.markdown-preview-module-heading > span:last-child {
+  flex-shrink: 0;
+}
+.markdown-preview-module-content {
+  flex: 1;
+  min-height: 0;
+  padding: 1rem;
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+.markdown-preview-module-document {
+  display: flow-root;
+}
+.markdown-source-block:first-child > :first-child {
+  margin-top: 0;
+}
+.markdown-source-block:last-child > :last-child {
+  margin-bottom: 0;
+}
+.markdown-preview-module-empty {
+  flex: 1;
+  display: grid;
+  place-content: center;
+  margin: 0;
+  padding: 1.5rem;
+  color: #8190a5;
+  font-size: var(--text-body);
+  line-height: 1.8;
+  text-align: center;
+}
 .history-module,
 .summary-module,
 .excel-module {

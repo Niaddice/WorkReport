@@ -24,11 +24,13 @@ import {
   PhTable,
   PhEye,
   PhPencilSimple,
+  PhBrowsers,
 } from '@phosphor-icons/vue'
 import { api, type Document, type FileFormat } from '../lib/workspace'
 import { pushMessage } from '../lib/messages'
 import { markdownEdit, type MarkdownAction } from '../lib/markdownEditing'
 import { selectMenuPosition } from '../lib/select'
+import { createTextareaScrollReader, elementScrollPosition, type MarkdownScrollPosition } from '../lib/markdownScroll'
 
 const props = defineProps<{
   date: string
@@ -44,6 +46,8 @@ const props = defineProps<{
   canUndo: boolean
   canRedo: boolean
   preview: boolean
+  journalPreviewAvailable?: boolean
+  journalPreviewVisible?: boolean
   storageMode?: 'files' | 'dual' | 'database'
 }>()
 const emit = defineEmits<{
@@ -56,9 +60,14 @@ const emit = defineEmits<{
   restore: []
   error: [value: string]
   'update:preview': [value: boolean]
+  'scroll-position': [position: MarkdownScrollPosition]
+  'toggle-journal-preview': []
 }>()
 const textarea = ref<HTMLTextAreaElement>()
 const editorBody = ref<HTMLElement>()
+const inlinePreview = ref<HTMLElement>()
+const scrollReader = createTextareaScrollReader()
+const scrollObserver = typeof ResizeObserver === 'undefined' ? undefined : new ResizeObserver(publishScrollPosition)
 const preview = computed({ get: () => props.preview, set: (value: boolean) => emit('update:preview', value) })
 const previewMarkup = ref('')
 const copied = ref(false)
@@ -123,6 +132,8 @@ watch(
 watch(
   () => props.date,
   () => {
+    if (textarea.value) textarea.value.scrollTop = 0
+    if (inlinePreview.value) inlinePreview.value.scrollTop = 0
     rememberedSelection = { start: 0, end: 0 }
     closeMore()
     dateAnimation?.cancel()
@@ -136,10 +147,14 @@ watch(
       ],
       { duration: 160, easing: 'cubic-bezier(0.2, 0.8, 0.2, 1)' },
     )
+    // 切换日期或进入框选预览时会取消动画，处理 finished 的 AbortError。
+    void dateAnimation.finished.catch(() => {})
   },
   { flush: 'post' },
 )
 onBeforeUnmount(() => {
+  scrollReader.dispose()
+  scrollObserver?.disconnect()
   dateAnimation?.cancel()
   clearTimeout(copiedTimer)
   document.removeEventListener('pointerdown', onOutsidePointer)
@@ -148,11 +163,36 @@ onBeforeUnmount(() => {
   window.removeEventListener('scroll', onScroll, true)
 })
 onMounted(() => {
+  publishScrollPosition()
   document.addEventListener('pointerdown', onOutsidePointer)
   document.addEventListener('focusin', onOutsideFocus)
   window.addEventListener('resize', closeMore)
   window.addEventListener('scroll', onScroll, true)
 })
+watch(
+  [textarea, inlinePreview],
+  ([input, rendered]) => {
+    scrollObserver?.disconnect()
+    if (input) scrollObserver?.observe(input)
+    if (rendered) scrollObserver?.observe(rendered)
+    publishScrollPosition()
+  },
+  { flush: 'post' },
+)
+watch([() => props.content, () => props.date, () => props.document?.format, preview], publishScrollPosition, {
+  flush: 'post',
+})
+function publishScrollPosition() {
+  if (props.document?.format !== 'md') return
+  const element = preview.value ? inlinePreview.value : textarea.value
+  if (!element?.clientHeight) return
+  emit(
+    'scroll-position',
+    preview.value
+      ? elementScrollPosition(element, props.date)
+      : scrollReader.read(element as HTMLTextAreaElement, props.date),
+  )
+}
 watch(
   () => props.disabled,
   (disabled) => {
@@ -317,8 +357,10 @@ defineExpose({ focus })
             <Transition name="editor-mode"
               ><div
                 v-show="preview && document.format === 'md'"
+                ref="inlinePreview"
                 class="markdown-preview journal-prose"
                 :inert="!preview || document.format !== 'md'"
+                @scroll.passive="publishScrollPosition"
                 v-html="previewMarkup"
               ></div
             ></Transition>
@@ -338,6 +380,7 @@ defineExpose({ focus })
                 @keyup="rememberSelection"
                 @click="rememberSelection"
                 @blur="rememberSelection"
+                @scroll.passive="publishScrollPosition"
                 @keydown.meta.s.prevent="emit('save')"
                 @keydown.ctrl.s.prevent="emit('save')"
               ></textarea>
@@ -368,6 +411,17 @@ defineExpose({ focus })
               >
                 <PhPencilSimple v-if="preview" :size="15" aria-hidden="true" />
                 <PhEye v-else :size="15" aria-hidden="true" />
+              </button>
+              <button
+                type="button"
+                class="editor-tool-button journal-preview-toggle"
+                aria-label="日报预览"
+                :title="journalPreviewVisible ? '关闭日报预览' : '日报预览'"
+                :aria-pressed="!!journalPreviewVisible"
+                :disabled="disabled || (!journalPreviewAvailable && !journalPreviewVisible)"
+                @click="emit('toggle-journal-preview')"
+              >
+                <PhBrowsers :size="15" aria-hidden="true" />
               </button>
               <button
                 v-if="hasContent"

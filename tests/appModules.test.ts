@@ -95,7 +95,7 @@ beforeEach(() => {
 })
 
 async function openDemoWorkspace() {
-  const wrapper = mount(App, { attachTo: document.body })
+  const wrapper = mount(App, { attachTo: document.body, global: { stubs: { teleport: true } } })
   await flushPromises()
   return wrapper
 }
@@ -203,6 +203,174 @@ describe('workspace settings sync confirmation', () => {
 })
 
 describe('modular home integration', () => {
+  it('docks the preview against the editor and chooses the other side after the layout changes', async () => {
+    const date = dayjs().format('YYYYMMDD')
+    const document = { date, filename: `${date}.md`, format: 'md', content: '测试正文', revision: '1' }
+    invoke.mockImplementation(async (command: string) => {
+      if (command === 'list_entries') return [document]
+      if (command === 'read_entry') return document
+      return commandResult(command)
+    })
+    let editorRect = new DOMRect(500, 100, window.innerWidth - 508, 600)
+    const original = HTMLElement.prototype.getBoundingClientRect
+    const rect = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (
+      this: HTMLElement,
+    ) {
+      return this.dataset.moduleId === 'editor' ? editorRect : original.call(this)
+    })
+    const wrapper = await openDemoWorkspace()
+    try {
+      const toggle = wrapper.get('.editor-body-tools [aria-label="日报预览"]')
+      await toggle.trigger('click')
+      await flushPromises()
+      let preview = wrapper.get<HTMLElement>('.journal-preview-window').element
+      expect(parseFloat(preview.style.left)).toBe(8)
+      expect(parseFloat(preview.style.width)).toBe(492)
+      expect(parseFloat(preview.style.top)).toBe(editorRect.y)
+      expect(parseFloat(preview.style.left) + parseFloat(preview.style.width)).toBe(editorRect.x)
+      await toggle.trigger('click')
+      editorRect = new DOMRect(8, 100, 400, 600)
+      await toggle.trigger('click')
+      await flushPromises()
+      preview = wrapper.get<HTMLElement>('.journal-preview-window').element
+      expect(parseFloat(preview.style.left)).toBe(editorRect.right)
+      expect(parseFloat(preview.style.width)).toBe(520)
+    } finally {
+      wrapper.unmount()
+      rect.mockRestore()
+    }
+  })
+
+  it('toggles a floating journal preview from the editor and renders unsaved changes immediately', async () => {
+    const date = dayjs().format('YYYYMMDD')
+    const document = { date, filename: `${date}.md`, format: 'md', content: '# 初始标题', revision: '1' }
+    invoke.mockImplementation(async (command: string) => {
+      if (command === 'list_entries') return [document]
+      if (command === 'read_entry') return document
+      return commandResult(command)
+    })
+    const wrapper = await openDemoWorkspace()
+    expect(wrapper.find('.app-rail [aria-label="Markdown 预览"]').exists()).toBe(false)
+    const trigger = wrapper.get('.editor-body-tools [aria-label="日报预览"]')
+    expect(trigger.attributes('disabled')).toBeUndefined()
+    await trigger.trigger('click')
+    await flushPromises()
+    const preview = wrapper.get('.markdown-preview-module')
+    expect(preview.get('.journal-prose').text()).toContain('初始标题')
+    expect(wrapper.find('.markdown-editor').isVisible()).toBe(true)
+    expect(wrapper.findAll('.module-panel')).toHaveLength(2)
+    expect(invoke.mock.calls.some(([command]) => command === 'save_ui_preferences')).toBe(false)
+    expect(wrapper.get('.journal-preview-window').attributes('aria-modal')).toBe('false')
+
+    await wrapper
+      .get('.markdown-editor')
+      .setValue('# 未保存的标题\n\n**实时草稿**\n\n| 项目 | 状态 |\n| --- | --- |\n| 预览 | 更新 |')
+    expect(preview.get('.journal-prose').text()).toContain('未保存的标题')
+    expect(preview.get('.journal-prose strong').text()).toBe('实时草稿')
+    expect(preview.get('.journal-prose table').text()).toContain('更新')
+    expect(invoke.mock.calls.some(([command]) => command === 'save_entry')).toBe(false)
+
+    const input = wrapper.get<HTMLTextAreaElement>('.markdown-editor')
+    const previewViewport = preview.get<HTMLElement>('.markdown-preview-module-content').element
+    Object.defineProperties(input.element, {
+      clientWidth: { value: 300 },
+      clientHeight: { value: 200 },
+      scrollHeight: { value: 1000 },
+    })
+    Object.defineProperties(previewViewport, { clientHeight: { value: 200 }, scrollHeight: { value: 1600 } })
+    input.element.scrollTop = 400
+    await input.trigger('scroll')
+    expect(previewViewport.scrollTop).toBe(700)
+    input.element.scrollTop = 800
+    await input.trigger('scroll')
+    expect(previewViewport.scrollTop).toBe(1400)
+
+    await trigger.trigger('click')
+    await flushPromises()
+    expect(wrapper.find('.journal-preview-window').exists()).toBe(false)
+    await trigger.trigger('click')
+    await flushPromises()
+    expect(wrapper.findAll('.markdown-preview-module')).toHaveLength(1)
+    await wrapper.get('[aria-label="关闭日报预览"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('.journal-preview-window').exists()).toBe(false)
+    expect(trigger.attributes('aria-pressed')).toBe('false')
+    wrapper.unmount()
+  })
+
+  it('enables preview for an empty Markdown draft and disables it again after switching to TXT', async () => {
+    const wrapper = await openDemoWorkspace()
+    const trigger = wrapper.get('.editor-body-tools [aria-label="日报预览"]')
+    expect(trigger.attributes('disabled')).toBeDefined()
+    await trigger.trigger('click')
+    expect(wrapper.find('.markdown-preview-module').exists()).toBe(false)
+
+    await wrapper.get('.format-toggle').trigger('click')
+    await flushPromises()
+    expect(wrapper.get('.format-toggle').text()).toBe('MD')
+    expect(trigger.attributes('disabled')).toBeUndefined()
+    await trigger.trigger('click')
+    await flushPromises()
+    expect(wrapper.get('.markdown-preview-module-empty').text()).toContain('编辑内容后')
+
+    await wrapper.get('.format-toggle').trigger('click')
+    await flushPromises()
+    expect(wrapper.get('.format-toggle').text()).toBe('TXT')
+    expect(trigger.attributes('disabled')).toBeDefined()
+    expect(wrapper.find('.journal-preview-window').exists()).toBe(false)
+    expect(invoke.mock.calls.some(([command]) => command === 'create_entry')).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('follows the editor when switching dates and displays the selected range in the floating window', async () => {
+    const current = dayjs()
+    const first = current.startOf('month').date(current.date() === 5 ? 6 : 5)
+    const last = first.add(1, 'day')
+    const documents = [
+      { date: current.format('YYYYMMDD'), content: '# 当前日期' },
+      { date: first.format('YYYYMMDD'), content: '# 另一天的内容' },
+    ].map((document) => ({ ...document, filename: `${document.date}.md`, format: 'md', revision: '1' }))
+    invoke.mockImplementation(async (command: string, args?: { date: string }) => {
+      if (command === 'list_entries') return documents
+      if (command === 'read_entry') return documents.find((document) => document.date === args?.date)
+      return commandResult(command)
+    })
+    const wrapper = await openDemoWorkspace()
+    const trigger = wrapper.get('.editor-body-tools [aria-label="日报预览"]')
+    await trigger.trigger('click')
+    await flushPromises()
+    expect(wrapper.get('.markdown-preview-module-content').text()).toContain('当前日期')
+
+    const cells = wrapper.findAll('.calendar-panel .day-cell')
+    const start = cells.find((cell) => cell.attributes('aria-label')?.startsWith(first.format('YYYY年M月D日 ')))!
+    const end = cells.find((cell) => cell.attributes('aria-label')?.startsWith(last.format('YYYY年M月D日 ')))!
+    await start.trigger('click')
+    await flushPromises()
+    expect(wrapper.get('.markdown-preview-module-content').text()).toContain('另一天的内容')
+    expect(wrapper.get('.markdown-preview-module-heading').text()).toContain(`${first.format('YYYYMMDD')}.md`)
+
+    await start.trigger('pointerdown', { button: 0 })
+    await end.trigger('pointerenter')
+    window.dispatchEvent(new Event('pointerup'))
+    await flushPromises()
+    expect(wrapper.get('.range-overview [aria-label="日报预览"]').attributes('disabled')).toBeUndefined()
+    expect(wrapper.get('.markdown-preview-module-content').text()).toContain('另一天的内容')
+    expect(wrapper.get('.markdown-preview-module-heading').text()).toContain('2 天 · 1 篇日报')
+    const rangeBody = wrapper.get<HTMLElement>('.range-overview-body')
+    const previewViewport = wrapper.get<HTMLElement>('.markdown-preview-module-content').element
+    Object.defineProperties(rangeBody.element, { clientHeight: { value: 200 }, scrollHeight: { value: 1000 } })
+    Object.defineProperties(previewViewport, { clientHeight: { value: 200 }, scrollHeight: { value: 1600 } })
+    rangeBody.element.scrollTop = 400
+    await rangeBody.trigger('scroll')
+    expect(previewViewport.scrollTop).toBe(700)
+
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
+    await flushPromises()
+    expect(wrapper.get('.editor-body-tools [aria-label="日报预览"]').attributes('disabled')).toBeUndefined()
+    expect(wrapper.get('.markdown-preview-module-content').text()).toContain('另一天的内容')
+    wrapper.unmount()
+  })
+
   it.each(['missing', 'blank'])('silently disables summary actions for %s journal content', async (kind) => {
     const date = dayjs().format('YYYYMMDD')
     invoke.mockImplementation(async (command: string) => {
@@ -276,7 +444,64 @@ describe('modular home integration', () => {
     expect(wrapper.find('.workspace-gate').exists()).toBe(true)
     expect(wrapper.find('.workspace-loading').exists()).toBe(false)
     expect(wrapper.find('.app-message').text()).toContain('工作空间目录已不存在')
+    expect(wrapper.find('.workspace-gate .gate-error').text()).toContain('工作空间目录已不存在')
     expect(wrapper.find('.recent-workspace').attributes('disabled')).toBeUndefined()
+    wrapper.unmount()
+  })
+
+  it('keeps the workspace failure visible and reports the same error again after retrying', async () => {
+    let attempts = 0
+    let rejectOpen!: (error: Error) => void
+    invoke.mockImplementation(async (command: string) => {
+      if (command !== 'open_workspace') return commandResult(command)
+      if (++attempts === 1) throw new Error('工作空间目录已不存在')
+      return new Promise<never>((_, reject) => {
+        rejectOpen = reject
+      })
+    })
+    const wrapper = await openDemoWorkspace()
+    await wrapper.find('.app-message-close').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('.app-message').exists()).toBe(false)
+    expect(wrapper.find('.workspace-gate .gate-error').text()).toContain('工作空间目录已不存在')
+
+    await wrapper.find('.recent-workspace').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('.recent-workspace').text()).toContain('正在打开工作空间')
+    expect(wrapper.find('.workspace-gate .gate-error').exists()).toBe(false)
+    expect(wrapper.find('.recent-workspace').attributes('disabled')).toBeDefined()
+    expect(wrapper.find('.workspace-gate md-filled-button').attributes('disabled')).toBeDefined()
+    await wrapper.find('.recent-workspace').trigger('click')
+    expect(attempts).toBe(2)
+
+    rejectOpen(new Error('工作空间目录已不存在'))
+    await flushPromises()
+    expect(wrapper.find('.workspace-gate .gate-error').text()).toContain('工作空间目录已不存在')
+    expect(wrapper.find('.app-message').text()).toContain('工作空间目录已不存在')
+    expect(wrapper.find('.recent-workspace').attributes('disabled')).toBeUndefined()
+    wrapper.unmount()
+  })
+
+  it.each(['retry', 'choose'])('recovers from an unavailable recent workspace by %s', async (action) => {
+    let attempts = 0
+    invoke.mockImplementation(async (command: string, args?: { path: string }) => {
+      if (command !== 'open_workspace') return commandResult(command)
+      if (++attempts === 1) throw new Error('工作空间目录已不存在')
+      return { path: args!.path, name: args!.path.split('/').at(-1) }
+    })
+    const wrapper = await openDemoWorkspace()
+    const target = action === 'retry' ? DEMO_WORKSPACE : '/tmp/workreport-recovered'
+    if (action === 'choose') pickDirectory.mockResolvedValueOnce(target)
+    await wrapper.find(action === 'retry' ? '.recent-workspace' : '.workspace-gate md-filled-button').trigger('click')
+    await flushPromises()
+
+    expect(invoke.mock.calls.filter(([command]) => command === 'open_workspace')).toEqual([
+      ['open_workspace', { path: DEMO_WORKSPACE }],
+      ['open_workspace', { path: target }],
+    ])
+    expect(wrapper.find('.workspace-path-text').text()).toBe(target)
+    expect(wrapper.find('.module-board').exists()).toBe(true)
+    expect(wrapper.find('.workspace-gate').exists()).toBe(false)
     wrapper.unmount()
   })
 
@@ -434,7 +659,17 @@ describe('modular home integration', () => {
       await flushPromises()
 
       const range = wrapper.find('.range-overview')
-      expect(range.findAll('button').map((button) => button.text())).toEqual(['预览'])
+      expect(range.find('.range-heading').text()).toBe(`${first.format('M 月 D 日')} – ${last.format('D 日')}`)
+      expect(range.findAll('button').map((button) => button.attributes('aria-label'))).toEqual(['预览', '日报预览'])
+      const preview = range.find('.editor-body-tools .preview-toggle')
+      expect(preview.text()).toBe('')
+      await preview.trigger('click')
+      expect(preview.attributes('aria-pressed')).toBe('true')
+      expect(preview.attributes('aria-label')).toBe('查看原文')
+      expect(range.findAll('.journal-prose')).toHaveLength(2)
+      await preview.trigger('click')
+      expect(preview.attributes('aria-pressed')).toBe('false')
+      expect(range.findAll('.range-text')).toHaveLength(2)
       expect(range.find('.editor-text-actions').exists()).toBe(false)
       const summary = wrapper.find('.summary-module')
       if (mode === 'ai') {

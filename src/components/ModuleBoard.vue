@@ -185,7 +185,11 @@ async function animateLayoutChange(previous: Map<ModuleId, DOMRect>, immediate =
 function revealModule(id: ModuleId) {
   panelElement(id)?.querySelector<HTMLElement>('.module-drag-handle')?.focus({ preventScroll: true })
 }
-defineExpose({ reveal: revealModule })
+function getModuleRect(id: ModuleId): DOMRect | null {
+  const rect = panelElement(id)?.getBoundingClientRect()
+  return rect && rect.width > 0 && rect.height > 0 ? rect : null
+}
+defineExpose({ reveal: revealModule, getModuleRect })
 
 /** 窗口尺寸变化时，从当前画面矩形平滑缩放到新的布局矩形。 */
 function animateBoardResize(previous: Map<ModuleId, DOMRect>) {

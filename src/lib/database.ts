@@ -62,7 +62,7 @@ export const DEFAULT_DATABASE_SETTINGS: DatabaseSettings = {
   password: '',
   tlsMode: 'preferred',
   workspaceId: '',
-  defaultFormat: 'md',
+  defaultFormat: 'txt',
   historyLimitBytes: DEFAULT_HISTORY_LIMIT_BYTES,
 }
 
@@ -79,7 +79,7 @@ export function cloneDatabaseSettings(settings: DatabaseSettings): DatabaseSetti
     password: settings.password,
     tlsMode: settings.tlsMode,
     workspaceId: settings.workspaceId,
-    defaultFormat: settings.defaultFormat === 'txt' ? 'txt' : 'md',
+    defaultFormat: settings.defaultFormat === 'md' ? 'md' : 'txt',
     historyLimitBytes: clampHistoryLimit(settings.historyLimitBytes),
   }
 }

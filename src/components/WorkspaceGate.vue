@@ -1,12 +1,12 @@
 <script setup lang="ts">
 import { PhArrowRight, PhFileText, PhFolder, PhFolderOpen } from '@phosphor-icons/vue'
 
-defineProps<{ picking: boolean; busy: boolean; recent: string | null; recentName: string | undefined }>()
+defineProps<{ picking: boolean; busy: boolean; recent: string | null; recentName: string | undefined; error: string }>()
 const emit = defineEmits<{ choose: []; open: [path: string] }>()
 </script>
 
 <template>
-  <main class="workspace-gate">
+  <main class="workspace-gate" :aria-busy="picking || busy">
     <div class="welcome-art" aria-hidden="true">
       <div class="art-folder"><PhFolderOpen :size="68" weight="light" /></div>
       <span class="art-file"><PhFileText :size="30" weight="light" /></span>
@@ -19,6 +19,7 @@ const emit = defineEmits<{ choose: []; open: [path: string] }>()
     </md-filled-button>
     <button
       v-if="recent"
+      type="button"
       class="recent-workspace"
       :disabled="picking || busy"
       :title="recent"
@@ -26,10 +27,12 @@ const emit = defineEmits<{ choose: []; open: [path: string] }>()
     >
       <PhFolder :size="18" />
       <span
-        ><small>继续使用上次的工作空间</small><strong>{{ recentName }}</strong></span
+        ><small>{{ busy ? '正在打开工作空间…' : '继续使用上次的工作空间' }}</small
+        ><strong>{{ recentName }}</strong></span
       >
       <PhArrowRight :size="18" />
     </button>
+    <p v-if="error" class="gate-error" role="alert">{{ error }}</p>
     <div class="welcome-footnote">文件保存在本地，随时可以用其他编辑器打开。</div>
   </main>
 </template>

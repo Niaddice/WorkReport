@@ -34,15 +34,20 @@ describe('database configuration', () => {
     expect(copy).not.toHaveProperty('unexpectedToken')
   })
 
-  it('keeps new entries on Markdown by default and normalizes an unknown format', () => {
-    expect(DEFAULT_DATABASE_SETTINGS.defaultFormat).toBe('md')
+  it('uses TXT by default while preserving a selected Markdown format', () => {
+    expect(DEFAULT_DATABASE_SETTINGS.defaultFormat).toBe('txt')
     expect(cloneDatabaseSettings({ ...DEFAULT_DATABASE_SETTINGS, defaultFormat: 'txt' }).defaultFormat).toBe('txt')
+    expect(cloneDatabaseSettings({ ...DEFAULT_DATABASE_SETTINGS, defaultFormat: 'md' }).defaultFormat).toBe('md')
     expect(
       cloneDatabaseSettings({
         ...DEFAULT_DATABASE_SETTINGS,
         defaultFormat: 'bogus',
       } as unknown as DatabaseSettings).defaultFormat,
-    ).toBe('md')
+    ).toBe('txt')
+    expect(
+      cloneDatabaseSettings({ ...DEFAULT_DATABASE_SETTINGS, defaultFormat: undefined } as unknown as DatabaseSettings)
+        .defaultFormat,
+    ).toBe('txt')
   })
 
   it('defaults the history limit to 1 GB and clamps custom values', () => {

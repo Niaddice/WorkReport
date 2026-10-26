@@ -3,8 +3,9 @@ import { computed } from 'vue'
 import dayjs from 'dayjs'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
-import { PhCircleNotch, PhFileText } from '@phosphor-icons/vue'
+import { PhBrowsers, PhCircleNotch, PhCode, PhEye, PhFileText } from '@phosphor-icons/vue'
 import type { Document } from '../lib/workspace'
+import { elementScrollPosition, type MarkdownScrollPosition } from '../lib/markdownScroll'
 
 const props = defineProps<{
   dates: string[]
@@ -12,10 +13,19 @@ const props = defineProps<{
   loading: boolean
   error: string
   preview: boolean
+  journalPreviewAvailable?: boolean
+  journalPreviewVisible?: boolean
 }>()
-const emit = defineEmits<{ 'update:preview': [value: boolean] }>()
+const emit = defineEmits<{
+  'update:preview': [value: boolean]
+  'toggle-journal-preview': []
+  'scroll-position': [position: MarkdownScrollPosition]
+}>()
 type RangeRun = { start: string; end: string }
 const sortedDocuments = computed(() => [...props.documents].sort((left, right) => right.date.localeCompare(left.date)))
+function onScroll(event: Event) {
+  emit('scroll-position', elementScrollPosition(event.currentTarget as HTMLElement, ''))
+}
 const characterCount = computed(() =>
   props.documents.reduce((total, document) => total + document.content.replace(/\s/g, '').length, 0),
 )
@@ -45,7 +55,7 @@ function fullRun(run: RangeRun) {
   return `${start.format('YYYY 年 M 月 D 日')} – ${end.format('YYYY 年 M 月 D 日')}`
 }
 const rangeLabel = computed(() => {
-  if (!rangeRuns.value.length) return '框选日报'
+  if (!rangeRuns.value.length) return ''
   const firstYear = dayjs(rangeRuns.value[0].start).year()
   const lastYear = dayjs(rangeRuns.value[rangeRuns.value.length - 1].end).year()
   const yearPrefix = crossesYears.value ? `${firstYear}–${lastYear} · ` : ''
@@ -70,32 +80,36 @@ function render(content: string) {
 <template>
   <!-- eslint-disable vue/no-v-html -- Markdown 预览先经 DOMPurify 清洗再渲染 -->
   <aside class="editor-panel range-overview" aria-label="框选日报合并预览" :aria-busy="loading">
-    <header class="editor-heading">
-      <div class="editor-date-heading">
-        <div class="editor-eyebrow">框选日报</div>
-        <h2 :title="rangeTooltip">{{ rangeLabel }}</h2>
-      </div>
-      <div class="editor-file-row">
-        <span class="file-label"
-          ><PhFileText :size="14" aria-hidden="true" />{{
-            sortedDocuments.length === 1
-              ? sortedDocuments[0].filename
-              : `${documents.length} 篇日报 · ${dates.length} 天`
-          }}</span
+    <header class="editor-heading range-heading">
+      <h2 :title="rangeTooltip">{{ rangeLabel }}</h2>
+      <div class="editor-body-tools">
+        <button
+          type="button"
+          class="editor-tool-button preview-toggle"
+          :aria-label="preview ? '查看原文' : '预览'"
+          :title="preview ? '查看原文' : '预览'"
+          :aria-pressed="preview"
+          :disabled="loading || !sortedDocuments.length"
+          @click="emit('update:preview', !preview)"
         >
-        <span class="editor-readonly-label">只读</span>
+          <PhCode v-if="preview" :size="15" aria-hidden="true" />
+          <PhEye v-else :size="15" aria-hidden="true" />
+        </button>
+        <button
+          type="button"
+          class="editor-tool-button journal-preview-toggle"
+          aria-label="日报预览"
+          :title="journalPreviewVisible ? '关闭日报预览' : '日报预览'"
+          :aria-pressed="!!journalPreviewVisible"
+          :disabled="!journalPreviewAvailable && !journalPreviewVisible"
+          @click="emit('toggle-journal-preview')"
+        >
+          <PhBrowsers :size="15" aria-hidden="true" />
+        </button>
       </div>
     </header>
     <div class="editor-content">
-      <div class="editor-toolbar range-toolbar">
-        <span class="editor-context-label">按日期降序</span>
-        <button class="preview-toggle" :aria-pressed="preview" @click="emit('update:preview', !preview)">
-          <Transition name="button-label" mode="out-in"
-            ><span :key="String(preview)">{{ preview ? '原文' : '预览' }}</span></Transition
-          >
-        </button>
-      </div>
-      <div class="range-overview-body">
+      <div class="range-overview-body" @scroll.passive="onScroll">
         <Transition name="content-fade" mode="out-in">
           <div :key="loading ? 'loading' : error ? 'error' : 'documents'" class="range-content">
             <div v-if="loading" class="range-state"><PhCircleNotch class="spin" :size="17" />正在载入所选日报…</div>

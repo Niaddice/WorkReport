@@ -313,12 +313,9 @@ describe('function rail', () => {
       '设置',
     ])
 
-    await buttons[0]!.trigger('click')
-    await buttons[2]!.trigger('click')
-    await buttons[6]!.trigger('click')
-    await buttons[7]!.trigger('click')
-    await buttons[8]!.trigger('click')
-    await buttons[9]!.trigger('click')
+    for (const label of ['日历', '数据概览', '布局', '切换皮肤', '刷新', '设置']) {
+      await wrapper.get(`[aria-label="${label}"]`).trigger('click')
+    }
     expect(wrapper.emitted('module')).toEqual([['calendar'], ['overview']])
     expect(wrapper.emitted('layout')).toHaveLength(1)
     expect(wrapper.emitted('skin')).toHaveLength(1)

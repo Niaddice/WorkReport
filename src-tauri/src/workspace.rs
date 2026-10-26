@@ -134,7 +134,13 @@ fn entry_preview(path: &Path) -> String {
 }
 impl Workspace {
     pub fn open(path: &str) -> Result<Self, String> {
-        let root = fs::canonicalize(path).map_err(io_error)?;
+        let root = fs::canonicalize(path).map_err(|error| {
+            if error.kind() == std::io::ErrorKind::NotFound {
+                "工作空间目录已不存在，请重新选择文件夹。".to_string()
+            } else {
+                io_error(error)
+            }
+        })?;
         if !root.is_dir() {
             return Err("请选择一个文件夹作为工作空间".into());
         }
@@ -948,6 +954,14 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let workspace = Workspace::open(dir.path().to_str().unwrap()).unwrap();
         (dir, workspace)
+    }
+    #[test]
+    fn missing_workspace_prompts_for_another_directory() {
+        let dir = TempDir::new().unwrap();
+        let missing = dir.path().join("missing-workspace");
+        let error = Workspace::open(missing.to_str().unwrap()).err().unwrap();
+        assert_eq!(error, "工作空间目录已不存在，请重新选择文件夹。");
+        assert!(!missing.exists());
     }
     fn entry_file(dir: &TempDir, date: &str, format: Format) -> std::path::PathBuf {
         dir.path()

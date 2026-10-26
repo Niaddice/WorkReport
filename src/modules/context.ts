@@ -6,6 +6,7 @@ import type { useAi } from '../lib/ai'
 import type { useHolidays } from '../lib/holidays'
 import type { useExcel } from '../lib/useExcel'
 import type { useSummaryOutput } from '../lib/useSummaryOutput'
+import type { useJournalPreview } from '../lib/useJournalPreview'
 
 export type JournalStore = ReturnType<typeof useJournal>
 export type AiStore = ReturnType<typeof useAi>
@@ -70,6 +71,7 @@ export interface ModuleContext {
   rangeLoading: Ref<boolean>
   rangeError: Ref<string>
   editorPreview: Ref<boolean>
+  journalPreview: ReturnType<typeof useJournalPreview>
   calendar: Ref<CalendarHandle | null>
   editor: Ref<EditorHandle | null>
   actions: ModuleActions

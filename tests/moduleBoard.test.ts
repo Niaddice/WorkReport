@@ -51,6 +51,13 @@ function fakeContext() {
     rangeLoading: ref(false),
     rangeError: ref(''),
     editorPreview: ref(false),
+    journalPreview: {
+      available: computed(() => false),
+      visible: ref(false),
+      sourceKey: computed(() => ''),
+      scrollPosition: ref(null),
+      toggle: noop,
+    },
     calendar: ref(null),
     editor: ref(null),
     actions: {

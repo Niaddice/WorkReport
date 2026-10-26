@@ -89,7 +89,7 @@ impl Default for Settings {
             user: String::new(),
             password: String::new(),
             tls_mode: TlsMode::Preferred,
-            default_format: crate::workspace::Format::Md,
+            default_format: crate::workspace::Format::Txt,
             history_limit_bytes: DEFAULT_HISTORY_LIMIT_BYTES,
         }
     }
@@ -605,8 +605,15 @@ mod tests {
         assert_eq!(restored.engine, Engine::Sqlite);
         assert_eq!(restored.mode, Mode::Dual);
         assert_eq!(restored.sqlite_path, "workreport.sqlite");
+        assert_eq!(restored.default_format, Format::Txt);
         let secret = Settings { password: "do-not-print-this".into(), ..restored };
         assert!(!format!("{secret:?}").contains("do-not-print-this"));
+    }
+
+    #[test]
+    fn keeps_an_explicit_markdown_default() {
+        let restored: Settings = serde_json::from_str(r#"{"defaultFormat":"md"}"#).unwrap();
+        assert_eq!(restored.default_format, Format::Md);
     }
 
     #[test]

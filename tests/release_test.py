@@ -184,6 +184,11 @@ class ReleaseTest(unittest.TestCase):
         self.assertEqual(self.real_git('--git-dir', str(self.remote), 'rev-parse', 'main').strip(), self.real_git('-C', str(self.project), 'rev-parse', 'v0.2.0^{commit}').strip())
 
     def test_default_version_increments_and_explicit_duplicate_is_rejected(self):
+        # Keep this scenario independent of the application's current release version.
+        manifest = self.project / 'package.json'
+        package = json.loads(manifest.read_text())
+        package['version'] = '0.1.0'
+        manifest.write_text(json.dumps(package))
         self.run_release()
         self.run_release()
         self.assertEqual(set(self.state()), {'v0.1.0', 'v0.1.1'})
