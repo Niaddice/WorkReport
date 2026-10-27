@@ -4,9 +4,10 @@ import { cloneAiSettings, type AiSettings } from './ai'
 import { cloneExcelSettings, type ExcelSettings } from './useExcel'
 import type { SummaryOutputSettings } from './useSummaryOutput'
 import { cloneDatabaseSettings, type DatabaseSettings } from './database'
+import type { RailSide } from './useAppearance'
 
 export interface WorkspaceSettings {
-  appearance: { scale: number }
+  appearance: { scale: number; rail: RailSide }
   ai: AiSettings
   excel: ExcelSettings
   summary: SummaryOutputSettings
@@ -15,7 +16,7 @@ export interface WorkspaceSettings {
 
 export function cloneWorkspaceSettings(value: WorkspaceSettings): WorkspaceSettings {
   return {
-    appearance: { scale: value.appearance.scale },
+    appearance: { scale: value.appearance.scale, rail: value.appearance.rail },
     ai: cloneAiSettings(value.ai),
     excel: cloneExcelSettings(value.excel),
     summary: { outputDirectory: value.summary.outputDirectory },

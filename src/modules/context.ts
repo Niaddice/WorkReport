@@ -27,6 +27,8 @@ export interface EditorHandle {
 /** 模块可以调用的页面级动作；所有状态写入仍由 composable 统一处理。 */
 export interface ModuleActions {
   selectDate(date: string): Promise<void>
+  /** 目录模块专用：先解除框选再聚焦单日，保证各模块同步到同一篇日报。 */
+  selectReport(date: string): Promise<void>
   loadRange(dates: string[]): Promise<void>
   requestSummary(dates: string[]): Promise<void>
   generateSummary(): void

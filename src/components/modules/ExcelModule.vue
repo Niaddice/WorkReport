@@ -4,7 +4,7 @@ import dayjs from 'dayjs'
 import { PhArrowClockwise, PhCircleNotch, PhFileXls, PhFolderOpen, PhMicrosoftExcelLogo } from '@phosphor-icons/vue'
 import ExcelPreviewDialog from '../ExcelPreviewDialog.vue'
 import ExcelExportPreviewDialog from '../ExcelExportPreviewDialog.vue'
-import { sameWeekRange, type ExcelExportFile } from '../../lib/useExcel'
+import { reportOverlapsRange, sameWeekRange, type ExcelExportFile } from '../../lib/useExcel'
 import { pushMessage } from '../../lib/messages'
 import { useModuleContext } from '../../modules/context'
 
@@ -44,6 +44,15 @@ const dates = computed(() => {
   return Array.from({ length: 7 }, (_, index) => start.add(index, 'day').format('YYYYMMDD'))
 })
 const scopeLabel = computed(() => rangeLabel(dates.value))
+
+/** 自动筛选出与当前日期范围（自然周或框选）有交集的周报；无法识别日期范围的文件仍保留显示。 */
+const visibleExports = computed(() => {
+  const current = dates.value
+  if (!current.length) return exports.value
+  const start = current[0]!
+  const end = current[current.length - 1]!
+  return exports.value.filter((file) => reportOverlapsRange(file.filename, start, end))
+})
 const localBlockedReason = computed(() => {
   if (!sameWeekRange(dates.value)) return '仅支持同一周内的日期范围（周一至周日），包括没有日报的所选日期。'
   if (!defaultProvider.value) return '请先在设置中配置并选择默认 AI。'
@@ -150,32 +159,45 @@ function formatSize(value: number) {
       />
     </div>
     <div v-else class="excel-module-main">
-      <p class="excel-module-range">
-        <span>日期范围</span>
-        <strong>{{ scopeLabel }}</strong>
-        <span class="excel-module-range-days">{{ dates.length }} 天</span>
-      </p>
-      <div class="excel-module-actions" role="group" aria-label="Excel 周报操作">
-        <button
-          type="button"
-          class="excel-generate-button"
-          :disabled="preparing || exporting || settingsLoading || disabled"
-          :title="blockedReason || '调用默认 AI 生成填充预览'"
-          @click="prepare"
-        >
-          <PhCircleNotch v-if="preparing" class="spin" :size="15" aria-hidden="true" />
-          <PhFileXls v-else :size="15" aria-hidden="true" />
-          <span>Xls</span>
-        </button>
-        <button type="button" class="excel-text-button" :disabled="directoryOpening" @click="openDirectory">
-          <PhCircleNotch v-if="directoryOpening" class="spin" :size="14" aria-hidden="true" />
-          <PhFolderOpen v-else :size="14" aria-hidden="true" />
-          <span>打开目录</span>
-        </button>
-        <button type="button" class="excel-text-button" :disabled="exportsLoading" @click="refreshExports">
-          <PhArrowClockwise :size="14" aria-hidden="true" />
-          <span>刷新</span>
-        </button>
+      <div class="excel-module-header">
+        <p class="excel-module-range">
+          <strong>{{ scopeLabel }}</strong>
+          <span class="excel-module-range-days">{{ dates.length }} 天</span>
+        </p>
+        <div class="excel-module-actions" role="group" aria-label="Excel 周报操作">
+          <button
+            type="button"
+            class="excel-generate-button"
+            :disabled="preparing || exporting || settingsLoading || disabled"
+            :title="blockedReason || '调用默认 AI 生成填充预览'"
+            aria-label="生成 Excel 周报"
+            @click="prepare"
+          >
+            <PhCircleNotch v-if="preparing" class="spin" :size="15" aria-hidden="true" />
+            <PhFileXls v-else :size="15" aria-hidden="true" />
+          </button>
+          <button
+            type="button"
+            class="excel-text-button"
+            :disabled="directoryOpening"
+            aria-label="打开输出目录"
+            title="打开输出目录"
+            @click="openDirectory"
+          >
+            <PhCircleNotch v-if="directoryOpening" class="spin" :size="14" aria-hidden="true" />
+            <PhFolderOpen v-else :size="14" aria-hidden="true" />
+          </button>
+          <button
+            type="button"
+            class="excel-text-button"
+            :disabled="exportsLoading"
+            aria-label="刷新已导出周报"
+            title="刷新已导出周报"
+            @click="refreshExports"
+          >
+            <PhArrowClockwise :size="14" aria-hidden="true" />
+          </button>
+        </div>
       </div>
       <p v-if="blockedReason" class="excel-module-hint">{{ blockedReason }}</p>
       <p v-else-if="preparing" class="excel-module-hint">
@@ -189,8 +211,9 @@ function formatSize(value: number) {
         <p v-if="exportsLoading" class="excel-exports-state">正在读取已导出周报…</p>
         <p v-else-if="exportsError" class="excel-exports-state error-text" role="alert">{{ exportsError }}</p>
         <p v-else-if="!exports.length" class="excel-exports-state">暂无已导出的周报</p>
+        <p v-else-if="!visibleExports.length" class="excel-exports-state">当前选择日期没有对应的周报</p>
         <ul v-else class="excel-export-list">
-          <li v-for="file in exports" :key="file.path">
+          <li v-for="file in visibleExports" :key="file.path">
             <button type="button" class="excel-export-item" :title="file.path" @click="previewExport(file)">
               <PhMicrosoftExcelLogo :size="16" aria-hidden="true" />
               <span class="excel-export-name">{{ file.filename }}</span>

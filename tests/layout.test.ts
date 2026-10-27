@@ -11,7 +11,9 @@ import {
   insertLayoutModuleAtGutter,
   layoutGeometry,
   layoutIds,
+  moveLayoutModuleToEdge,
   normalizeUiPreferences,
+  prependLayoutModule,
   removeLayoutModule,
   resizeLayoutLocally,
   setSplitRatio,
@@ -45,6 +47,7 @@ describe('default preferences and cloning', () => {
     expect(DEFAULT_UI_PREFERENCES).toEqual({
       layout: split('row', 0.5, leaf('calendar'), leaf('editor')),
       skin: 'default',
+      savedLayouts: [],
     })
   })
 
@@ -73,7 +76,7 @@ describe('normalizeUiPreferences', () => {
     const layout = split('column', 0.3, split('row', 0.7, leaf('calendar'), leaf('overview')), leaf('editor'))
     const before = snapshot(layout)
     const normalized = normalizeUiPreferences({ layout, skin: 'default' })
-    expect(normalized).toEqual({ layout, skin: 'default' })
+    expect(normalized).toEqual({ layout, skin: 'default', savedLayouts: [] })
     expect(normalized.layout).not.toBe(layout)
     expect(snapshot(layout)).toBe(before)
   })
@@ -83,7 +86,7 @@ describe('normalizeUiPreferences', () => {
       layout: split('row', 0.02, leaf('calendar'), split('column', 9, leaf('editor'), leaf('overview'))),
     })
     expect(clamped.layout).toEqual(
-      split('row', 0.12, leaf('calendar'), split('column', 0.88, leaf('editor'), leaf('overview'))),
+      split('row', 0.02, leaf('calendar'), split('column', 0.99, leaf('editor'), leaf('overview'))),
     )
 
     const fallback = normalizeUiPreferences({
@@ -122,6 +125,27 @@ describe('normalizeUiPreferences', () => {
     expect(normalized.skin).toBe('default')
     expect(ids(normalized.layout)).toEqual(['overview'])
   })
+
+  it('keeps valid saved layouts and filters damaged, empty or duplicate names', () => {
+    const normalized = normalizeUiPreferences({
+      layout: leaf('calendar'),
+      skin: 'default',
+      savedLayouts: [
+        { name: '工作布局', layout: leaf('overview') },
+        { name: '  每日  ', layout: split('row', 0.5, leaf('calendar'), leaf('editor')) },
+        { name: '空布局', layout: null },
+        { name: '重复', layout: leaf('history') },
+        { name: '重复', layout: leaf('summary') },
+        { name: '   ', layout: leaf('excel') },
+        { name: '非法布局', layout: rawLeaf('bogus') },
+      ],
+    })
+    expect(normalized.savedLayouts).toEqual([
+      { name: '工作布局', layout: leaf('overview') },
+      { name: '每日', layout: split('row', 0.5, leaf('calendar'), leaf('editor')) },
+      { name: '重复', layout: leaf('history') },
+    ])
+  })
 })
 
 describe('legacy layout migration', () => {
@@ -134,6 +158,7 @@ describe('legacy layout migration', () => {
     expect(normalized).toEqual({
       layout: split('column', 0.5, split('row', 0.5, leaf('calendar'), leaf('editor')), leaf('overview')),
       skin: 'default',
+      savedLayouts: [],
     })
   })
 
@@ -152,10 +177,12 @@ describe('legacy layout migration', () => {
     expect(normalizeUiPreferences({ axis: 'row', order: ['editor', 'calendar'], skin: 'default' })).toEqual({
       layout: split('row', 0.5, leaf('editor'), leaf('calendar')),
       skin: 'default',
+      savedLayouts: [],
     })
     expect(normalizeUiPreferences({ axis: 'column', order: ['editor', 'calendar'], skin: 'default' })).toEqual({
       layout: split('column', 0.5, leaf('editor'), leaf('calendar')),
       skin: 'default',
+      savedLayouts: [],
     })
   })
 
@@ -257,6 +284,43 @@ describe('appendLayoutModule', () => {
   })
 })
 
+describe('prependLayoutModule', () => {
+  it('wraps the root in a row split and keeps the new module leftmost', () => {
+    expect(prependLayoutModule(leaf('calendar'), 'editor')).toEqual(split('row', 0.5, leaf('editor'), leaf('calendar')))
+
+    const base = split('row', 0.5, leaf('calendar'), leaf('editor'))
+    expect(prependLayoutModule(base, 'overview')).toEqual(split('row', 1 / 3, leaf('overview'), base))
+    expect(ids(prependLayoutModule(base, 'overview'))).toEqual(['overview', 'calendar', 'editor'])
+
+    const nested = split('column', 0.5, split('row', 0.5, leaf('calendar'), leaf('editor')), leaf('overview'))
+    expect(prependLayoutModule(nested, 'history')).toEqual(split('row', 1 / 4, leaf('history'), nested))
+  })
+
+  it('returns a single leaf for null and ignores duplicates', () => {
+    expect(prependLayoutModule(null, 'history')).toEqual(leaf('history'))
+    const layout = leaf('calendar')
+    expect(prependLayoutModule(layout, 'calendar')).toBe(layout)
+  })
+})
+
+describe('moveLayoutModuleToEdge', () => {
+  const base = split('row', 0.5, leaf('calendar'), split('row', 0.5, leaf('editor'), leaf('overview')))
+
+  it('moves a module to the far left column', () => {
+    const moved = moveLayoutModuleToEdge(base, 'overview', 'left')
+    expect(ids(moved)).toEqual(['overview', 'calendar', 'editor'])
+  })
+
+  it('moves a module to the far right column', () => {
+    const moved = moveLayoutModuleToEdge(base, 'calendar', 'right')
+    expect(ids(moved)).toEqual(['editor', 'overview', 'calendar'])
+  })
+
+  it('returns the original tree when the module is absent or already at the edge', () => {
+    expect(moveLayoutModuleToEdge(base, 'history', 'left')).toBe(base)
+  })
+})
+
 describe('splitLayout', () => {
   const base = split('row', 0.5, leaf('calendar'), leaf('editor'))
 
@@ -312,8 +376,8 @@ describe('setSplitRatio', () => {
   })
 
   it('clamps ratios and ignores invalid paths', () => {
-    expect((setSplitRatio(layout, [], 0.01) as LayoutSplit).ratio).toBe(0.12)
-    expect((setSplitRatio(layout, [], 9) as LayoutSplit).ratio).toBe(0.88)
+    expect((setSplitRatio(layout, [], 0.005) as LayoutSplit).ratio).toBe(0.01)
+    expect((setSplitRatio(layout, [], 9) as LayoutSplit).ratio).toBe(0.99)
     expect(setSplitRatio(layout, [0, 0], 0.6)).toBe(layout)
     expect(setSplitRatio(layout, [2], 0.6)).toBe(layout)
     expect(setSplitRatio(layout, [], 0.5)).toBe(layout)
@@ -480,12 +544,13 @@ describe('drop targeting helpers', () => {
 describe('clampSplitRatio', () => {
   it('keeps ratios inside the safe range', () => {
     expect(clampSplitRatio(0.5)).toBe(0.5)
+    expect(clampSplitRatio(0.01)).toBe(0.01)
     expect(clampSplitRatio(0.12)).toBe(0.12)
-    expect(clampSplitRatio(0.88)).toBe(0.88)
-    expect(clampSplitRatio(0)).toBe(0.12)
-    expect(clampSplitRatio(-3)).toBe(0.12)
-    expect(clampSplitRatio(1)).toBe(0.88)
-    expect(clampSplitRatio(9)).toBe(0.88)
+    expect(clampSplitRatio(0.99)).toBe(0.99)
+    expect(clampSplitRatio(0)).toBe(0.01)
+    expect(clampSplitRatio(-3)).toBe(0.01)
+    expect(clampSplitRatio(1)).toBe(0.99)
+    expect(clampSplitRatio(9)).toBe(0.99)
     expect(clampSplitRatio(Number.NaN)).toBe(0.5)
   })
 })

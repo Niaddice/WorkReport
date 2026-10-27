@@ -1,7 +1,7 @@
 import { computed, ref } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 
-export type ProviderKind = 'codex' | 'claude' | 'opencode' | 'http'
+export type ProviderKind = 'codex' | 'claude' | 'opencode' | 'http' | 'anthropic'
 export interface AiProvider {
   id: string
   name: string
@@ -40,7 +40,8 @@ export type SummaryMode = 'ai' | 'direct' | ''
 export const aiApi = {
   load: () => invoke<AiSettings>('load_ai_settings'),
   detect: () => invoke<DetectedCli[]>('detect_ai_clis'),
-  models: (baseUrl: string, apiKey: string) => invoke<AiModel[]>('list_ai_models', { baseUrl, apiKey }),
+  models: (baseUrl: string, apiKey: string, kind: ProviderKind) =>
+    invoke<AiModel[]>('list_ai_models', { baseUrl, apiKey, kind }),
   cliModels: (kind: ProviderKind, executable: string) => invoke<AiModel[]>('list_cli_models', { kind, executable }),
   summarize: (content: string, requestId: string) => invoke<string>('summarize_entries', { content, requestId }),
   cancel: (requestId: string) => invoke<void>('cancel_ai', { requestId }),

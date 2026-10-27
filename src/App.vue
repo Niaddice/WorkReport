@@ -69,7 +69,7 @@ const holidayReady = ref(false)
 const { settings: summaryOutputSettings } = summaryOutput
 const summaryWorkspacePath = ref('')
 const { settings: excelSettings, preparing: excelPreparing, exporting: excelExporting } = excel
-const { scale: appearanceScale, loading: appearanceLoading, error: appearanceError } = appearance
+const { scale: appearanceScale, rail: appearanceRail, loading: appearanceLoading, error: appearanceError } = appearance
 watch(
   appearanceScale,
   (scale) => {
@@ -121,7 +121,7 @@ watch(
 )
 
 const workspaceSettings = computed<WorkspaceSettings>(() => ({
-  appearance: { scale: appearanceScale.value },
+  appearance: { scale: appearanceScale.value, rail: appearanceRail.value },
   ai: aiSettings.value,
   excel: excelSettings.value,
   summary: summaryOutputSettings.value,
@@ -157,7 +157,7 @@ const moduleLayout = useModuleLayout({
   },
   workspacePath: () => workspace.value?.path ?? null,
 })
-const { layout: layoutTree, items: layoutItems, skin: activeSkin } = moduleLayout
+const { layout: layoutTree, items: layoutItems, skin: activeSkin, savedLayouts } = moduleLayout
 const layoutDialog = ref<InstanceType<typeof LayoutDialog>>()
 const moduleBoard = ref<InstanceType<typeof ModuleBoard>>()
 const calendarHandle = ref<CalendarHandle | null>(null)
@@ -212,17 +212,38 @@ function splitModule(dragged: ModuleId, target: ModuleId, side: DropSide) {
 function insertModuleAtGutter(dragged: ModuleId, path: number[]) {
   moduleLayout.insertAtGutter(dragged, path)
 }
+function moveModuleToEdge(dragged: ModuleId, side: 'left' | 'right') {
+  moduleLayout.moveToEdge(dragged, side)
+}
 function resizeModules(path: number[], ratio: number) {
   moduleLayout.resize(path, ratio)
 }
 function resetLayout() {
   moduleLayout.reset()
 }
+function saveCurrentLayout(name: string) {
+  moduleLayout.saveLayout(name)
+}
+function applySavedLayout(name: string) {
+  moduleLayout.applySavedLayout(name)
+}
+function removeSavedLayout(name: string) {
+  moduleLayout.removeSavedLayout(name)
+}
 function openSkinDialog() {
   skinDialog.value?.open()
 }
 function closeSkinDialog() {
   void skinDialog.value?.close()
+}
+/** 目录模块里点单篇表示聚焦这一天：先解除框选，避免总结 / Excel 仍按旧范围统计。 */
+async function selectReport(date: string) {
+  if (date === selectedDate.value) return
+  if (rangeDates.value.length) {
+    calendarHandle.value?.clearRange()
+    clearRange()
+  }
+  await selectDate(date)
 }
 function applySkin(id: SkinId) {
   moduleLayout.setSkin(id)
@@ -821,6 +842,7 @@ async function startAiSummary() {
 const moduleDisabled = computed(() => busy.value || requestingAi.value)
 const moduleActions: ModuleActions = {
   selectDate,
+  selectReport,
   loadRange,
   requestSummary,
   generateSummary: () => {
@@ -1059,7 +1081,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="app-shell" :class="{ 'has-native-titlebar': nativeApp && isMac }">
+  <div class="app-shell" :class="{ 'has-native-titlebar': nativeApp && isMac, 'rail-left': appearanceRail === 'left' }">
     <div class="app-main">
       <AppToolbar
         :page="page"
@@ -1117,6 +1139,7 @@ onBeforeUnmount(() => {
               :workspace-path="workspace.path"
               @split="splitModule"
               @insert="insertModuleAtGutter"
+              @edge="moveModuleToEdge"
               @resize="resizeModules"
               @remove="removeModule"
             />
@@ -1183,7 +1206,15 @@ onBeforeUnmount(() => {
         @cancel="cancelConfirm"
       />
       <SkinDialog ref="skinDialog" :active="activeSkin" @select="applySkin" @close="closeSkinDialog" />
-      <LayoutDialog ref="layoutDialog" @reset="resetLayout" @close="closeLayoutDialog" />
+      <LayoutDialog
+        ref="layoutDialog"
+        :saved-layouts="savedLayouts"
+        @reset="resetLayout"
+        @save="saveCurrentLayout"
+        @apply="applySavedLayout"
+        @remove="removeSavedLayout"
+        @close="closeLayoutDialog"
+      />
       <JournalPreviewWindow
         :visible="journalPreview.visible.value && page === 'home' && !!workspace"
         :top-inset="nativeApp && isMac ? 36 : 0"

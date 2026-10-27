@@ -41,6 +41,15 @@ pub struct Entry {
 }
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct FileNode {
+    /// 相对工作空间根目录的路径，用 `/` 分隔（根目录项不含前缀）。
+    pub path: String,
+    pub name: String,
+    pub is_dir: bool,
+    pub size: u64,
+}
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Preview {
     pub date: String,
     pub preview: String,
@@ -91,6 +100,37 @@ pub struct TransferResult {
 }
 fn io_error(error: std::io::Error) -> String {
     format!("无法访问工作空间文件：{error}")
+}
+/// 隐藏文件（`.` 开头）与系统垃圾文件，列目录时跳过。
+fn hidden_name(name: &str) -> bool {
+    name.starts_with('.') || matches!(name, "Thumbs.db" | "desktop.ini")
+}
+/// 深度优先收集目录下的文件与子目录；`base` 为空表示工作空间根目录。
+fn collect_directory(path: &Path, base: &str, nodes: &mut Vec<FileNode>) -> Result<(), String> {
+    for entry in fs::read_dir(path).map_err(io_error)? {
+        let entry = entry.map_err(io_error)?;
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if base.is_empty() && name == crate::settings::FILE_NAME {
+            continue;
+        }
+        if hidden_name(&name) {
+            continue;
+        }
+        let file_type = entry.file_type().map_err(io_error)?;
+        let rel = if base.is_empty() {
+            name.clone()
+        } else {
+            format!("{base}/{name}")
+        };
+        if file_type.is_dir() {
+            nodes.push(FileNode { path: rel.clone(), name, is_dir: true, size: 0 });
+            collect_directory(&entry.path(), &rel, nodes)?;
+        } else if file_type.is_file() {
+            let size = entry.metadata().map(|metadata| metadata.len()).unwrap_or(0);
+            nodes.push(FileNode { path: rel, name, is_dir: false, size });
+        }
+    }
+    Ok(())
 }
 const PREVIEW_BYTES: u64 = 16 * 1024;
 fn valid_date(date: &str) -> Result<NaiveDate, String> {
@@ -547,6 +587,13 @@ impl Workspace {
         }).collect())
     }
 
+    /// 列出工作空间下除设置文件外的全部文件与目录（用于目录树展示）。
+    pub fn list_workspace_files(&mut self) -> Result<Vec<FileNode>, String> {
+        let mut nodes = Vec::new();
+        collect_directory(&self.root, "", &mut nodes)?;
+        Ok(nodes)
+    }
+
     pub fn previews(&mut self, dates: &[String]) -> Result<Vec<Preview>, String> {
         if !self.database_only() { return self.previews_files(dates); }
         let database = self.connected_database()?;
@@ -962,6 +1009,33 @@ mod tests {
         let error = Workspace::open(missing.to_str().unwrap()).err().unwrap();
         assert_eq!(error, "工作空间目录已不存在，请重新选择文件夹。");
         assert!(!missing.exists());
+    }
+    #[test]
+    fn listing_workspace_files_skips_settings_and_hidden_entries() {
+        let (dir, mut workspace) = setup();
+        let root = dir.path();
+        fs::create_dir_all(root.join("2026")).unwrap();
+        fs::create_dir_all(root.join("总结")).unwrap();
+        fs::create_dir_all(root.join(".history")).unwrap();
+        fs::write(root.join("workreport.json"), "{}").unwrap();
+        fs::write(root.join(".DS_Store"), "").unwrap();
+        fs::write(root.join(".history").join("snapshot.md"), "").unwrap();
+        fs::write(root.join("notes.md"), "").unwrap();
+        fs::write(root.join("2026").join("20261027.md"), "").unwrap();
+        fs::write(root.join("总结").join("周报.md"), "").unwrap();
+
+        let paths: Vec<String> = workspace
+            .list_workspace_files()
+            .unwrap()
+            .into_iter()
+            .map(|node| node.path)
+            .collect();
+        for expected in ["2026", "2026/20261027.md", "notes.md", "总结", "总结/周报.md"] {
+            assert!(paths.contains(&expected.to_string()), "缺少 {expected}");
+        }
+        for skipped in ["workreport.json", ".DS_Store", ".history", ".history/snapshot.md"] {
+            assert!(!paths.contains(&skipped.to_string()), "不应出现 {skipped}");
+        }
     }
     fn entry_file(dir: &TempDir, date: &str, format: Format) -> std::path::PathBuf {
         dir.path()

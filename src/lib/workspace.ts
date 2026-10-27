@@ -10,6 +10,13 @@ export interface Entry {
   filename: string
   format: FileFormat
 }
+/** 工作空间目录树里的一个节点（文件或目录），path 相对工作空间根目录。 */
+export interface FileNode {
+  path: string
+  name: string
+  isDir: boolean
+  size: number
+}
 export interface Preview {
   date: string
   preview: string
@@ -28,6 +35,7 @@ export const api = {
     invoke<Workspace>('open_workspace', { path, ...(syncSettingsFrom ? { syncSettingsFrom } : {}) }),
   openDirectory: () => invoke<void>('open_workspace_directory'),
   list: () => invoke<Entry[]>('list_entries'),
+  listWorkspaceFiles: () => invoke<FileNode[]>('list_workspace_files'),
   backupWarning: () => invoke<string | null>('database_backup_warning'),
   retryBackup: (workspacePath: string) => invoke<unknown>('retry_database_backup', { workspacePath }),
   previews: (dates: string[]) => invoke<Preview[]>('list_previews', { dates }),

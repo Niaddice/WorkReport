@@ -12,7 +12,7 @@ mod workspace;
 use std::{fs, io::Write, sync::{Arc, Mutex}};
 use tauri::{Emitter, Manager, State};
 use tauri_plugin_opener::OpenerExt;
-use workspace::{Document, Entry, Format, Preview, Workspace, WorkspaceInfo};
+use workspace::{Document, Entry, FileNode, Format, Preview, Workspace, WorkspaceInfo};
 
 #[derive(Default)]
 struct AppState(Arc<Mutex<Option<Workspace>>>);
@@ -173,6 +173,11 @@ async fn open_workspace(
 #[tauri::command]
 async fn list_entries(state: State<'_, AppState>) -> Result<Vec<Entry>, String> {
     run_workspace(state.0.clone(), Workspace::list).await
+}
+
+#[tauri::command]
+async fn list_workspace_files(state: State<'_, AppState>) -> Result<Vec<FileNode>, String> {
+    run_workspace(state.0.clone(), Workspace::list_workspace_files).await
 }
 
 #[tauri::command]
@@ -762,12 +767,48 @@ async fn read_excel_export(
     .await
 }
 #[tauri::command]
+async fn read_workspace_excel(
+    workspace_state: State<'_, AppState>,
+    workspace_path: String,
+    path: String,
+) -> Result<excel::ExportPreview, String> {
+    run_workspace(workspace_state.0.clone(), move |workspace| {
+        summary::validate_workspace(workspace.root(), &workspace_path)?;
+        let root = std::fs::canonicalize(workspace.root()).map_err(|_| "工作空间目录不存在".to_string())?;
+        let target = std::fs::canonicalize(root.join(&path)).map_err(|_| "Excel 文件不存在".to_string())?;
+        if !target.starts_with(&root) {
+            return Err("只能预览工作空间内的文件".into());
+        }
+        let is_xlsx = target
+            .extension()
+            .and_then(|value| value.to_str())
+            .is_some_and(|value| value.eq_ignore_ascii_case("xlsx"));
+        if !is_xlsx {
+            return Err("仅支持预览 .xlsx 文件".into());
+        }
+        let sheets = excel::read_export(&target)?;
+        Ok(excel::ExportPreview {
+            filename: target
+                .file_name()
+                .and_then(|value| value.to_str())
+                .unwrap_or_default()
+                .to_string(),
+            path: target.to_string_lossy().into_owned(),
+            sheets,
+        })
+    })
+    .await
+}
+#[tauri::command]
 async fn detect_ai_clis() -> Vec<ai::DetectedCli> {
     ai::detect().await
 }
 #[tauri::command]
-async fn list_ai_models(base_url: String, api_key: String) -> Result<Vec<ai::ModelInfo>, String> {
-    ai::list_models(&base_url, &api_key).await
+async fn list_ai_models(base_url: String, api_key: String, kind: ai::ProviderKind) -> Result<Vec<ai::ModelInfo>, String> {
+    match kind {
+        ai::ProviderKind::Anthropic => ai::list_anthropic_models(&base_url, &api_key).await,
+        _ => ai::list_models(&base_url, &api_key).await,
+    }
 }
 #[tauri::command]
 async fn list_cli_models(
@@ -892,6 +933,7 @@ pub fn run() {
             open_workspace,
             open_workspace_directory,
             list_entries,
+            list_workspace_files,
             list_previews,
             read_entry,
             create_entry,
@@ -920,6 +962,7 @@ pub fn run() {
             discard_excel_preview,
             list_excel_exports,
             read_excel_export,
+            read_workspace_excel,
             detect_ai_clis,
             list_ai_models,
             list_cli_models,

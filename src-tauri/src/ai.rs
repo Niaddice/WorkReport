@@ -18,6 +18,7 @@ pub enum ProviderKind {
     Claude,
     Opencode,
     Http,
+    Anthropic,
 }
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -105,8 +106,12 @@ pub fn validate(settings: &Settings) -> Result<(), String> {
         {
             return Err("AI 名称不能为空，配置标识不能重复".into());
         }
-        if provider.kind == ProviderKind::Http {
-            endpoint(&provider.base_url)?;
+        if matches!(provider.kind, ProviderKind::Http | ProviderKind::Anthropic) {
+            if provider.kind == ProviderKind::Http {
+                endpoint(&provider.base_url)?;
+            } else {
+                anthropic_endpoint(&provider.base_url)?;
+            }
             if provider.model.trim().is_empty() {
                 return Err("请填写模型 ID".into());
             }
@@ -186,7 +191,7 @@ fn find_cli(kind: &ProviderKind) -> Option<PathBuf> {
         ProviderKind::Codex => "codex",
         ProviderKind::Claude => "claude",
         ProviderKind::Opencode => "opencode",
-        ProviderKind::Http => return None,
+        ProviderKind::Http | ProviderKind::Anthropic => return None,
     };
     let mut candidates: Vec<PathBuf> = search_paths().iter().map(|path| path.join(name)).collect();
     #[cfg(windows)]
@@ -270,6 +275,9 @@ pub async fn detect() -> Vec<DetectedCli> {
 fn endpoint(base: &str) -> Result<reqwest::Url, String> {
     api_endpoint(base, "chat/completions")
 }
+fn anthropic_endpoint(base: &str) -> Result<reqwest::Url, String> {
+    api_endpoint(base, "messages")
+}
 fn api_endpoint(base: &str, resource: &str) -> Result<reqwest::Url, String> {
     let mut url = reqwest::Url::parse(base.trim()).map_err(|_| "接口地址不是有效 URL")?;
     if !matches!(url.scheme(), "http" | "https")
@@ -284,6 +292,7 @@ fn api_endpoint(base: &str, resource: &str) -> Result<reqwest::Url, String> {
     let path = url.path().trim_end_matches('/');
     let root = path
         .strip_suffix("/chat/completions")
+        .or_else(|| path.strip_suffix("/messages"))
         .or_else(|| path.strip_suffix("/models"))
         .unwrap_or(path);
     url.set_path(&format!("{root}/{resource}"));
@@ -371,6 +380,74 @@ pub async fn list_models(base_url: &str, api_key: &str) -> Result<Vec<ModelInfo>
         .await
         .map_err(|_| "模型列表不是有效 JSON，可手动填写模型 ID")?;
     parse_models(&value)
+}
+pub async fn list_anthropic_models(base_url: &str, api_key: &str) -> Result<Vec<ModelInfo>, String> {
+    let url = api_endpoint(base_url, "models")?;
+    let client = http_client(&url, Duration::from_secs(30))?;
+    let mut request = client.get(url);
+    if !api_key.trim().is_empty() {
+        request = request.header("x-api-key", api_key.trim());
+    }
+    let response = request.send().await.map_err(|error| {
+        if error.is_timeout() {
+            "获取模型列表超时，请重试"
+        } else {
+            "无法获取模型列表，请检查接口地址和网络"
+        }
+        .to_string()
+    })?;
+    let status = response.status();
+    if !status.is_success() {
+        let hint = match status.as_u16() {
+            401 | 403 => "请检查 API Key 和访问权限",
+            404 | 405 => "接口可能不支持模型列表，可手动填写模型 ID",
+            429 => "请求过于频繁或额度不足，请稍后重试",
+            _ => "请检查接口地址或稍后重试，也可手动填写模型 ID",
+        };
+        return Err(format!(
+            "获取模型列表失败（HTTP {}），{hint}",
+            status.as_u16()
+        ));
+    }
+    let value: Value = response
+        .json()
+        .await
+        .map_err(|_| "模型列表不是有效 JSON，可手动填写模型 ID")?;
+    parse_anthropic_models(&value)
+}
+fn parse_anthropic_models(value: &Value) -> Result<Vec<ModelInfo>, String> {
+    let data = value
+        .get("data")
+        .and_then(Value::as_array)
+        .ok_or("接口未返回兼容的模型列表，可手动填写模型 ID")?;
+    let mut seen = HashSet::new();
+    let mut models = Vec::new();
+    for item in data {
+        let Some(id) = item
+            .get("id")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|id| !id.is_empty())
+        else {
+            continue;
+        };
+        if !seen.insert(id) {
+            continue;
+        }
+        let name = item
+            .get("display_name")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+            .or_else(|| item.get("name").and_then(Value::as_str).map(str::trim).filter(|name| !name.is_empty()))
+            .unwrap_or(id);
+        models.push(ModelInfo {
+            id: id.into(),
+            name: name.into(),
+        });
+    }
+    models.sort_by(|left, right| left.id.cmp(&right.id));
+    Ok(models)
 }
 fn parse_codex_models(bytes: &[u8]) -> Result<Vec<ModelInfo>, String> {
     let value: Value = serde_json::from_slice(bytes)
@@ -595,6 +672,51 @@ async fn http_completion(
             .ok_or("AI 接口没有返回正文，请确认支持 Chat Completions 协议")?,
     )
 }
+async fn anthropic_completion(provider: &Provider, system: &str, content: &str) -> Result<String, String> {
+    let url = anthropic_endpoint(&provider.base_url)?;
+    let client = http_client(&url, Duration::from_secs(120))?;
+    let mut request = client
+        .post(url)
+        .header("anthropic-version", "2023-06-01")
+        .json(&json!({
+            "model": provider.model.trim(), "max_tokens": 8192,
+            "system": system,
+            "messages": [{"role":"user","content":content}]
+        }));
+    if !provider.api_key.trim().is_empty() {
+        request = request.header("x-api-key", provider.api_key.trim());
+    }
+    let response = request.send().await.map_err(|error| {
+        if error.is_timeout() {
+            "AI 请求超时，请重试"
+        } else {
+            "无法连接 AI 接口，请检查地址和网络"
+        }
+        .to_string()
+    })?;
+    let status = response.status();
+    if !status.is_success() {
+        return Err(format!(
+            "AI 接口返回 HTTP {}，请检查 API Key、模型 ID、额度与接口地址",
+            status.as_u16()
+        ));
+    }
+    let value: Value = response
+        .json()
+        .await
+        .map_err(|_| "AI 接口未返回有效 JSON")?;
+    let text = value["content"]
+        .as_array()
+        .map(|parts| {
+            parts
+                .iter()
+                .filter_map(|part| part["text"].as_str())
+                .collect::<Vec<_>>()
+                .join("\n")
+        })
+        .ok_or("AI 接口没有返回正文，请确认支持 Anthropic Messages 协议")?;
+    clean_result(&text)
+}
 async fn polish_http(
     provider: &Provider,
     content: &str,
@@ -680,7 +802,7 @@ async fn cli_completion(provider: &Provider, prompt: &str, action: &str) -> Resu
             child.args(["run", "--format", "json"]);
             child.env("OPENCODE_CONFIG_CONTENT", r#"{"permission":{"*":"deny"}}"#);
         }
-        ProviderKind::Http => return Err("AI 类型无效".into()),
+        ProviderKind::Http | ProviderKind::Anthropic => return Err("AI 类型无效".into()),
     }
     if !provider.model.trim().is_empty() {
         child.args(["--model", provider.model.trim()]);
@@ -773,7 +895,15 @@ pub async fn polish(
     }
     tokio::select! {
         _ = cancel.cancelled() => Err("已取消 AI 润色".into()),
-        result = timeout(Duration::from_secs(180), async { if provider.kind == ProviderKind::Http { polish_http(provider, content, format, preference).await } else { polish_cli(provider, content, format, preference).await } }) => result.map_err(|_| "AI 调用超时，请重试".to_string())?,
+        result = timeout(Duration::from_secs(180), async {
+            match provider.kind {
+                ProviderKind::Http => polish_http(provider, content, format, preference).await,
+                ProviderKind::Anthropic => {
+                    anthropic_completion(provider, &instructions(format, preference), content).await
+                }
+                _ => polish_cli(provider, content, format, preference).await,
+            }
+        }) => result.map_err(|_| "AI 调用超时，请重试".to_string())?,
     }
 }
 pub async fn summarize(
@@ -792,10 +922,12 @@ pub async fn summarize(
     tokio::select! {
         _ = cancel.cancelled() => Err("已取消 AI 总结".into()),
         result = timeout(Duration::from_secs(180), async {
-            if provider.kind == ProviderKind::Http {
-                summarize_http(provider, content, prompt).await
-            } else {
-                summarize_cli(provider, content, prompt).await
+            match provider.kind {
+                ProviderKind::Http => summarize_http(provider, content, prompt).await,
+                ProviderKind::Anthropic => {
+                    anthropic_completion(provider, &summary_instructions(prompt), content).await
+                }
+                _ => summarize_cli(provider, content, prompt).await,
             }
         }) => result.map_err(|_| "AI 总结超时，请重试".to_string())?,
     }
@@ -825,10 +957,10 @@ pub async fn fill_excel(
         biased;
         _ = cancel.cancelled() => Err("已取消 Excel 输出".into()),
         result = timeout(Duration::from_secs(180), async {
-            if provider.kind == ProviderKind::Http {
-                http_completion(provider, &system, &request).await
-            } else {
-                cli_completion(provider, &format!("{system}\n\nJSON 输入数据：\n{request}"), "Excel 输出").await
+            match provider.kind {
+                ProviderKind::Http => http_completion(provider, &system, &request).await,
+                ProviderKind::Anthropic => anthropic_completion(provider, &system, &request).await,
+                _ => cli_completion(provider, &format!("{system}\n\nJSON 输入数据：\n{request}"), "Excel 输出").await,
             }
         }) => result.map_err(|_| "Excel AI 填表超时，请重试".to_string())?,
     }
@@ -1515,5 +1647,77 @@ done
         );
         assert_eq!(clean_result("```markdown\n# 标题\n```").unwrap(), "# 标题");
         assert!(clean_result(" ").is_err());
+    }
+    #[test]
+    fn anthropic_endpoints_use_messages_and_strip_base_paths() {
+        for base in [
+            "https://api.anthropic.com/v1",
+            "https://api.anthropic.com/v1/",
+        ] {
+            assert_eq!(
+                anthropic_endpoint(base).unwrap().as_str(),
+                "https://api.anthropic.com/v1/messages"
+            );
+        }
+        // 不带 /v1 的地址会按原路径拼接出 /messages，由用户填写完整 base URL。
+        assert_eq!(
+            anthropic_endpoint("https://api.anthropic.com").unwrap().as_str(),
+            "https://api.anthropic.com/messages"
+        );
+        assert_eq!(
+            anthropic_endpoint("https://example.com/v1/messages")
+                .unwrap()
+                .path(),
+            "/v1/messages"
+        );
+        assert!(anthropic_endpoint("https://key@example.com/v1").is_err());
+    }
+    #[test]
+    fn parses_anthropic_model_catalog_with_display_names() {
+        let models = parse_anthropic_models(&json!({"data":[
+            {"id":"claude-b"},
+            {"id":"claude-a","display_name":"Claude A"},
+            {"id":"claude-a"},
+            {"id":"","display_name":"Empty"}
+        ]}))
+        .unwrap();
+        assert_eq!(models.len(), 2);
+        assert_eq!(models[0].id, "claude-a");
+        assert_eq!(models[0].name, "Claude A");
+        assert_eq!(models[1].name, "claude-b");
+        assert!(parse_anthropic_models(&json!({"data":[]})).unwrap().is_empty());
+        assert!(parse_anthropic_models(&json!({"error":"not a list"})).is_err());
+    }
+    #[tokio::test]
+    async fn anthropic_completion_sends_messages_and_reads_text() {
+        let (base_url, server) = mock_server(
+            "200 OK",
+            json!({"content":[{"type":"text","text":"润色后的日报"}]}),
+        );
+        let provider = Provider {
+            id: "mock".into(),
+            name: "Mock".into(),
+            kind: ProviderKind::Anthropic,
+            executable: String::new(),
+            model: "claude-test".into(),
+            base_url,
+            api_key: "fake-key".into(),
+        };
+        assert_eq!(
+            anthropic_completion(&provider, "系统提示", "今日完成测试")
+                .await
+                .unwrap(),
+            "润色后的日报"
+        );
+        let request = server.join().unwrap();
+        assert!(request.starts_with("POST /v1/messages"));
+        let header = request.to_ascii_lowercase();
+        assert!(header.contains("x-api-key: fake-key"));
+        assert!(header.contains("anthropic-version: 2023-06-01"));
+        let body: Value = serde_json::from_str(request.split_once("\r\n\r\n").unwrap().1).unwrap();
+        assert_eq!(body["model"], "claude-test");
+        assert_eq!(body["system"], "系统提示");
+        assert_eq!(body["messages"][0]["content"], "今日完成测试");
+        assert!(body["max_tokens"].is_number());
     }
 }

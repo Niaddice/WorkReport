@@ -84,6 +84,24 @@ export function sameWeekRange(dates: string[]): boolean {
   return true
 }
 
+/**
+ * 周报文件名形如 `周报_20261020-20261026_xxx.xlsx`，解析其中的起止日期；
+ * 无法识别（非标准命名）时返回 null，调用方按“始终显示”处理。
+ */
+export function reportDateRange(filename: string): { start: string; end: string } | null {
+  const match = /^周报_(\d{8})-(\d{8})_/.exec(filename)
+  return match ? { start: match[1]!, end: match[2]! } : null
+}
+
+/**
+ * 判断周报是否与给定的日期范围（闭区间，YYYYMMDD）有交集；
+ * 无法识别日期范围的文件按“始终显示”处理。
+ */
+export function reportOverlapsRange(filename: string, start: string, end: string): boolean {
+  const range = reportDateRange(filename)
+  return !range || (range.start <= end && range.end >= start)
+}
+
 function readPreviewSettings(): ExcelSettings {
   const saved = globalThis.localStorage.getItem(EXCEL_STORAGE_KEY)
   if (!saved) return cloneExcelSettings(DEFAULT_EXCEL_SETTINGS)

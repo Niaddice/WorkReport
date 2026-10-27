@@ -39,6 +39,7 @@ function commandResult(command: string): unknown {
       return { path: DEMO_WORKSPACE, name: 'workreport-module-demo' }
     case 'list_entries':
     case 'list_previews':
+    case 'list_workspace_files':
       return []
     case 'database_backup_warning':
       return null
@@ -564,6 +565,52 @@ describe('modular home integration', () => {
     wrapper.unmount()
   })
 
+  it('adds the directory module and switches dates from the file tree', async () => {
+    const today = dayjs()
+    const yesterday = today.subtract(1, 'day')
+    const twoDaysAgo = today.subtract(2, 'day')
+    const year = today.format('YYYY')
+    const report = (date: ReturnType<typeof dayjs>) => ({
+      date: date.format('YYYYMMDD'),
+      filename: `${date.format('YYYYMMDD')}.md`,
+      format: 'md' as const,
+    })
+    const entries = [report(today), report(yesterday), report(twoDaysAgo)]
+    const files = [
+      { path: year, name: year, isDir: true, size: 0 },
+      ...entries.map((entry) => ({ path: `${year}/${entry.filename}`, name: entry.filename, isDir: false, size: 128 })),
+    ]
+    invoke.mockImplementation(async (command: string, args?: { date?: string }) => {
+      if (command === 'list_entries') return entries
+      if (command === 'list_workspace_files') return files
+      if (command === 'read_entry') {
+        const entry = entries.find((item) => item.date === args?.date)
+        return entry ? { ...entry, content: '', revision: entry.date } : undefined
+      }
+      return commandResult(command)
+    })
+    const wrapper = await openDemoWorkspace()
+    await wrapper.find('.app-rail [aria-label="工作空间目录"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.find('.directory-module').exists()).toBe(true)
+    expect(savedIds()).toContain('directory')
+
+    const items = wrapper.findAll('.directory-item')
+    expect(items).toHaveLength(3)
+    const currentName = `${today.format('YYYYMMDD')}.md`
+    expect(items.find((item) => item.find('.directory-item-name').text() === currentName)!.classes()).toContain(
+      'is-current',
+    )
+
+    const yesterdayName = `${yesterday.format('YYYYMMDD')}.md`
+    await items.find((item) => item.find('.directory-item-name').text() === yesterdayName)!.trigger('click')
+    await flushPromises()
+
+    expect(wrapper.find('.directory-item.is-current').find('.directory-item-name').text()).toBe(yesterdayName)
+    wrapper.unmount()
+  })
+
   it('groups history for the dates selected by dragging in the calendar', async () => {
     const first = dayjs().startOf('month').date(5)
     const middle = first.add(1, 'day')
@@ -741,7 +788,7 @@ describe('modular home integration', () => {
     await flushPromises()
     expect(invoke).toHaveBeenCalledWith('save_workspace_settings', {
       workspacePath: DEMO_WORKSPACE,
-      settings: expect.objectContaining({ appearance: { scale: 110 } }),
+      settings: expect.objectContaining({ appearance: { scale: 110, rail: 'right' } }),
     })
     expect(wrapper.find('.settings-viewport').attributes('inert')).toBeUndefined()
     expect((settings.element as HTMLButtonElement).disabled).toBe(true)
@@ -839,6 +886,25 @@ describe('modular home integration', () => {
     await flushPromises()
     expect(wrapper.find('.module-maximize-backdrop').exists()).toBe(false)
     expect(wrapper.find('.module-panel.is-maximized').exists()).toBe(false)
+    wrapper.unmount()
+  })
+})
+
+describe('rail side preference', () => {
+  it('keeps the rail on the right by default', async () => {
+    const wrapper = await openDemoWorkspace()
+    expect(wrapper.find('.app-shell').classes()).not.toContain('rail-left')
+    expect(wrapper.find('.app-rail').exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('moves the rail to the left when the saved appearance says so', async () => {
+    invoke.mockImplementation(async (command: string) =>
+      command === 'load_appearance_settings' ? { scale: 100, rail: 'left' } : commandResult(command),
+    )
+    const wrapper = await openDemoWorkspace()
+    expect(wrapper.find('.app-shell').classes()).toContain('rail-left')
+    expect(wrapper.find('.app-rail').exists()).toBe(true)
     wrapper.unmount()
   })
 })

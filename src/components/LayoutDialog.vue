@@ -1,11 +1,28 @@
 <script setup lang="ts">
 import { onBeforeUnmount, ref } from 'vue'
-import { PhArrowsInSimple, PhSquaresFour, PhX } from '@phosphor-icons/vue'
+import { PhArrowsInSimple, PhSquaresFour, PhTrashSimple, PhX } from '@phosphor-icons/vue'
 import { createDialogMotion } from '../lib/dialogMotion'
+import type { SavedLayout } from '../modules/types'
 
-const emit = defineEmits<{ reset: []; close: [] }>()
+defineProps<{ savedLayouts: SavedLayout[] }>()
+const emit = defineEmits<{
+  reset: []
+  save: [name: string]
+  apply: [name: string]
+  remove: [name: string]
+  close: []
+}>()
+
 const dialog = ref<HTMLDialogElement>()
 const motion = createDialogMotion(() => dialog.value)
+const name = ref('')
+
+function save() {
+  const value = name.value.trim()
+  if (!value) return
+  emit('save', value)
+  name.value = ''
+}
 
 function open() {
   motion.open()
@@ -39,6 +56,48 @@ onBeforeUnmount(() => motion.dispose())
       </p>
       <p><strong>调整比例</strong>拖动模块间的间隙，或聚焦间隙后按方向键微调。</p>
     </div>
+
+    <section class="layout-dialog-save" aria-label="保存布局">
+      <h3>保存布局</h3>
+      <div class="layout-dialog-save-row">
+        <input
+          v-model="name"
+          type="text"
+          placeholder="输入布局名称"
+          maxlength="50"
+          aria-label="布局名称"
+          @keydown.enter="save"
+        />
+        <button type="button" class="text-action" :disabled="!name.trim()" @click="save">保存当前布局</button>
+      </div>
+    </section>
+
+    <section class="layout-dialog-saved" aria-label="已保存布局">
+      <h3>已保存布局</h3>
+      <p v-if="!savedLayouts.length" class="layout-dialog-saved-empty">还没有保存的布局。</p>
+      <ul v-else class="layout-dialog-saved-list">
+        <li v-for="item in savedLayouts" :key="item.name">
+          <button
+            type="button"
+            class="layout-dialog-saved-item"
+            :title="`切换到「${item.name}」`"
+            @click="emit('apply', item.name)"
+          >
+            {{ item.name }}
+          </button>
+          <button
+            type="button"
+            class="layout-dialog-saved-remove"
+            aria-label="删除布局"
+            title="删除布局"
+            @click="emit('remove', item.name)"
+          >
+            <PhTrashSimple :size="14" aria-hidden="true" />
+          </button>
+        </li>
+      </ul>
+    </section>
+
     <footer class="layout-dialog-actions">
       <button type="button" class="text-action" @click="emit('reset')">
         <PhArrowsInSimple :size="15" aria-hidden="true" />恢复默认布局

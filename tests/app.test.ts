@@ -307,6 +307,7 @@ describe('function rail', () => {
       '历史记录',
       'Excel 周报',
       '总结',
+      '工作空间目录',
       '布局',
       '切换皮肤',
       '刷新',
@@ -348,6 +349,7 @@ describe('layout preferences', () => {
     expect(normalizeUiPreferences({ layout: tree, skin: 'default' })).toEqual({
       layout: tree,
       skin: 'default',
+      savedLayouts: [],
     })
     // 旧 schema 会迁移成树，不再以 columns/modules 出现在运行时模型中。
     const migrated = normalizeUiPreferences({

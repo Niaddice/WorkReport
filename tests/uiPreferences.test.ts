@@ -47,7 +47,7 @@ describe('ui preferences persistence', () => {
       modules: [{ id: 'overview' }],
       skin: 'default',
     }).layout
-    await uiPreferencesApi.save({ layout, skin: 'default' }, '/tmp/preview-workspace')
+    await uiPreferencesApi.save({ layout, skin: 'default', savedLayouts: [] }, '/tmp/preview-workspace')
     const saved = JSON.parse(storage.get(UI_PREFERENCES_STORAGE_KEY) ?? '{}')
     expect(flattenLayout(saved.layout).map((item: { id: string }) => item.id)).toEqual(['overview'])
     expect(saved.skin).toBe('default')
@@ -69,7 +69,7 @@ describe('ui preferences persistence', () => {
       layout: { type: 'leaf', id: 'calendar' },
       skin: 'default',
     }).layout
-    await uiPreferencesApi.save({ layout, skin: 'default' }, '/tmp/demo-workspace')
+    await uiPreferencesApi.save({ layout, skin: 'default', savedLayouts: [] }, '/tmp/demo-workspace')
     expect(vi.mocked(invoke)).toHaveBeenCalledOnce()
     const [command, payload] = vi.mocked(invoke).mock.calls[0] as unknown as [
       string,

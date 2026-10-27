@@ -2,10 +2,12 @@ import { computed, ref } from 'vue'
 import { uiPreferencesApi } from '../lib/uiPreferences'
 import {
   DEFAULT_UI_PREFERENCES,
+  MAX_SAVED_LAYOUTS,
   appendLayoutModule,
   cloneUiPreferences,
   flattenLayout,
   insertLayoutModuleAtGutter,
+  moveLayoutModuleToEdge,
   normalizeUiPreferences,
   removeLayoutModule,
   resizeLayoutLocally,
@@ -38,6 +40,7 @@ export function useModuleLayout(options: ModuleLayoutOptions = {}) {
   const layout = computed(() => preferences.value.layout)
   const items = computed(() => flattenLayout(preferences.value.layout))
   const skin = computed(() => preferences.value.skin)
+  const savedLayouts = computed(() => preferences.value.savedLayouts)
   let revision = 0
   let pendingSaves = 0
   let saveChain: Promise<void> = Promise.resolve()
@@ -135,6 +138,41 @@ export function useModuleLayout(options: ModuleLayoutOptions = {}) {
     return true
   }
 
+  /** 把模块拖到整个模块板的最左或最右一列。 */
+  function moveToEdge(dragged: ModuleId, side: 'left' | 'right'): boolean {
+    const next = moveLayoutModuleToEdge(preferences.value.layout, dragged, side)
+    if (next === preferences.value.layout) return false
+    update({ ...preferences.value, layout: next })
+    return true
+  }
+
+  /** 把当前布局存成命名快照；同名覆盖，超出数量上限时移除最旧的快照。 */
+  function saveLayout(name: string): boolean {
+    const trimmed = name.trim()
+    if (!trimmed) return false
+    const next = preferences.value.savedLayouts.filter((item) => item.name !== trimmed)
+    next.push({ name: trimmed, layout: preferences.value.layout })
+    if (next.length > MAX_SAVED_LAYOUTS) next.shift()
+    update({ ...preferences.value, savedLayouts: next })
+    return true
+  }
+
+  /** 切换到某个已保存的布局快照。 */
+  function applySavedLayout(name: string): boolean {
+    const saved = preferences.value.savedLayouts.find((item) => item.name === name)
+    if (!saved) return false
+    update({ ...preferences.value, layout: saved.layout })
+    return true
+  }
+
+  /** 删除某个已保存的布局快照。 */
+  function removeSavedLayout(name: string): boolean {
+    const next = preferences.value.savedLayouts.filter((item) => item.name !== name)
+    if (next.length === preferences.value.savedLayouts.length) return false
+    update({ ...preferences.value, savedLayouts: next })
+    return true
+  }
+
   /** 拖动分栏间隙后更新比例。path 是 split 在树中的 0/1 路径。 */
   function resize(path: number[], ratio: number) {
     const next = resizeLayoutLocally(preferences.value.layout, path, ratio)
@@ -154,12 +192,17 @@ export function useModuleLayout(options: ModuleLayoutOptions = {}) {
     layout,
     items,
     skin,
+    savedLayouts,
     load,
     resetLocal,
     add,
     remove,
     split,
     insertAtGutter,
+    moveToEdge,
+    saveLayout,
+    applySavedLayout,
+    removeSavedLayout,
     resize,
     setSkin,
     reset,

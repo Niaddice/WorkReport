@@ -10,7 +10,7 @@ afterEach(() => {
 
 function initialSettings(): WorkspaceSettings {
   return {
-    appearance: { scale: 100 },
+    appearance: { scale: 100, rail: 'right' },
     database: cloneDatabaseSettings(DEFAULT_DATABASE_SETTINGS),
     ai: {
       providers: [
@@ -152,12 +152,16 @@ describe('manual settings draft', () => {
 
   it('accepts background source reloads while clean and preserves local edits while dirty', async () => {
     const state = createDraft()
-    state.source.value = { ...initialSettings(), appearance: { scale: 90 } }
+    state.source.value = { ...initialSettings(), appearance: { scale: 90, rail: 'right' } }
     await nextTick()
     expect(state.draft.value.appearance.scale).toBe(90)
     expect(state.unchanged.value).toBe(true)
     state.draft.value.ai.summaryPrompt = '我的未保存提示词'
-    state.source.value = { ...initialSettings(), appearance: { scale: 120 }, summary: { outputDirectory: '后台目录' } }
+    state.source.value = {
+      ...initialSettings(),
+      appearance: { scale: 120, rail: 'right' },
+      summary: { outputDirectory: '后台目录' },
+    }
     await nextTick()
     expect(state.draft.value.appearance.scale).toBe(90)
     expect(state.draft.value.ai.summaryPrompt).toBe('我的未保存提示词')

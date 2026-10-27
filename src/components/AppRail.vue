@@ -5,6 +5,7 @@ import {
   PhChartLine,
   PhClockCounterClockwise,
   PhFileXls,
+  PhFolderOpen,
   PhGearSix,
   PhNotePencil,
   PhPalette,
@@ -34,6 +35,7 @@ const moduleButtons = [
   { id: 'history', label: '历史记录', icon: PhClockCounterClockwise },
   { id: 'excel', label: 'Excel 周报', icon: PhFileXls },
   { id: 'summary', label: '总结', icon: PhSparkle },
+  { id: 'directory', label: '工作空间目录', icon: PhFolderOpen },
 ] as const
 </script>
 

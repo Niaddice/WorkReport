@@ -3,12 +3,14 @@ import {
   PhChartLine,
   PhClockCounterClockwise,
   PhFileXls,
+  PhFolderOpen,
   PhNotePencil,
   PhSparkle,
 } from '@phosphor-icons/vue'
 import CalendarModule from '../components/modules/CalendarModule.vue'
 import EditorModule from '../components/modules/EditorModule.vue'
 import EditorModuleSubtitle from '../components/modules/EditorModuleSubtitle.vue'
+import DirectoryModule from '../components/modules/DirectoryModule.vue'
 import ExcelModule from '../components/modules/ExcelModule.vue'
 import HistoryModule from '../components/modules/HistoryModule.vue'
 import SummaryModule from '../components/modules/SummaryModule.vue'
@@ -102,6 +104,20 @@ export const MODULE_REGISTRY: readonly ModuleDefinition[] = [
       '点「Xls」按钮调用默认 AI 生成填充预览，核对内容后确认才会写入文件。',
       '已导出的周报会列在模块下方，点击可在最大化视图中查看内容。',
       '首次使用需在「设置 → Excel 输出」配置模板、提示词和输出目录。',
+    ],
+    defaultEnabled: false,
+  },
+  {
+    id: 'directory',
+    title: '工作空间目录',
+    description: '按日期浏览工作空间内的全部日报，点击即可切换。',
+    icon: PhFolderOpen,
+    component: DirectoryModule,
+    help: [
+      '列出当前工作空间内的所有日报，最新的排在最上面，并标注当前选中的日期与文件格式。',
+      '点击任意一篇，日历、日报编辑、历史记录、总结和 Excel 周报都会切换到这一天。',
+      '如果之前框选了多天，点击目录中的单篇会先解除框选，避免总结仍按旧范围统计。',
+      '目录随日报的新增与切换自动更新，无需手动刷新。',
     ],
     defaultEnabled: false,
   },

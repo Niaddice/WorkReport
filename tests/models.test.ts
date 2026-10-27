@@ -16,27 +16,27 @@ afterEach(() => {
 
 describe('model catalog', () => {
   it('fetches with the current unsaved endpoint and key, without needing a model ID', async () => {
-    const source = reactive({ baseUrl: ' https://example.com/v1 ', apiKey: 'test-key' })
+    const source = reactive({ baseUrl: ' https://example.com/v1 ', apiKey: 'test-key', kind: 'http' as const })
     const catalog = scope.run(() => useAiModels(() => source))!
     vi.spyOn(aiApi, 'models').mockResolvedValue(available)
     expect(await catalog.fetchModels()).toBe(true)
-    expect(aiApi.models).toHaveBeenCalledWith('https://example.com/v1', 'test-key')
+    expect(aiApi.models).toHaveBeenCalledWith('https://example.com/v1', 'test-key', 'http')
     expect(catalog.models.value).toEqual(available)
     expect(catalog.queried.value).toBe(true)
   })
   it('requires an endpoint and allows an unauthenticated local endpoint', async () => {
-    const source = reactive({ baseUrl: '', apiKey: '' })
+    const source = reactive({ baseUrl: '', apiKey: '', kind: 'http' as const })
     const catalog = scope.run(() => useAiModels(() => source))!
     vi.spyOn(aiApi, 'models').mockResolvedValue(available)
     expect(await catalog.fetchModels()).toBe(false)
     expect(aiApi.models).not.toHaveBeenCalled()
     source.baseUrl = 'http://localhost:1234/v1'
     expect(await catalog.fetchModels()).toBe(true)
-    expect(aiApi.models).toHaveBeenCalledWith(source.baseUrl, '')
+    expect(aiApi.models).toHaveBeenCalledWith(source.baseUrl, '', 'http')
     expect(catalog.error.value).toBe('')
   })
   it('discards stale results when the endpoint or API key changes', async () => {
-    const source = reactive({ baseUrl: 'https://first.example/v1', apiKey: 'old-key' })
+    const source = reactive({ baseUrl: 'https://first.example/v1', apiKey: 'old-key', kind: 'http' as const })
     const catalog = scope.run(() => useAiModels(() => source))!
     let finish!: (models: AiModel[]) => void
     vi.spyOn(aiApi, 'models')
@@ -59,7 +59,7 @@ describe('model catalog', () => {
     expect(catalog.queried.value).toBe(false)
   })
   it('clears stale errors, handles empty catalogs, and permits retry', async () => {
-    const source = reactive({ baseUrl: 'https://example.com/v1', apiKey: '' })
+    const source = reactive({ baseUrl: 'https://example.com/v1', apiKey: '', kind: 'http' as const })
     const catalog = scope.run(() => useAiModels(() => source))!
     vi.spyOn(aiApi, 'models').mockRejectedValueOnce(new Error('HTTP 401')).mockResolvedValueOnce([])
     expect(await catalog.fetchModels()).toBe(false)
@@ -70,7 +70,9 @@ describe('model catalog', () => {
     expect(catalog.queried.value).toBe(true)
   })
   it('ignores pending results after the provider editor is removed', async () => {
-    const catalog = scope.run(() => useAiModels(() => ({ baseUrl: 'https://example.com/v1', apiKey: '' })))!
+    const catalog = scope.run(() =>
+      useAiModels(() => ({ baseUrl: 'https://example.com/v1', apiKey: '', kind: 'http' as const })),
+    )!
     let finish!: (models: AiModel[]) => void
     vi.spyOn(aiApi, 'models').mockReturnValue(
       new Promise((resolve) => {

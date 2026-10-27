@@ -87,7 +87,7 @@ const saveError = computed(() => validationError.value || draftError.value || pr
 const aiReady = computed(() => {
   const provider = draft.value.ai.providers.find((item) => item.id === draft.value.ai.defaultProviderId)
   if (!provider || !provider.name.trim()) return false
-  if (provider.kind !== 'http') return provider.executable.trim().startsWith('/')
+  if (provider.kind !== 'http' && provider.kind !== 'anthropic') return provider.executable.trim().startsWith('/')
   try {
     const url = new URL(provider.baseUrl)
     return !!provider.model.trim() && ['http:', 'https:'].includes(url.protocol) && !!url.hostname
@@ -105,7 +105,7 @@ function validateAi(): boolean {
   for (const provider of ai.providers) {
     let message = ''
     if (!provider.name.trim()) message = '请填写 AI 名称。'
-    else if (provider.kind === 'http') {
+    else if (provider.kind === 'http' || provider.kind === 'anthropic') {
       try {
         const url = new URL(provider.baseUrl)
         if (!['http:', 'https:'].includes(url.protocol) || !url.hostname) message = '请填写有效的 AI 接口地址。'
@@ -176,7 +176,8 @@ const preset = ref('deepseek')
 const presetOptions = [
   { value: 'deepseek', label: 'DeepSeek' },
   { value: 'gemini', label: 'Gemini' },
-  { value: 'custom', label: '自定义兼容接口' },
+  { value: 'anthropic', label: 'Anthropic' },
+  { value: 'custom', label: '自定义 OpenAI 兼容' },
 ]
 const pageRoot = ref<HTMLElement>()
 const contentHeading = ref<HTMLElement>()
@@ -254,6 +255,12 @@ function changeScale(step: -1 | 1) {
   const next = APPEARANCE_SCALES[index + step]
   if (!busy.value && next !== undefined) draft.value.appearance.scale = next
 }
+
+/** 功能栏可停靠的一侧，默认在右侧。 */
+const RAIL_OPTIONS = [
+  { id: 'right', label: '右侧' },
+  { id: 'left', label: '左侧' },
+] as const
 function onScaleKeydown(event: KeyboardEvent) {
   if (busy.value) return
   if (event.key === 'ArrowDown' || event.key === 'ArrowLeft') {
@@ -301,10 +308,18 @@ function addCli(cli: DetectedCli) {
   editingId.value = provider.id
 }
 function addCustom() {
+  const anthropic = preset.value === 'anthropic'
   const provider: AiProvider = {
     id: crypto.randomUUID(),
-    name: preset.value === 'deepseek' ? 'DeepSeek' : preset.value === 'gemini' ? 'Gemini' : '自定义 AI',
-    kind: 'http',
+    name:
+      preset.value === 'deepseek'
+        ? 'DeepSeek'
+        : preset.value === 'gemini'
+          ? 'Gemini'
+          : anthropic
+            ? 'Anthropic'
+            : '自定义 AI',
+    kind: anthropic ? 'anthropic' : 'http',
     executable: '',
     model: preset.value === 'deepseek' ? 'deepseek-chat' : '',
     baseUrl:
@@ -312,7 +327,9 @@ function addCustom() {
         ? 'https://api.deepseek.com/v1'
         : preset.value === 'gemini'
           ? 'https://generativelanguage.googleapis.com/v1beta/openai'
-          : '',
+          : anthropic
+            ? 'https://api.anthropic.com/v1'
+            : '',
     apiKey: '',
   }
   draft.value.ai.providers.push(provider)
@@ -417,8 +434,8 @@ function remove(id: string) {
             >
               <div class="settings-section-heading">
                 <div>
-                  <h3 id="appearance-settings-title">字体大小</h3>
-                  <p>适应当前窗口，保留舒适的阅读比例。</p>
+                  <h3 id="appearance-settings-title">外观与字体</h3>
+                  <p>调整界面字号与功能栏位置，保存后应用到整个 App。</p>
                 </div>
               </div>
               <div class="appearance-setting-row">
@@ -466,6 +483,31 @@ function remove(id: string) {
                     @click="draft.appearance.scale = DEFAULT_APPEARANCE_SCALE"
                   >
                     恢复默认
+                  </button>
+                </div>
+              </div>
+              <div class="appearance-setting-row">
+                <div class="appearance-setting-copy">
+                  <h4 id="appearance-rail-label">功能栏位置</h4>
+                  <p id="appearance-rail-description">模块侧边栏停靠在窗口左侧或右侧，默认在右侧。</p>
+                </div>
+                <div
+                  class="appearance-rail-actions"
+                  role="group"
+                  aria-labelledby="appearance-rail-label"
+                  aria-describedby="appearance-rail-description"
+                >
+                  <button
+                    v-for="option in RAIL_OPTIONS"
+                    :key="option.id"
+                    type="button"
+                    class="appearance-rail-option"
+                    :class="{ 'is-active': draft.appearance.rail === option.id }"
+                    :aria-pressed="draft.appearance.rail === option.id"
+                    :disabled="busy"
+                    @click="draft.appearance.rail = option.id"
+                  >
+                    {{ option.label }}
                   </button>
                 </div>
               </div>
@@ -668,7 +710,11 @@ function remove(id: string) {
                       /><span
                         >{{ provider.name || '未命名 AI'
                         }}<small>{{
-                          provider.kind === 'http' ? provider.model || '模型接口' : '本机 CLI'
+                          provider.kind === 'http'
+                            ? provider.model || 'OpenAI 兼容接口'
+                            : provider.kind === 'anthropic'
+                              ? provider.model || 'Anthropic 兼容接口'
+                              : '本机 CLI'
                         }}</small></span
                       ></label
                     >
@@ -708,13 +754,17 @@ function remove(id: string) {
                               type="text"
                               placeholder="为这项 AI 起个名字"
                           /></label>
-                          <template v-if="provider.kind === 'http'"
+                          <template v-if="provider.kind === 'http' || provider.kind === 'anthropic'"
                             ><label
                               >接口地址<input
                                 v-model="provider.baseUrl"
                                 :disabled="busy"
                                 type="url"
-                                placeholder="https://example.com/v1"
+                                :placeholder="
+                                  provider.kind === 'anthropic'
+                                    ? 'https://api.anthropic.com/v1'
+                                    : 'https://example.com/v1'
+                                "
                                 spellcheck="false" /></label
                             ><label
                               >API Key<input
@@ -728,10 +778,15 @@ function remove(id: string) {
                               v-model="provider.model"
                               :base-url="provider.baseUrl"
                               :api-key="provider.apiKey"
+                              :kind="provider.kind"
                               :disabled="busy"
                             />
                             <p class="field-hint">
-                              支持 Chat Completions 兼容接口，密钥保存在本机应用配置中。
+                              {{
+                                provider.kind === 'anthropic'
+                                  ? '支持 Anthropic Messages 兼容接口'
+                                  : '支持 Chat Completions（OpenAI）兼容接口'
+                              }}，密钥保存在本机应用配置中。
                             </p></template
                           >
                           <template v-else

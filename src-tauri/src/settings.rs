@@ -111,7 +111,7 @@ mod tests {
         let settings = StoredSettings {
             ui: None,
             database: crate::database::Settings::default(),
-            appearance: crate::appearance::Settings { scale: 110 },
+            appearance: crate::appearance::Settings { scale: 110, ..Default::default() },
             ai: crate::ai::Settings {
                 providers: vec![provider("one")],
                 default_provider_id: Some("one".into()),
@@ -149,7 +149,7 @@ mod tests {
             &StoredSettings {
                 ui: None,
                 database: crate::database::Settings::default(),
-                appearance: crate::appearance::Settings { scale: 120 },
+                appearance: crate::appearance::Settings { scale: 120, ..Default::default() },
                 ai: crate::ai::Settings::default(),
                 excel: crate::excel::Settings {
                     prompt: "保留输出提示词".into(),
@@ -201,7 +201,7 @@ mod tests {
             &StoredSettings {
                 ui: None,
                 database: crate::database::Settings::default(),
-                appearance: crate::appearance::Settings { scale: 90 },
+                appearance: crate::appearance::Settings { scale: 90, ..Default::default() },
                 ai: crate::ai::Settings::default(),
                 excel: crate::excel::Settings::default(),
                 summary: crate::summary::Settings::default(),

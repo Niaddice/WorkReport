@@ -2,7 +2,7 @@ import type { Component } from 'vue'
 import type { SkinId } from '../lib/skins'
 
 /** 内置模块 id；新增模块只需在 registry 中登记，并在持久化层保持字符串兼容。 */
-export type ModuleId = 'calendar' | 'editor' | 'overview' | 'history' | 'summary' | 'excel'
+export type ModuleId = 'calendar' | 'editor' | 'overview' | 'history' | 'summary' | 'excel' | 'directory'
 
 export interface ModulePlacement {
   id: ModuleId
@@ -73,17 +73,33 @@ export interface LayoutGeometry {
   gutters: LayoutGutter[]
 }
 
+/** 用户保存的布局快照：名字 + 布局树。 */
+export interface SavedLayout {
+  name: string
+  layout: LayoutNode
+}
+
 /** 与 Rust 侧 ui::Preferences 对应的工作空间界面偏好。 */
 export interface UiPreferences {
   /** 模块板的分栏布局树。 */
   layout: LayoutNode
   skin: SkinId
+  /** 用户保存的布局快照，随界面偏好一起持久化。 */
+  savedLayouts: SavedLayout[]
 }
 
 export const MAX_MODULES = 12
 
 /** 稳定顺序，用于模块目录与旧布局迁移校验。 */
-export const MODULE_IDS: readonly ModuleId[] = ['calendar', 'editor', 'overview', 'history', 'summary', 'excel']
+export const MODULE_IDS: readonly ModuleId[] = [
+  'calendar',
+  'editor',
+  'overview',
+  'history',
+  'summary',
+  'excel',
+  'directory',
+]
 
 export function isModuleId(value: unknown): value is ModuleId {
   return typeof value === 'string' && (MODULE_IDS as readonly string[]).includes(value)

@@ -5,16 +5,27 @@ fn default_scale() -> u16 {
     100
 }
 
+/// 功能栏（模块侧边栏）位置默认在右侧。
+fn default_rail() -> String {
+    "right".into()
+}
+
+pub const RAIL_SIDES: [&str; 2] = ["left", "right"];
+
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct Settings {
     #[serde(default = "default_scale")]
     pub scale: u16,
+    /// 功能栏位置：left 或 right；缺省视为 right，兼容旧 appearance.json。
+    #[serde(default = "default_rail")]
+    pub rail: String,
 }
 
 impl Default for Settings {
     fn default() -> Self {
         Self {
             scale: default_scale(),
+            rail: default_rail(),
         }
     }
 }
@@ -22,6 +33,9 @@ impl Default for Settings {
 pub fn validate(settings: &Settings) -> Result<(), String> {
     if !matches!(settings.scale, 80 | 90 | 100 | 110 | 120) {
         return Err("界面缩放仅支持 80%、90%、100%、110% 或 120%".into());
+    }
+    if !RAIL_SIDES.contains(&settings.rail.as_str()) {
+        return Err("功能栏位置仅支持左侧或右侧".into());
     }
     Ok(())
 }
@@ -66,7 +80,7 @@ mod tests {
     fn missing_settings_use_default_without_creating_files() {
         let temporary = tempfile::tempdir().unwrap();
         let root = temporary.path().join("config");
-        assert_eq!(load(&root).unwrap(), Settings { scale: 100 });
+        assert_eq!(load(&root).unwrap(), Settings { scale: 100, ..Default::default() });
         assert!(!root.exists());
     }
 
@@ -78,11 +92,38 @@ mod tests {
     }
 
     #[test]
+    fn absent_rail_defaults_to_the_right_side() {
+        let root = tempfile::tempdir().unwrap();
+        fs::write(root.path().join("appearance.json"), r#"{"scale":110}"#).unwrap();
+        let settings = load(root.path()).unwrap();
+        assert_eq!(settings.scale, 110);
+        assert_eq!(settings.rail, "right");
+    }
+
+    #[test]
+    fn rail_accepts_only_left_and_right() {
+        for rail in ["left", "right"] {
+            let settings = Settings {
+                rail: rail.into(),
+                ..Default::default()
+            };
+            assert!(validate(&settings).is_ok());
+        }
+        for rail in ["", "top", "Right", " middle "] {
+            let settings = Settings {
+                rail: rail.into(),
+                ..Default::default()
+            };
+            assert!(validate(&settings).is_err());
+        }
+    }
+
+    #[test]
     fn supported_steps_round_trip_and_replace_previous_settings() {
         let temporary = tempfile::tempdir().unwrap();
         let root = temporary.path().join("config");
         for scale in [80, 90, 100, 110, 120] {
-            let settings = Settings { scale };
+            let settings = Settings { scale, ..Default::default() };
             save(&root, &settings).unwrap();
             assert_eq!(load(&root).unwrap(), settings);
             assert_eq!(fs::read_dir(&root).unwrap().count(), 1);
@@ -95,7 +136,7 @@ mod tests {
         save(root.path(), &Settings::default()).unwrap();
         let original = fs::read(root.path().join("appearance.json")).unwrap();
         for scale in [0, 79, 81, 99, 101, 119, 121, u16::MAX] {
-            assert!(save(root.path(), &Settings { scale }).is_err());
+            assert!(save(root.path(), &Settings { scale, ..Default::default() }).is_err());
             assert_eq!(
                 fs::read(root.path().join("appearance.json")).unwrap(),
                 original

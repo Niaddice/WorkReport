@@ -12,16 +12,26 @@ import {
   type ModuleId,
   type ModulePlacement,
   type Rect,
+  type SavedLayout,
   type SplitDirection,
   type UiPreferences,
 } from './types'
 
-/** 分栏比例的安全区间：过窄的分栏既读不到内容，也无法命中拖放目标。 */
-const MIN_SPLIT_RATIO = 0.12
-const MAX_SPLIT_RATIO = 0.88
+/**
+ * 分栏比例的安全区间。
+ *
+ * 产品要求「每个模块最窄可缩到 App 宽度的 1%」：单边比例下限取 0.01，
+ * 上限取 0.99，保证两侧都至少有 1% 的宽度。嵌套分栏时叶子占比是各层比例
+ * 的乘积，局部拖动（resizeLayoutLocally）会按叶子占比单独钳制，见 minShare。
+ */
+const MIN_SPLIT_RATIO = 0.01
+const MAX_SPLIT_RATIO = 0.99
 const DEFAULT_SPLIT_RATIO = 0.5
 /** 归一化新布局时的递归深度上限；合法布局最多 MAX_MODULES 个叶子，远达不到该深度。 */
 const MAX_LAYOUT_DEPTH = MAX_MODULES
+/** 保存布局的数量上限与名称长度上限（按字符数），与 Rust 侧保持一致。 */
+export const MAX_SAVED_LAYOUTS = 20
+export const MAX_LAYOUT_NAME_CHARS = 50
 
 /** 新工作空间默认左右分栏：日历在左、日报编辑在右。 */
 export const DEFAULT_UI_PREFERENCES: UiPreferences = {
@@ -33,6 +43,7 @@ export const DEFAULT_UI_PREFERENCES: UiPreferences = {
     second: { type: 'leaf', id: 'editor' },
   },
   skin: DEFAULT_SKIN,
+  savedLayouts: [],
 }
 
 /** 统一夹紧分栏比例，保证拖动、迁移与持久化后的比例始终可用。 */
@@ -54,9 +65,13 @@ function cloneLayout(layout: LayoutNode): LayoutNode {
   return createSplit(layout.direction, layout.ratio, cloneLayout(layout.first), cloneLayout(layout.second))
 }
 
-/** 深拷贝界面偏好；布局树逐层复制，调用方修改结果不会污染默认值或原对象。 */
+/** 深拷贝界面偏好；布局树与保存的布局快照逐层复制，调用方修改结果不会污染默认值或原对象。 */
 export function cloneUiPreferences(value: UiPreferences): UiPreferences {
-  return { layout: cloneLayout(value.layout), skin: value.skin }
+  return {
+    layout: cloneLayout(value.layout),
+    skin: value.skin,
+    savedLayouts: value.savedLayouts.map((saved) => ({ name: saved.name, layout: cloneLayout(saved.layout) })),
+  }
 }
 
 function normalizeSkin(value: unknown): SkinId {
@@ -153,12 +168,32 @@ function buildLegacyLayout(ids: ModuleId[], columns: 1 | 2): LayoutNode {
 export function normalizeUiPreferences(value: unknown): UiPreferences {
   const raw = value && typeof value === 'object' ? (value as Record<string, unknown>) : {}
   const skin = normalizeSkin(raw.skin)
+  const savedLayouts = normalizeSavedLayouts(raw.savedLayouts)
   const layout = normalizeLayoutNode(raw.layout, new Set(), 0)
-  if (layout) return { layout, skin }
+  if (layout) return { layout, skin, savedLayouts }
   const modules = collectModuleIds(raw.modules)
   const legacyIds = modules.length ? modules : collectModuleIds(raw.order)
-  if (!legacyIds.length) return { layout: cloneLayout(DEFAULT_UI_PREFERENCES.layout), skin }
-  return { layout: buildLegacyLayout(legacyIds, legacyColumns(raw)), skin }
+  if (!legacyIds.length) return { layout: cloneLayout(DEFAULT_UI_PREFERENCES.layout), skin, savedLayouts }
+  return { layout: buildLegacyLayout(legacyIds, legacyColumns(raw)), skin, savedLayouts }
+}
+
+/** 归一化保存的布局快照：过滤空名、超长名、重复名与非法布局树。 */
+function normalizeSavedLayouts(value: unknown): SavedLayout[] {
+  if (!Array.isArray(value)) return []
+  const result: SavedLayout[] = []
+  const seen = new Set<string>()
+  for (const item of value) {
+    if (!item || typeof item !== 'object') continue
+    const candidate = item as { name?: unknown; layout?: unknown }
+    const name = typeof candidate.name === 'string' ? candidate.name.trim() : ''
+    if (!name || [...name].length > MAX_LAYOUT_NAME_CHARS || seen.has(name)) continue
+    const layout = normalizeLayoutNode(candidate.layout, new Set(), 0)
+    if (!layout) continue
+    seen.add(name)
+    result.push({ name, layout })
+    if (result.length >= MAX_SAVED_LAYOUTS) break
+  }
+  return result
 }
 
 /** 按视觉顺序（先 first 再 second）展平布局树，得到模块板上的模块顺序。 */
@@ -214,6 +249,28 @@ export function appendLayoutModule(layout: LayoutNode | null, id: ModuleId): Lay
   if (layoutHasModule(layout, id)) return layout
   const count = layoutLeafCount(layout)
   return createSplit('row', clampSplitRatio(count / (count + 1)), layout, createLeaf(id))
+}
+
+/**
+ * 追加模块到模块板最左侧：把旧根包裹成 row split，first 是新叶子、second 是旧树，
+ * ratio 取 1 / (旧叶子数 + 1)，让新模块占总宽度的 1/n。
+ */
+export function prependLayoutModule(layout: LayoutNode | null, id: ModuleId): LayoutNode {
+  if (!layout) return createLeaf(id)
+  if (layoutHasModule(layout, id)) return layout
+  const count = layoutLeafCount(layout)
+  return createSplit('row', clampSplitRatio(1 / (count + 1)), createLeaf(id), layout)
+}
+
+/**
+ * 把模块移动到整个布局的最左或最右一列：先从树中移除，再用 prepend/append 包裹成新的 row split。
+ * 模块不存在时原样返回。
+ */
+export function moveLayoutModuleToEdge(root: LayoutNode, draggedId: ModuleId, side: 'left' | 'right'): LayoutNode {
+  if (!layoutHasModule(root, draggedId)) return root
+  const remaining = removeLayoutModule(root, draggedId)
+  if (!remaining) return root
+  return side === 'left' ? prependLayoutModule(remaining, draggedId) : appendLayoutModule(remaining, draggedId)
 }
 
 function replaceLayoutLeaf(layout: LayoutNode, targetId: ModuleId, create: () => LayoutNode): LayoutNode | null {
@@ -499,7 +556,7 @@ export function resizeLayoutLocally(root: LayoutNode, path: readonly number[], r
   collectShares(root, 1, shares)
   const left = shares.get(boundary.leftLeaf) ?? 0
   const right = shares.get(boundary.rightLeaf) ?? 0
-  const minShare = 0.02
+  const minShare = 0.01
   const applied = delta > 0 ? Math.min(delta, right - minShare) : Math.max(delta, minShare - left)
   if (!Number.isFinite(applied) || Math.abs(applied) < 1e-6) return root
   shares.set(boundary.leftLeaf, left + applied)

@@ -3,6 +3,8 @@ import { invoke, isTauri } from '@tauri-apps/api/core'
 import {
   DEFAULT_EXCEL_SETTINGS,
   EXCEL_STORAGE_KEY,
+  reportDateRange,
+  reportOverlapsRange,
   sameWeekRange,
   useExcel,
   type ExcelExportResult,
@@ -76,6 +78,36 @@ describe('Excel selection week', () => {
     ])
       expect(sameWeekRange(dates)).toBe(false)
     expect(sameWeekRange(['20240229'])).toBe(true)
+  })
+})
+
+describe('report date range parsing', () => {
+  it('parses the standard weekly filename range', () => {
+    expect(reportDateRange('周报_20261019-20261025_abc123.xlsx')).toEqual({ start: '20261019', end: '20261025' })
+    expect(reportDateRange('周报_20260928-20261004_xyz.xlsx')).toEqual({ start: '20260928', end: '20261004' })
+  })
+  it('returns null for unrecognised filenames', () => {
+    expect(reportDateRange('week.xlsx')).toBeNull()
+    expect(reportDateRange('周报_20261019.xlsx')).toBeNull()
+    expect(reportDateRange('20261019-20261025.xlsx')).toBeNull()
+    expect(reportDateRange('')).toBeNull()
+  })
+})
+
+describe('report range overlap', () => {
+  const report = '周报_20261026-20261101_abc.xlsx'
+  it('matches when the report overlaps the selected range', () => {
+    // 选中这一周内的任意一天或子范围，都应显示这一周的周报。
+    expect(reportOverlapsRange(report, '20261026', '20261101')).toBe(true)
+    expect(reportOverlapsRange(report, '20261028', '20261028')).toBe(true)
+    expect(reportOverlapsRange(report, '20261028', '20261030')).toBe(true)
+  })
+  it('keeps unrecognised files visible regardless of the range', () => {
+    expect(reportOverlapsRange('week.xlsx', '20261026', '20261101')).toBe(true)
+  })
+  it('hides reports from a different week', () => {
+    expect(reportOverlapsRange('周报_20261019-20261025_old.xlsx', '20261026', '20261101')).toBe(false)
+    expect(reportOverlapsRange(report, '20261102', '20261108')).toBe(false)
   })
 })
 

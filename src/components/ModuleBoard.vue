@@ -22,11 +22,14 @@ const emit = defineEmits<{
   remove: [id: ModuleId]
   split: [dragged: ModuleId, target: ModuleId, side: DropSide]
   insert: [dragged: ModuleId, path: number[]]
+  edge: [dragged: ModuleId, side: 'left' | 'right']
   resize: [path: number[], ratio: number]
 }>()
 
 /** 与 style.css 中 --app-gap 的默认值保持一致；几何计算需要像素值。 */
 const GAP = 8
+/** 拖放到模块板最左 / 最右边缘的命中条带宽度。 */
+const EDGE_BAND = 40
 const board = ref<HTMLElement>()
 const boardSize = ref({ width: 0, height: 0 })
 /** 拖动分栏间隙时只在本组件内预览新布局，松手后才写回。 */
@@ -44,7 +47,10 @@ interface DragState {
   pointerId: number
   title: string
 }
-type DropTarget = { kind: 'module'; slot: LayoutSlot; side: DropSide } | { kind: 'gutter'; gutter: LayoutGutter }
+type DropTarget =
+  | { kind: 'module'; slot: LayoutSlot; side: DropSide }
+  | { kind: 'gutter'; gutter: LayoutGutter }
+  | { kind: 'edge'; side: 'left' | 'right' }
 interface GutterDrag {
   pointerId: number
   path: number[]
@@ -63,6 +69,7 @@ let pending: { id: ModuleId; pointerId: number; x: number; y: number } | null = 
 const draggedTitle = computed(() => drag.value?.title ?? '')
 const moduleDropTarget = computed(() => (dropTarget.value?.kind === 'module' ? dropTarget.value : null))
 const gutterDropTarget = computed(() => (dropTarget.value?.kind === 'gutter' ? dropTarget.value : null))
+const edgeDropTarget = computed(() => (dropTarget.value?.kind === 'edge' ? dropTarget.value : null))
 const dropPreviewStyle = computed(() => {
   const target = moduleDropTarget.value
   if (!target) return { display: 'none' }
@@ -100,6 +107,20 @@ const insertPreviewStyle = computed(() => {
     width: `${gutter.width}px`,
     height: '18px',
   }
+})
+const edgePreviewStyle = computed(() => {
+  const target = edgeDropTarget.value
+  if (!target) return { display: 'none' }
+  const width = boardSize.value.width
+  const height = boardSize.value.height
+  if (target.side === 'left') {
+    return { left: '0px', top: '0px', width: `${EDGE_BAND}px`, height: `${height}px` }
+  }
+  return { left: `${width - EDGE_BAND}px`, top: '0px', width: `${EDGE_BAND}px`, height: `${height}px` }
+})
+const edgeDropLabel = computed(() => {
+  const side = edgeDropTarget.value?.side
+  return side === 'left' ? '放到最左' : side === 'right' ? '放到最右' : ''
 })
 const ghostStyle = computed(() => ({
   left: `${pointer.value.x + 16}px`,
@@ -241,6 +262,15 @@ function updateDropTarget(event: PointerEvent) {
   const rect = element.getBoundingClientRect()
   const x = event.clientX - rect.left
   const y = event.clientY - rect.top
+  // 页面最左 / 最右边缘：把模块放到整行最左或最右一列。
+  if (x <= EDGE_BAND) {
+    dropTarget.value = { kind: 'edge', side: 'left' }
+    return
+  }
+  if (x >= rect.width - EDGE_BAND) {
+    dropTarget.value = { kind: 'edge', side: 'right' }
+    return
+  }
   // 滑块本身只有 8px 宽，向两侧各扩 3px 方便把模块塞进两个模块之间。
   const gutter = gutters.value.find(
     (item) =>
@@ -304,6 +334,12 @@ function onDragEnd(event?: PointerEvent) {
   }
   if (!target || (target.kind === 'module' && target.slot.id === state.id)) {
     announcement.value = '未放入其他模块，布局未改变。'
+    return
+  }
+  if (target.kind === 'edge') {
+    emit('edge', state.id, target.side)
+    announcement.value =
+      target.side === 'left' ? `已将「${state.title}」移到最左侧。` : `已将「${state.title}」移到最右侧。`
     return
   }
   if (target.kind === 'gutter') {
@@ -675,6 +711,9 @@ onBeforeUnmount(() => {
       :style="insertPreviewStyle"
     >
       <span>插入此处</span>
+    </div>
+    <div v-if="edgeDropTarget" class="module-edge-preview" :data-side="edgeDropTarget.side" :style="edgePreviewStyle">
+      <span>{{ edgeDropLabel }}</span>
     </div>
     <div v-if="drag" class="module-drag-ghost" :style="ghostStyle" aria-hidden="true">
       {{ draggedTitle }}

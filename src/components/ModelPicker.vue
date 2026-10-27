@@ -1,15 +1,23 @@
 <script setup lang="ts">
 import { computed, ref, useId } from 'vue'
 import { useAiModels } from '../lib/useAiModels'
+import type { ProviderKind } from '../lib/ai'
 import AppSelect from './AppSelect.vue'
 
-const props = defineProps<{ modelValue: string; baseUrl: string; apiKey: string; disabled: boolean }>()
+const props = defineProps<{
+  modelValue: string
+  baseUrl: string
+  apiKey: string
+  kind: ProviderKind
+  disabled: boolean
+}>()
 const emit = defineEmits<{ 'update:modelValue': [value: string] }>()
 const fieldId = useId()
 const manual = ref(false)
 const { models, loading, error, queried, fetchModels } = useAiModels(() => ({
   baseUrl: props.baseUrl,
   apiKey: props.apiKey,
+  kind: props.kind,
 }))
 const currentListed = computed(() => models.value.some((model) => model.id === props.modelValue))
 const modelOptions = computed(() => [

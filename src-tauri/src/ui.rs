@@ -23,12 +23,24 @@ const MAX_MODULES: usize = 12;
 /// 安全 id 的最大长度：小写字母开头，后接最多 31 个字符。
 const MAX_ID_LENGTH: usize = 32;
 
+/// 保存布局的数量上限与名称长度上限（按字符数）。
+const MAX_SAVED_LAYOUTS: usize = 20;
+const MAX_LAYOUT_NAME_CHARS: usize = 50;
+
 /// 单个模块在布局中的位置。旧文件里的 `span` 字段会在读取时被忽略。
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct Placement {
     #[serde(default)]
     pub id: String,
+}
+
+/// 用户保存的布局快照：名字 + 布局树 JSON。名字只做非空与长度校验，布局树由前端解释。
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SavedLayout {
+    pub name: String,
+    pub layout: serde_json::Value,
 }
 
 /// 纯界面偏好：可嵌套分栏布局与皮肤。与业务设置分开保存，互不校验。
@@ -46,6 +58,9 @@ pub struct Preferences {
     /// 保证旧文件的精确 JSON 不变。默认树由前端负责生成，这里保持 None。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub layout: Option<serde_json::Value>,
+    /// 用户保存的布局快照，随界面偏好一起保存；空时省略序列化。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub saved_layouts: Vec<SavedLayout>,
     /// 旧版固定两模块布局的方向：只用于读取旧文件，迁移后不再写回。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub axis: Option<Axis>,
@@ -61,6 +76,7 @@ impl Default for Preferences {
             modules: default_modules(),
             skin: DEFAULT_SKIN.into(),
             layout: None,
+            saved_layouts: Vec::new(),
             axis: None,
             order: Vec::new(),
         }
@@ -137,7 +153,27 @@ pub fn normalize(mut preferences: Preferences) -> Preferences {
     // 旧字段只在读取时使用，之后不再保留，保证新写入的文件只有新 schema。
     preferences.axis = None;
     preferences.order.clear();
+    preferences.saved_layouts = sanitize_saved_layouts(preferences.saved_layouts);
     preferences
+}
+
+/// 过滤空名、超长名与空布局的保存项，最多保留 MAX_SAVED_LAYOUTS 个。
+fn sanitize_saved_layouts(saved: Vec<SavedLayout>) -> Vec<SavedLayout> {
+    let mut kept: Vec<SavedLayout> = Vec::with_capacity(saved.len().min(MAX_SAVED_LAYOUTS));
+    for item in saved {
+        let name = item.name.trim();
+        if name.is_empty() || name.chars().count() > MAX_LAYOUT_NAME_CHARS {
+            continue;
+        }
+        if item.layout.is_null() {
+            continue;
+        }
+        kept.push(SavedLayout { name: name.to_string(), layout: item.layout });
+        if kept.len() == MAX_SAVED_LAYOUTS {
+            break;
+        }
+    }
+    kept
 }
 
 #[cfg(test)]
