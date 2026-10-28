@@ -45,6 +45,7 @@ import { clearMessages, dismissMessage, pushMessage } from './lib/messages'
 import { useJournalPreview } from './lib/useJournalPreview'
 import JournalPreviewWindow from './components/JournalPreviewWindow.vue'
 import JournalPreviewContent from './components/JournalPreviewContent.vue'
+import { useGit } from './lib/useGit'
 
 const nativeApp = isTauri()
 const journal = useJournal()
@@ -66,6 +67,7 @@ const appearance = useAppearance()
 const excel = useExcel()
 const summaryOutput = useSummaryOutput()
 const holidays = useHolidays()
+const git = useGit()
 const { state: holidayState, loading: holidayLoading, syncing: holidaySyncing, error: holidayError } = holidays
 const holidayReady = ref(false)
 const { settings: summaryOutputSettings } = summaryOutput
@@ -124,6 +126,7 @@ const workspaceSettings = computed<WorkspaceSettings>(() => ({
   excel: excelSettings.value,
   summary: summaryOutputSettings.value,
   database: databaseSettings.value,
+  git: git.settings.value,
 }))
 const settingsReading = ref(false)
 const settingsSaving = ref(false)
@@ -135,7 +138,8 @@ const settingsLoading = computed(
     appearanceLoading.value ||
     excel.loading.value ||
     summaryOutput.loading.value ||
-    databaseLoading.value,
+    databaseLoading.value ||
+    git.loading.value,
 )
 const settingsDialogBusy = computed(
   () =>
@@ -380,6 +384,10 @@ async function openExcelSettings() {
   await navigate('settings')
   if ((page.value as string) === 'settings') await settingsView.value?.navigate('excel')
 }
+async function openGitSettings() {
+  await navigate('settings')
+  if ((page.value as string) === 'settings') await settingsView.value?.navigate('git')
+}
 async function loadWorkspaceSettings(reload: boolean): Promise<boolean> {
   const revision = ++settingsLoadRevision
   settingsReading.value = true
@@ -391,6 +399,7 @@ async function loadWorkspaceSettings(reload: boolean): Promise<boolean> {
     reload ? excel.reload() : excel.load(),
     reload ? summaryOutput.reload() : summaryOutput.load(),
     loadDatabaseSettings(),
+    git.load(),
   ])
   if (revision !== settingsLoadRevision) return false
   settingsReading.value = false
@@ -403,6 +412,7 @@ async function loadWorkspaceSettings(reload: boolean): Promise<boolean> {
         excel.error.value,
         summaryOutput.error.value,
         settingsDatabaseError.value,
+        git.error.value,
       ]
         .filter(Boolean)
         .join('；') || '读取设置失败，请重新进入设置后重试。'
@@ -459,6 +469,7 @@ async function saveWorkspaceSettings(value: WorkspaceSettings): Promise<boolean>
     appearance.acceptSaved(stored.appearance)
     excel.acceptSaved(stored.excel)
     summaryOutput.acceptSaved(stored.summary)
+    git.acceptSaved(stored.git)
     databaseSettings.value = cloneDatabaseSettings(stored.database)
     if (storageChanged) {
       clearRange()
@@ -855,6 +866,32 @@ async function startAiSummary(prompt?: string) {
     if (revision === summaryGenerationRevision) requestingAi.value = false
   }
 }
+async function appendGitReport(workspacePath: string, date: string, content: string): Promise<boolean> {
+  if (
+    !content.trim() ||
+    busy.value ||
+    saving.value ||
+    settingsLoading.value ||
+    settingsSaving.value ||
+    page.value !== 'home' ||
+    workspace.value?.path !== workspacePath ||
+    selectedDate.value !== date ||
+    activeDocument.value?.date !== date ||
+    rangeDates.value.length
+  )
+    return false
+  const existing = journal.draft.value
+  if (existing.includes(content.trim())) {
+    pushMessage({ tone: 'info', text: '当前日报已包含这份 Git 日报。' })
+    return false
+  }
+  const separator = !existing ? '' : existing.endsWith('\n\n') ? '' : existing.endsWith('\n') ? '\n' : '\n\n'
+  journal.edit(`${existing}${separator}${content.trim()}`, true)
+  editorPreview.value = false
+  const saved = await journal.flush()
+  if (saved) pushMessage({ tone: 'success', text: 'Git 工作记录已追加到日报并保存' })
+  return saved
+}
 const moduleDisabled = computed(() => page.value !== 'home' || busy.value || requestingAi.value)
 const moduleActions: ModuleActions = {
   selectDate,
@@ -882,6 +919,10 @@ const moduleActions: ModuleActions = {
   openHolidaySettings: () => {
     void openHolidaySettings()
   },
+  openGitSettings: () => {
+    void openGitSettings()
+  },
+  appendGitReport,
   syncHolidays: (year: number) => {
     void syncHolidays(year)
   },
@@ -892,6 +933,7 @@ provide(MODULE_CONTEXT, {
   holidays,
   excel,
   summaryOutput,
+  git,
   summarySelectionDates,
   excelBlockedReason,
   now,

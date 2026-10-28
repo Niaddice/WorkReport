@@ -104,6 +104,143 @@ async function openDemoWorkspace() {
   return wrapper
 }
 
+describe('Git journal integration', () => {
+  it('shows the conflicting repository names and keeps the draft when duplicate identity validation rejects a save', async () => {
+    invoke.mockImplementation(async (command: string) => {
+      if (command === 'save_workspace_settings')
+        throw new Error('仓库“项目克隆”与“项目仓库”指向同一 Git 仓库，不能重复添加，请只保留一个')
+      return commandResult(command)
+    })
+    const wrapper = await openDemoWorkspace()
+    try {
+      await wrapper.get('.app-rail [aria-label="设置"]').trigger('click')
+      await flushPromises()
+      await wrapper.get('[aria-controls="settings-panel-git"]').trigger('click')
+      for (const [name, path] of [
+        ['项目仓库', '/tmp/project'],
+        ['项目克隆', '/tmp/clone'],
+      ]) {
+        await wrapper.get('.git-repositories-heading button').trigger('click')
+        const fields = wrapper.findAll('.git-repository-form').at(-1)!.findAll('input')
+        await fields[0]!.setValue(name)
+        await fields[1]!.setValue(path)
+      }
+      await wrapper.get('.app-rail [aria-label="设置"]').trigger('click')
+      await flushPromises()
+      expect(wrapper.get('.settings-dialog').isVisible()).toBe(true)
+      expect(wrapper.get('.settings-viewport').text()).toContain('仓库“项目克隆”与“项目仓库”指向同一 Git 仓库')
+      expect(wrapper.findAll('.git-repository-form')).toHaveLength(2)
+      expect(invoke.mock.calls.filter(([command]) => command === 'save_workspace_settings')).toHaveLength(1)
+    } finally {
+      wrapper.unmount()
+    }
+  })
+
+  it('adds the module from the rail and preserves existing content when appending and undoing a report', async () => {
+    const date = dayjs().format('YYYYMMDD')
+    const entry = { date, filename: `${date}.txt`, format: 'txt', content: '已有的会议记录\n', revision: 'v1' }
+    invoke.mockImplementation(async (command: string, args?: Record<string, unknown>) => {
+      if (command === 'load_git_settings')
+        return {
+          executable: 'git',
+          includeMerges: false,
+          repositories: [{ id: 'repo', name: '日报项目', path: '/tmp/project', author: '', branch: '' }],
+        }
+      if (command === 'list_entries') return [entry]
+      if (command === 'read_entry') return entry
+      if (command === 'save_entry') return { ...entry, content: args!.content, revision: 'v2' }
+      if (command === 'read_git_daily_log')
+        return {
+          date,
+          repositories: [
+            {
+              id: 'repo',
+              name: '日报项目',
+              error: null,
+              truncated: false,
+              commits: [
+                {
+                  hash: 'abc123456',
+                  author: '作者',
+                  email: 'me@example.test',
+                  committedAt: dayjs().toISOString(),
+                  message: '完成 Git 日报',
+                },
+              ],
+            },
+          ],
+        }
+      return commandResult(command)
+    })
+    const wrapper = await openDemoWorkspace()
+    try {
+      await wrapper.get('.app-rail [aria-label="Git 日报"]').trigger('click')
+      await flushPromises()
+      expect(savedIds()).toContain('git')
+      await wrapper.get('.git-toolbar .git-fetch').trigger('click')
+      await flushPromises()
+      await wrapper.get('.git-report-actions .git-fetch').trigger('click')
+      await flushPromises()
+      const editor = wrapper.get<HTMLTextAreaElement>('.markdown-editor')
+      expect(editor.element.value).toBe('已有的会议记录\n\n日报项目\n1、完成 Git 日报')
+      expect(invoke).toHaveBeenCalledWith(
+        'save_entry',
+        expect.objectContaining({
+          date,
+          content: '已有的会议记录\n\n日报项目\n1、完成 Git 日报',
+          expectedRevision: 'v1',
+        }),
+      )
+      editor.element.focus()
+      await editor.trigger('keydown', { key: 'z', ctrlKey: true })
+      await flushPromises()
+      expect(editor.element.value).toBe(entry.content)
+      expect(wrapper.get('.git-report-actions .git-fetch').attributes('disabled')).toBeUndefined()
+    } finally {
+      wrapper.unmount()
+    }
+  })
+
+  it('saves Git configuration in the unified settings transaction and applies it to the module', async () => {
+    invoke.mockImplementation(async (command: string, args?: Record<string, unknown>) =>
+      command === 'save_workspace_settings' ? args!.settings : commandResult(command),
+    )
+    const wrapper = await openDemoWorkspace()
+    try {
+      await wrapper.get('.app-rail [aria-label="设置"]').trigger('click')
+      await flushPromises()
+      await wrapper.get('[aria-controls="settings-panel-git"]').trigger('click')
+      await wrapper.get('.git-repositories-heading button').trigger('click')
+      const fields = wrapper.findAll('.git-repository-form input')
+      await fields[0]!.setValue('项目仓库')
+      await fields[1]!.setValue('/tmp/project')
+      await fields[2]!.setValue('me@example.test')
+      await fields[3]!.setValue('main')
+      expect(invoke.mock.calls.some(([command]) => command === 'save_workspace_settings')).toBe(false)
+      await wrapper.get('.app-rail [aria-label="设置"]').trigger('click')
+      await flushPromises()
+      const saves = invoke.mock.calls.filter(([command]) => command === 'save_workspace_settings')
+      expect(saves).toHaveLength(1)
+      expect(saves[0]![1]).toMatchObject({
+        workspacePath: DEMO_WORKSPACE,
+        settings: {
+          git: {
+            executable: 'git',
+            includeMerges: false,
+            repositories: [{ name: '项目仓库', path: '/tmp/project', author: 'me@example.test', branch: 'main' }],
+          },
+        },
+      })
+      await wrapper.get('.app-rail [aria-label="Git 日报"]').trigger('click')
+      await flushPromises()
+      expect(wrapper.get('.git-module').text()).toContain('1 个仓库')
+      expect(wrapper.get('.git-toolbar .git-fetch').attributes('disabled')).toBeUndefined()
+    } finally {
+      wrapper.unmount()
+    }
+  })
+})
+
 function savedPreferences() {
   const calls = invoke.mock.calls.filter(([command]) => command === 'save_ui_preferences')
   expect(calls.length).toBeGreaterThan(0)

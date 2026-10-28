@@ -2,6 +2,7 @@ mod ai;
 mod appearance;
 mod database;
 mod excel;
+mod git;
 mod history;
 mod holidays;
 mod report_export;
@@ -100,6 +101,7 @@ fn stored_settings_at(
         excel: excel::Settings::default(),
         summary: summary::Settings::default(),
         database: database::Settings::default(),
+        git: git::Settings::default(),
     })
 }
 
@@ -393,6 +395,7 @@ fn save_workspace_settings_at(
         .map_err(|_| "工作空间已切换，请重新打开设置后重试".to_string())?;
     appearance::validate(&stored.appearance)?;
     ai::validate(&stored.ai)?;
+    git::validate(&stored.git)?;
     // Validate the dependency against this same save, so enabling Excel and
     // configuring its AI provider succeeds or fails as one transaction.
     validate_excel_settings(&stored.excel, &stored.ai)?;
@@ -437,8 +440,44 @@ async fn save_workspace_settings(
     workspace_path: String,
     settings: settings::StoredSettings,
 ) -> Result<settings::StoredSettings, String> {
+    let expected_path = workspace_path.clone();
+    let git_settings = settings.git.clone();
+    let changed_git = run_optional_workspace(state.0.clone(), move |workspace| {
+        let workspace = workspace.ok_or("请先选择工作空间")?;
+        summary::validate_workspace(workspace.root(), &expected_path)?;
+        let current = settings::load(&workspace.root().join(settings::FILE_NAME))?.unwrap_or_default();
+        Ok(current.git != git_settings)
+    }).await?;
+    if changed_git { git::validate_repositories(&settings.git).await?; }
     run_workspace(state.0.clone(), move |workspace| {
         save_workspace_settings_at(workspace, &workspace_path, settings)
+    }).await
+}
+
+#[tauri::command]
+async fn load_git_settings(state: State<'_, AppState>) -> Result<git::Settings, String> {
+    run_optional_workspace(state.0.clone(), |workspace| {
+        let Some(workspace) = workspace else { return Ok(git::Settings::default()); };
+        Ok(settings::load(&workspace.root().join(settings::FILE_NAME))?.unwrap_or_default().git)
+    }).await
+}
+
+#[tauri::command]
+async fn read_git_daily_log(state: State<'_, AppState>, workspace_path: String, date: String) -> Result<git::DailyLog, String> {
+    let source_path = workspace_path.clone();
+    let configuration = run_optional_workspace(state.0.clone(), move |workspace| {
+        let workspace = workspace.ok_or("请先选择工作空间")?;
+        summary::validate_workspace(workspace.root(), &source_path)?;
+        Ok(settings::load(&workspace.root().join(settings::FILE_NAME))?.unwrap_or_default().git)
+    }).await?;
+    // Release the workspace lock before spawning Git, so editing and switching stay responsive.
+    let result = git::daily_log(configuration.clone(), date).await?;
+    run_optional_workspace(state.0.clone(), move |workspace| {
+        let workspace = workspace.ok_or("请先选择工作空间")?;
+        summary::validate_workspace(workspace.root(), &workspace_path)?;
+        let current = settings::load(&workspace.root().join(settings::FILE_NAME))?.unwrap_or_default().git;
+        if current != configuration { return Err("Git 配置已修改，请重新获取提交".into()); }
+        Ok(result)
     }).await
 }
 
@@ -949,6 +988,8 @@ pub fn run() {
             open_summary_output_directory,
             export_summary,
             load_excel_settings,
+            load_git_settings,
+            read_git_daily_log,
             load_ui_preferences,
             save_ui_preferences,
             save_workspace_settings,
@@ -1141,7 +1182,7 @@ mod excel_integration_tests {
         settings::save(&path, &original).unwrap();
         let original_bytes = fs::read(&path).unwrap();
 
-        for invalid_section in ["appearance", "ai", "excel", "excelAi", "summary", "database"] {
+        for invalid_section in ["appearance", "ai", "excel", "excelAi", "summary", "database", "git"] {
             let mut proposed = original.clone();
             proposed.appearance.scale = 110;
             proposed.ai.summary_prompt = "尚未保存的新提示词".into();
@@ -1153,6 +1194,7 @@ mod excel_integration_tests {
                 "excelAi" => proposed.ai.default_provider_id = None,
                 "summary" => proposed.summary.output_directory = "../outside".into(),
                 "database" => { proposed.database.enabled = true; proposed.database.sqlite_path = "../outside.sqlite".into(); },
+                "git" => proposed.git.executable = "relative/git".into(),
                 _ => unreachable!(),
             }
 

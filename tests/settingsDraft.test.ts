@@ -11,6 +11,7 @@ afterEach(() => {
 function initialSettings(): WorkspaceSettings {
   return {
     appearance: { scale: 100, rail: 'right' },
+    git: { executable: 'git', repositories: [], includeMerges: false },
     database: cloneDatabaseSettings(DEFAULT_DATABASE_SETTINGS),
     ai: {
       providers: [
@@ -71,6 +72,7 @@ describe('manual settings draft', () => {
     state.draft.value.ai.generationPreference = '改写时保留数字'
     state.draft.value.ai.summaryPrompt = '按项目整理'
     state.draft.value.summary.outputDirectory = '总结/周报'
+    state.draft.value.git.repositories.push({ id: 'repo', name: '日报', path: '/tmp/project', author: '', branch: '' })
     state.draft.value.excel = {
       enabled: true,
       templatePath: '/templates/week.xlsx',
@@ -90,13 +92,22 @@ describe('manual settings draft', () => {
     state.draft.value.excel.prompt = '整理工作记录'
     state.draft.value.database.enabled = true
     state.draft.value.database.sqlitePath = 'backup/reports.sqlite'
+    state.draft.value.git.repositories.push({
+      id: 'repo',
+      name: '日报',
+      path: '/tmp/project',
+      author: '本人',
+      branch: 'main',
+    })
     const expected = cloneWorkspaceSettings(state.draft.value)
     expect(await state.save()).toBe(true)
     expect(state.persist).toHaveBeenCalledExactlyOnceWith(expected)
     expect(state.unchanged.value).toBe(true)
     expect(state.saved.value).toBe(true)
     state.draft.value.ai.providers[0]!.name = '之后的修改'
+    state.draft.value.git.repositories[0]!.author = '之后修改的作者'
     expect(state.persist.mock.calls[0]![0].ai.providers[0]!.name).toBe('默认 AI')
+    expect(state.persist.mock.calls[0]![0].git.repositories[0]!.author).toBe('本人')
     expect(state.unchanged.value).toBe(false)
     expect(state.saved.value).toBe(false)
   })

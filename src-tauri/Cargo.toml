@@ -1,6 +1,6 @@
 [package]
 name = "work-report"
-version = "0.1.4"
+version = "0.1.5"
 description = "A workspace-based Markdown work journal"
 authors = ["WorkReport"]
 edition = "2021"

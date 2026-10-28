@@ -5,6 +5,7 @@ import { cloneExcelSettings, type ExcelSettings } from './useExcel'
 import type { SummaryOutputSettings } from './useSummaryOutput'
 import { cloneDatabaseSettings, type DatabaseSettings } from './database'
 import type { RailSide } from './useAppearance'
+import { cloneGitSettings, type GitSettings } from './useGit'
 
 export interface WorkspaceSettings {
   appearance: { scale: number; rail: RailSide }
@@ -12,6 +13,7 @@ export interface WorkspaceSettings {
   excel: ExcelSettings
   summary: SummaryOutputSettings
   database: DatabaseSettings
+  git: GitSettings
 }
 
 export function cloneWorkspaceSettings(value: WorkspaceSettings): WorkspaceSettings {
@@ -21,6 +23,7 @@ export function cloneWorkspaceSettings(value: WorkspaceSettings): WorkspaceSetti
     excel: cloneExcelSettings(value.excel),
     summary: { outputDirectory: value.summary.outputDirectory },
     database: cloneDatabaseSettings(value.database),
+    git: cloneGitSettings(value.git),
   }
 }
 

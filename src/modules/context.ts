@@ -7,6 +7,7 @@ import type { useHolidays } from '../lib/holidays'
 import type { useExcel } from '../lib/useExcel'
 import type { useSummaryOutput } from '../lib/useSummaryOutput'
 import type { useJournalPreview } from '../lib/useJournalPreview'
+import type { useGit } from '../lib/useGit'
 
 export type JournalStore = ReturnType<typeof useJournal>
 export type AiStore = ReturnType<typeof useAi>
@@ -47,6 +48,8 @@ export interface ModuleActions {
   openAiSettings(): void
   openExcelSettings(): void
   openHolidaySettings(): void
+  openGitSettings(): void
+  appendGitReport(workspacePath: string, date: string, content: string): Promise<boolean>
   syncHolidays(year: number): void
 }
 
@@ -60,6 +63,7 @@ export interface ModuleContext {
   holidays: HolidayStore
   excel: ExcelStore
   summaryOutput: SummaryOutputStore
+  git: ReturnType<typeof useGit>
   summarySelectionDates: Ref<string[]>
   excelBlockedReason: ComputedRef<string>
   now: Ref<Dayjs>

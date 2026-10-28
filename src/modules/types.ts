@@ -2,7 +2,7 @@ import type { Component } from 'vue'
 import type { SkinId } from '../lib/skins'
 
 /** 内置模块 id；新增模块只需在 registry 中登记，并在持久化层保持字符串兼容。 */
-export type ModuleId = 'calendar' | 'editor' | 'overview' | 'history' | 'summary' | 'excel' | 'directory'
+export type ModuleId = 'calendar' | 'editor' | 'overview' | 'history' | 'summary' | 'excel' | 'directory' | 'git'
 
 export interface ModulePlacement {
   id: ModuleId
@@ -106,6 +106,7 @@ export const MODULE_IDS: readonly ModuleId[] = [
   'summary',
   'excel',
   'directory',
+  'git',
 ]
 
 export function isModuleId(value: unknown): value is ModuleId {

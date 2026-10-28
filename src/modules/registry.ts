@@ -4,6 +4,7 @@ import {
   PhClockCounterClockwise,
   PhFileXls,
   PhFolderOpen,
+  PhGitBranch,
   PhNotePencil,
   PhSparkle,
 } from '@phosphor-icons/vue'
@@ -15,6 +16,7 @@ import ExcelModule from '../components/modules/ExcelModule.vue'
 import HistoryModule from '../components/modules/HistoryModule.vue'
 import SummaryModule from '../components/modules/SummaryModule.vue'
 import OverviewModule from '../components/modules/OverviewModule.vue'
+import GitModule from '../components/modules/GitModule.vue'
 import type { ModuleDefinition, ModuleId } from './types'
 
 /**
@@ -120,6 +122,20 @@ export const MODULE_REGISTRY: readonly ModuleDefinition[] = [
       '点击任意一篇，日历、日报编辑、历史记录、总结和 Excel报告都会切换到这一天。',
       '如果之前框选了多天，点击目录中的单篇会先解除框选，避免总结仍按旧范围统计。',
       '目录随日报的新增与切换自动更新，无需手动刷新。',
+    ],
+    defaultEnabled: false,
+  },
+  {
+    id: 'git',
+    title: 'Git 日报',
+    description: '从本地 Git 提交中提取当天工作记录，预览并追加到日报。',
+    icon: PhGitBranch,
+    component: GitModule,
+    help: [
+      '先在「设置 → Git 配置」添加本地项目仓库，可按作者和分支筛选提交。',
+      '点击「获取提交」读取日历当前选中的一天；「今天」可回到当日。按本机时区和提交时间筛选。',
+      '按项目把提交说明整理为日报，支持修改预览、复制或追加到当天编辑区，保留已有正文并自动保存。',
+      '默认忽略合并提交；读取本地记录，无需联网或配置 AI。',
     ],
     defaultEnabled: false,
   },

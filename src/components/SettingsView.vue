@@ -13,6 +13,7 @@ import {
   PhFloppyDisk,
   PhDatabase,
   PhCalendarCheck,
+  PhGitBranch,
 } from '@phosphor-icons/vue'
 import { aiApi, type AiProvider, type DetectedCli } from '../lib/ai'
 import type { Workspace } from '../lib/workspace'
@@ -33,6 +34,7 @@ import {
 } from '../lib/database'
 import HolidaySettings from './HolidaySettings.vue'
 import type { HolidayState } from '../lib/holidays'
+import GitSettings from './GitSettings.vue'
 
 const props = defineProps<{
   workspace: Workspace | null
@@ -73,6 +75,7 @@ const busy = computed(() => props.loading || props.saving || props.databaseBusy 
 const databaseForm = ref<InstanceType<typeof DatabaseSettings>>()
 const excelForm = ref<InstanceType<typeof ExcelSettings>>()
 const summaryForm = ref<InstanceType<typeof SummaryOutputSettings>>()
+const gitForm = ref<InstanceType<typeof GitSettings>>()
 const validationError = ref('')
 const historyLimitGb = computed(() => Math.round(draft.value.database.historyLimitBytes / (1024 * 1024 * 1024)))
 const historyLimitMinGb = MIN_HISTORY_LIMIT_BYTES / (1024 * 1024 * 1024)
@@ -83,7 +86,7 @@ function onHistoryLimitInput(event: Event) {
     Number.isFinite(value) ? value * 1024 * 1024 * 1024 : Number.NaN,
   )
 }
-const saveError = computed(() => validationError.value || draftError.value || props.error)
+const saveError = computed(() => validationError.value || props.error || draftError.value)
 const aiReady = computed(() => {
   const provider = draft.value.ai.providers.find((item) => item.id === draft.value.ai.defaultProviderId)
   if (!provider || !provider.name.trim()) return false
@@ -139,6 +142,11 @@ async function saveAll(): Promise<boolean> {
     return false
   }
   if (!validateAi()) return false
+  if (gitForm.value && !gitForm.value.validate()) {
+    validationError.value = '请检查 Git 配置。'
+    void navigate('git')
+    return false
+  }
   if (summaryForm.value && !summaryForm.value.validate()) {
     validationError.value = '请检查总结输出目录。'
     navigate('summary')
@@ -181,7 +189,8 @@ const presetOptions = [
 ]
 const pageRoot = ref<HTMLElement>()
 const contentHeading = ref<HTMLElement>()
-type SettingsSection = 'workspace' | 'appearance' | 'holidays' | 'ai' | 'prompts' | 'summary' | 'excel' | 'database'
+type SettingsSection =
+  'workspace' | 'appearance' | 'holidays' | 'ai' | 'prompts' | 'summary' | 'excel' | 'database' | 'git'
 const navigation = [
   {
     label: '基础设置',
@@ -190,6 +199,7 @@ const navigation = [
       { id: 'appearance', title: '外观与字体', description: '调整阅读时的字体大小', icon: PhMonitor },
       { id: 'holidays', title: '放假信息', description: '手动同步放假与调休安排', icon: PhCalendarCheck },
       { id: 'database', title: '数据存储', description: '数据库备份、复制与迁移', icon: PhDatabase },
+      { id: 'git', title: 'Git 配置', description: '项目仓库、作者与分支筛选', icon: PhGitBranch },
     ],
   },
   {
@@ -223,6 +233,7 @@ const sectionChanges = computed<Record<SettingsSection, boolean>>(() => {
     workspace: false,
     holidays: false,
     database: differs(current.database, stored.database),
+    git: differs(current.git, stored.git),
     appearance: differs(current.appearance, stored.appearance),
     ai: differs(
       [current.ai.providers, current.ai.defaultProviderId],
@@ -620,6 +631,24 @@ function remove(id: string) {
                 @busy="emit('databaseBusy', $event)"
                 @transferred="emit('databaseTransferred', $event)"
               />
+            </section>
+          </Transition>
+          <Transition name="settings-panel">
+            <section
+              v-show="activeSection === 'git'"
+              id="settings-panel-git"
+              tabindex="0"
+              class="settings-section settings-panel"
+              :inert="activeSection !== 'git'"
+              aria-labelledby="git-settings-title"
+            >
+              <div class="settings-section-heading">
+                <div>
+                  <h3 id="git-settings-title">Git 配置</h3>
+                  <p>关联本地项目，从每天的提交记录中整理日报。修改后点击底部保存设置。</p>
+                </div>
+              </div>
+              <GitSettings ref="gitForm" v-model="draft.git" :busy="busy" :workspace-path="workspace?.path ?? ''" />
             </section>
           </Transition>
           <Transition name="settings-panel">

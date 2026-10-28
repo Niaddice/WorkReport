@@ -22,6 +22,8 @@ pub struct StoredSettings {
     pub summary: crate::summary::Settings,
     #[serde(default)]
     pub database: crate::database::Settings,
+    #[serde(default)]
+    pub git: crate::git::Settings,
     /// 主界面模块布局；只影响界面，不参与业务校验。
     /// 统一保存设置时前端可能不带 ui 字段，因此这里用 Option 区分“未提交”与“已清空”。
     #[serde(default)]
@@ -124,6 +126,7 @@ mod tests {
         let settings = StoredSettings {
             ui: None,
             database: crate::database::Settings::default(),
+            git: crate::git::Settings::default(),
             appearance: crate::appearance::Settings { scale: 110, ..Default::default() },
             ai: crate::ai::Settings {
                 providers: vec![provider("one")],
@@ -161,6 +164,7 @@ mod tests {
             &StoredSettings {
                 ui: None,
                 database: crate::database::Settings::default(),
+                git: crate::git::Settings::default(),
                 appearance: crate::appearance::Settings { scale: 120, ..Default::default() },
                 ai: crate::ai::Settings::default(),
                 excel: crate::excel::Settings {
@@ -194,6 +198,7 @@ mod tests {
         assert!(!restored.excel.enabled);
         assert!(restored.excel.template_path.is_empty());
         assert_eq!(restored.summary.output_directory, "summary");
+        assert_eq!(restored.git, crate::git::Settings::default());
         // 旧文件没有 ui 段：读取后是 None，由界面层回退默认布局。
         assert!(restored.ui.is_none());
     }
@@ -213,6 +218,7 @@ mod tests {
             &StoredSettings {
                 ui: None,
                 database: crate::database::Settings::default(),
+                git: crate::git::Settings::default(),
                 appearance: crate::appearance::Settings { scale: 90, ..Default::default() },
                 ai: crate::ai::Settings::default(),
                 excel: crate::excel::Settings::default(),
