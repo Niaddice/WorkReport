@@ -5,11 +5,12 @@ import { invoke, isTauri } from '@tauri-apps/api/core'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { listen } from '@tauri-apps/api/event'
 import { open as pickDirectory } from '@tauri-apps/plugin-dialog'
-import { PhCircleNotch, PhFolder } from '@phosphor-icons/vue'
+import { PhCircleNotch } from '@phosphor-icons/vue'
 import AppToolbar from './components/AppToolbar.vue'
 import AppRail from './components/AppRail.vue'
 import SkinDialog from './components/SkinDialog.vue'
 import SettingsView from './components/SettingsView.vue'
+import SettingsDialog from './components/SettingsDialog.vue'
 import WorkspaceGate from './components/WorkspaceGate.vue'
 import ConfirmDialog from './components/ConfirmDialog.vue'
 import SettingsLeaveDialog from './components/SettingsLeaveDialog.vue'
@@ -99,12 +100,16 @@ const picking = ref(false)
 const workspaceSwitchDialog = ref<InstanceType<typeof WorkspaceSwitchDialog>>()
 const pendingWorkspaceSwitch = ref<{ path: string; sourcePath: string; sourceName: string } | null>(null)
 const workspaceSwitchError = ref('')
-const openingDirectory = ref(false)
 const requestingAi = ref(false)
 const excelBusy = computed(() => excelPreparing.value || excelExporting.value)
 const summarySelectionDates = ref<string[]>([])
 const refreshRevision = ref(0)
 const settingsView = ref<InstanceType<typeof SettingsView>>()
+const appRail = ref<InstanceType<typeof AppRail>>()
+const settingsCloseTarget = ref<'settings' | 'close'>('settings')
+function settingsButtonRect() {
+  return appRail.value?.getSettingsRect() ?? null
+}
 const databaseSettings = ref(cloneDatabaseSettings(DEFAULT_DATABASE_SETTINGS))
 const databaseLoading = ref(false)
 const settingsDatabaseError = ref('')
@@ -138,6 +143,17 @@ const settingsLoading = computed(
     excel.loading.value ||
     summaryOutput.loading.value ||
     databaseLoading.value,
+)
+const settingsDialogBusy = computed(
+  () =>
+    busy.value ||
+    picking.value ||
+    settingsLoading.value ||
+    settingsSaving.value ||
+    settingsLeaveBusy.value ||
+    databaseBusy.value ||
+    summaryOutput.exporting.value ||
+    excelBusy.value,
 )
 let settingsLoadRevision = 0
 type SettingsExit = 'home' | 'workspace' | 'close'
@@ -311,7 +327,7 @@ async function restoreRecentWorkspace() {
   }
 }
 
-async function navigate(target: 'home' | 'settings') {
+async function navigate(target: 'home' | 'settings', closeTarget: 'settings' | 'close' = 'settings') {
   if (
     busy.value ||
     picking.value ||
@@ -324,6 +340,7 @@ async function navigate(target: 'home' | 'settings') {
     page.value === target
   )
     return
+  settingsCloseTarget.value = target === 'home' ? closeTarget : 'settings'
   if (target === 'home' && requestSettingsExit('home')) return
   if (!(await journal.flush())) return
   page.value = target
@@ -350,6 +367,7 @@ async function toggleSettings() {
     excelBusy.value
   )
     return
+  settingsCloseTarget.value = 'settings'
   settingsLeaveBusy.value = true
   try {
     if (!settingsView.value.unchanged && !(await settingsView.value.save())) return
@@ -475,6 +493,7 @@ function requestSettingsExit(action: SettingsExit): boolean {
 function cancelSettingsExit() {
   if (settingsLeaveBusy.value || settingsSaving.value) return
   pendingSettingsExit.value = null
+  settingsCloseTarget.value = 'settings'
   settingsLeaveError.value = ''
   void settingsLeaveDialog.value?.close()
 }
@@ -505,17 +524,6 @@ async function closeWindow() {
   ai.closeSummary()
   await excel.cancel()
   if (await journal.flush()) await getCurrentWindow().destroy()
-}
-async function openWorkspaceDirectory() {
-  if (!workspace.value || openingDirectory.value) return
-  openingDirectory.value = true
-  try {
-    await api.openDirectory()
-  } catch (cause) {
-    journal.reportError(cause)
-  } finally {
-    openingDirectory.value = false
-  }
 }
 async function chooseWorkspace() {
   if (
@@ -839,7 +847,7 @@ async function startAiSummary() {
     requestingAi.value = false
   }
 }
-const moduleDisabled = computed(() => busy.value || requestingAi.value)
+const moduleDisabled = computed(() => page.value !== 'home' || busy.value || requestingAi.value)
 const moduleActions: ModuleActions = {
   selectDate,
   selectReport,
@@ -867,7 +875,6 @@ const moduleActions: ModuleActions = {
   openHolidaySettings: () => {
     void openHolidaySettings()
   },
-  openWorkspaceDirectory,
   syncHolidays: (year: number) => {
     void syncHolidays(year)
   },
@@ -1081,9 +1088,17 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="app-shell" :class="{ 'has-native-titlebar': nativeApp && isMac, 'rail-left': appearanceRail === 'left' }">
+  <div
+    class="app-shell"
+    :class="{
+      'has-native-titlebar': nativeApp && isMac,
+      'rail-left': appearanceRail === 'left',
+      'settings-open': page === 'settings',
+    }"
+  >
     <div class="app-main">
       <AppToolbar
+        :inert="page === 'settings'"
         :page="page"
         :native-titlebar="nativeApp && isMac"
         :greeting="greeting"
@@ -1105,34 +1120,7 @@ onBeforeUnmount(() => {
           <PhCircleNotch class="spin" :size="18" aria-hidden="true" /><span>正在打开工作空间…</span>
         </main>
         <Transition name="page-switch">
-          <div v-show="page === 'settings'" class="settings-viewport" :inert="page !== 'settings'">
-            <SettingsView
-              ref="settingsView"
-              :key="workspace?.path ?? 'no-workspace'"
-              :workspace="workspace"
-              :picking="picking || busy || excelBusy || settingsSaving"
-              :bundle="workspaceSettings"
-              :loading="settingsLoading"
-              :saving="settingsSaving"
-              :database-busy="databaseBusy"
-              :before-database-transfer="journal.flush"
-              :error="settingsError"
-              :save="saveWorkspaceSettings"
-              :holidays="holidayState"
-              :holiday-loading="holidayLoading"
-              :holiday-syncing="holidaySyncing"
-              :holiday-error="holidayError"
-              :current-year="now.year()"
-              @database-busy="databaseActivity = $event"
-              @database-transferred="onDatabaseTransferred"
-              @sync-holidays="syncHolidays"
-              @back="navigate('home')"
-              @workspace="chooseWorkspace"
-            />
-          </div>
-        </Transition>
-        <Transition name="page-switch">
-          <main v-if="workspace && !startupPending" v-show="page === 'home'" class="home" :inert="page !== 'home'">
+          <main v-if="workspace && !startupPending" class="home" :inert="page !== 'home'">
             <ModuleBoard
               ref="moduleBoard"
               :layout="layoutTree"
@@ -1143,21 +1131,6 @@ onBeforeUnmount(() => {
               @resize="resizeModules"
               @remove="removeModule"
             />
-            <footer class="home-footer">
-              <span :title="workspace.path">
-                <button
-                  class="workspace-folder-button"
-                  aria-label="打开工作空间目录"
-                  title="打开工作空间目录"
-                  :disabled="openingDirectory"
-                  @click="openWorkspaceDirectory"
-                >
-                  <PhFolder :size="15" />
-                </button>
-                <span class="workspace-path-text">{{ workspace.path }}</span>
-              </span>
-              <span>每一天，一份工作记录</span>
-            </footer>
           </main>
         </Transition>
         <Transition name="page-switch">
@@ -1173,6 +1146,39 @@ onBeforeUnmount(() => {
           />
         </Transition>
       </div>
+      <SettingsDialog
+        :visible="page === 'settings'"
+        :busy="settingsDialogBusy"
+        :button-rect="settingsButtonRect"
+        :close-target="settingsCloseTarget"
+        @close="navigate('home', $event)"
+      >
+        <div class="settings-viewport" :inert="page !== 'settings'">
+          <SettingsView
+            ref="settingsView"
+            :key="workspace?.path ?? 'no-workspace'"
+            :workspace="workspace"
+            :picking="picking || busy || excelBusy || settingsSaving"
+            :bundle="workspaceSettings"
+            :loading="settingsLoading"
+            :saving="settingsSaving"
+            :database-busy="databaseBusy"
+            :before-database-transfer="journal.flush"
+            :error="settingsError"
+            :save="saveWorkspaceSettings"
+            :holidays="holidayState"
+            :holiday-loading="holidayLoading"
+            :holiday-syncing="holidaySyncing"
+            :holiday-error="holidayError"
+            :current-year="now.year()"
+            @database-busy="databaseActivity = $event"
+            @database-transferred="onDatabaseTransferred"
+            @sync-holidays="syncHolidays"
+            @back="navigate('home')"
+            @workspace="chooseWorkspace"
+          />
+        </div>
+      </SettingsDialog>
       <SettingsLeaveDialog
         ref="settingsLeaveDialog"
         :action="pendingSettingsExit"
@@ -1226,6 +1232,7 @@ onBeforeUnmount(() => {
     </div>
     <AppRail
       v-if="workspace"
+      ref="appRail"
       :disabled="busy || excelBusy || picking"
       :active="layoutItems.map((item) => item.id)"
       :settings-active="page === 'settings'"

@@ -46,7 +46,6 @@ export interface ModuleActions {
   openAiSettings(): void
   openExcelSettings(): void
   openHolidaySettings(): void
-  openWorkspaceDirectory(): void
   syncHolidays(year: number): void
 }
 

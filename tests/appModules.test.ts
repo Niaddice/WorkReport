@@ -13,6 +13,8 @@ vi.mock('@tauri-apps/api/event', () => ({ listen: async () => () => {} }))
 vi.mock('@tauri-apps/plugin-dialog', () => ({ open: pickDirectory }))
 
 import App from '../src/App.vue'
+import ModuleBoard from '../src/components/ModuleBoard.vue'
+import SettingsDialog from '../src/components/SettingsDialog.vue'
 import { flattenLayout } from '../src/modules/layout'
 import { DEFAULT_DATABASE_SETTINGS } from '../src/lib/database'
 import type { WorkspaceSettings } from '../src/lib/settingsDraft'
@@ -140,12 +142,12 @@ describe('workspace settings sync confirmation', () => {
     expect((wrapper.find('.workspace-switch-dialog').element as HTMLDialogElement).open).toBe(true)
     expect(wrapper.find('.workspace-switch-path').text()).toBe(target)
     expect(invoke.mock.calls.filter(([command]) => command === 'open_workspace')).toHaveLength(1)
-    expect(wrapper.find('.workspace-path-text').text()).toBe(DEMO_WORKSPACE)
+    expect(wrapper.getComponent(ModuleBoard).props('workspacePath')).toBe(DEMO_WORKSPACE)
 
     await wrapper.find('.workspace-switch-dialog md-filled-button').trigger('click')
     await flushPromises()
     expect(invoke).toHaveBeenCalledWith('open_workspace', { path: target, syncSettingsFrom: DEMO_WORKSPACE })
-    expect(wrapper.find('.workspace-path-text').text()).toBe(target)
+    expect(wrapper.getComponent(ModuleBoard).props('workspacePath')).toBe(target)
     expect((wrapper.find('.workspace-switch-dialog').element as HTMLDialogElement).open).toBe(false)
     wrapper.unmount()
   })
@@ -160,7 +162,7 @@ describe('workspace settings sync confirmation', () => {
       'open_workspace',
       { path: target },
     ])
-    expect(wrapper.find('.workspace-path-text').text()).toBe(target)
+    expect(wrapper.getComponent(ModuleBoard).props('workspacePath')).toBe(target)
     wrapper.unmount()
   })
 
@@ -170,7 +172,7 @@ describe('workspace settings sync confirmation', () => {
     await wrapper.findAll('.workspace-switch-dialog md-text-button')[0]!.trigger('click')
     await flushPromises()
     expect(invoke.mock.calls.filter(([command]) => command === 'open_workspace')).toHaveLength(1)
-    expect(wrapper.find('.workspace-path-text').text()).toBe(DEMO_WORKSPACE)
+    expect(wrapper.getComponent(ModuleBoard).props('workspacePath')).toBe(DEMO_WORKSPACE)
     expect((wrapper.find('.workspace-switch-dialog').element as HTMLDialogElement).open).toBe(false)
     wrapper.unmount()
   })
@@ -193,17 +195,70 @@ describe('workspace settings sync confirmation', () => {
     await chooseAnotherWorkspace(wrapper, target)
     await wrapper.find('.workspace-switch-dialog md-filled-button').trigger('click')
     await flushPromises()
-    expect(wrapper.find('.workspace-path-text').text()).toBe(DEMO_WORKSPACE)
+    expect(wrapper.getComponent(ModuleBoard).props('workspacePath')).toBe(DEMO_WORKSPACE)
     expect(wrapper.find('.workspace-switch-dialog .dialog-error').text()).toContain('目标设置无法写入')
     expect((wrapper.find('.workspace-switch-dialog').element as HTMLDialogElement).open).toBe(true)
     await wrapper.findAll('.workspace-switch-dialog md-text-button')[1]!.trigger('click')
     await flushPromises()
-    expect(wrapper.find('.workspace-path-text').text()).toBe(target)
+    expect(wrapper.getComponent(ModuleBoard).props('workspacePath')).toBe(target)
     wrapper.unmount()
   })
 })
 
 describe('modular home integration', () => {
+  it('keeps the editor highlighted while calendar selection waits for the next report', async () => {
+    const today = dayjs()
+    const target = today.startOf('month').date(today.date() === 5 ? 6 : 5)
+    const makeDocument = (date: ReturnType<typeof dayjs>) => ({
+      date: date.format('YYYYMMDD'),
+      filename: `${date.format('YYYYMMDD')}.md`,
+      format: 'md',
+      content: `日报 ${date.format('YYYYMMDD')}`,
+      revision: date.format('YYYYMMDD'),
+    })
+    const currentDocument = makeDocument(today)
+    const targetDocument = makeDocument(target)
+    let completeRead!: (document: typeof targetDocument) => void
+    const nextRead = new Promise<typeof targetDocument>((resolve) => {
+      completeRead = resolve
+    })
+    invoke.mockImplementation(async (command: string, args?: { date?: string }) => {
+      if (command === 'list_entries') return [currentDocument, targetDocument]
+      if (command === 'read_entry') return args?.date === targetDocument.date ? nextRead : currentDocument
+      return commandResult(command)
+    })
+    const wrapper = await openDemoWorkspace()
+    const activeIds = () =>
+      wrapper.findAll('.module-panel.is-active').map((panel) => panel.attributes('data-module-id'))
+    try {
+      expect(activeIds()).toEqual(['editor'])
+      const day = wrapper.get<HTMLButtonElement>(
+        `.calendar-panel .day-cell[aria-label^="${target.format('YYYY年M月D日 ')}"]`,
+      )
+      await day.trigger('pointerdown', { button: 0 })
+      expect(activeIds()).toEqual(['editor'])
+      day.element.focus()
+      await wrapper.vm.$nextTick()
+      expect(activeIds()).toEqual(['editor'])
+      window.dispatchEvent(new Event('pointerup'))
+      await day.trigger('click')
+      await flushPromises()
+      expect(invoke).toHaveBeenCalledWith('read_entry', { date: targetDocument.date, format: 'md' })
+      expect(wrapper.get('.markdown-editor').attributes('disabled')).toBeDefined()
+      expect(activeIds()).toEqual(['editor'])
+
+      completeRead(targetDocument)
+      await flushPromises()
+      const editor = wrapper.get<HTMLTextAreaElement>('.markdown-editor').element
+      expect(editor.value).toBe(targetDocument.content)
+      expect(document.activeElement).toBe(editor)
+      expect(activeIds()).toEqual(['editor'])
+    } finally {
+      completeRead(targetDocument)
+      wrapper.unmount()
+    }
+  })
+
   it('docks the preview against the editor and chooses the other side after the layout changes', async () => {
     const date = dayjs().format('YYYYMMDD')
     const document = { date, filename: `${date}.md`, format: 'md', content: '测试正文', revision: '1' }
@@ -500,7 +555,7 @@ describe('modular home integration', () => {
       ['open_workspace', { path: DEMO_WORKSPACE }],
       ['open_workspace', { path: target }],
     ])
-    expect(wrapper.find('.workspace-path-text').text()).toBe(target)
+    expect(wrapper.getComponent(ModuleBoard).props('workspacePath')).toBe(target)
     expect(wrapper.find('.module-board').exists()).toBe(true)
     expect(wrapper.find('.workspace-gate').exists()).toBe(false)
     wrapper.unmount()
@@ -750,6 +805,10 @@ describe('modular home integration', () => {
     await flushPromises()
 
     expect(wrapper.find('.settings-viewport').exists()).toBe(true)
+    expect(wrapper.get('.settings-dialog').isVisible()).toBe(true)
+    expect(wrapper.get('.settings-dialog').attributes('role')).toBe('dialog')
+    expect(wrapper.get('.home').isVisible()).toBe(true)
+    expect(wrapper.get('.home').attributes('inert')).toBeDefined()
     expect(wrapper.find('.app-rail').exists()).toBe(true)
     const buttons = wrapper.findAll('.app-rail .rail-button')
     const last = buttons[buttons.length - 1]!
@@ -762,9 +821,90 @@ describe('modular home integration', () => {
     expect(last.classes()).not.toContain('is-active')
     expect(wrapper.find('.home').attributes('inert')).toBeUndefined()
     expect(wrapper.find('.settings-viewport').attributes('inert')).toBeDefined()
+    expect(wrapper.get('.settings-dialog').isVisible()).toBe(false)
     expect(invoke.mock.calls.some(([command]) => command === 'save_workspace_settings')).toBe(false)
     expect((wrapper.find('.settings-leave-dialog').element as HTMLDialogElement).open).toBe(false)
     wrapper.unmount()
+  })
+
+  it('confirms unsaved settings when closing the maximized window or pressing Escape', async () => {
+    const wrapper = await openDemoWorkspace()
+    try {
+      await wrapper.get('.app-rail [aria-label="设置"]').trigger('click')
+      await flushPromises()
+      await wrapper.get('[aria-controls="settings-panel-appearance"]').trigger('click')
+      await wrapper.get('#settings-panel-appearance [aria-label="放大字体"]').trigger('click')
+      await wrapper.get('[aria-label="关闭设置"]').trigger('click')
+      await flushPromises()
+      expect(wrapper.getComponent(SettingsDialog).props('closeTarget')).toBe('close')
+      expect(wrapper.get<HTMLDialogElement>('.settings-leave-dialog').element.open).toBe(true)
+      expect(wrapper.get('.settings-dialog').isVisible()).toBe(true)
+
+      await wrapper.get('.settings-leave-dialog md-text-button').trigger('click')
+      await flushPromises()
+      expect(wrapper.get<HTMLDialogElement>('.settings-leave-dialog').element.open).toBe(false)
+      expect(wrapper.get('.appearance-scale-value').text()).toBe('110%')
+      expect(wrapper.getComponent(SettingsDialog).props('closeTarget')).toBe('settings')
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))
+      await flushPromises()
+      expect(wrapper.get<HTMLDialogElement>('.settings-leave-dialog').element.open).toBe(true)
+      await wrapper.findAll('.settings-leave-dialog md-text-button')[1]!.trigger('click')
+      await flushPromises()
+      expect(wrapper.get('.settings-dialog').isVisible()).toBe(false)
+      expect(wrapper.get('.home').attributes('inert')).toBeUndefined()
+      expect(invoke.mock.calls.some(([command]) => command === 'save_workspace_settings')).toBe(false)
+    } finally {
+      wrapper.unmount()
+    }
+  })
+
+  it.each([false, true])(
+    'keeps the window close button as the shrink target after confirming save=%s',
+    async (save) => {
+      invoke.mockImplementation(async (command: string, args?: { settings: WorkspaceSettings }) =>
+        command === 'save_workspace_settings' ? args!.settings : commandResult(command),
+      )
+      const wrapper = await openDemoWorkspace()
+      try {
+        await wrapper.get('.app-rail [aria-label="设置"]').trigger('click')
+        await flushPromises()
+        await wrapper.get('[aria-controls="settings-panel-appearance"]').trigger('click')
+        await wrapper.get('#settings-panel-appearance [aria-label="放大字体"]').trigger('click')
+        await wrapper.get('[aria-label="关闭设置"]').trigger('click')
+        await flushPromises()
+        if (save) await wrapper.get('.settings-leave-dialog md-filled-button').trigger('click')
+        else await wrapper.findAll('.settings-leave-dialog md-text-button')[1]!.trigger('click')
+        await flushPromises()
+        expect(wrapper.get('.settings-dialog').isVisible()).toBe(false)
+        expect(wrapper.getComponent(SettingsDialog).props('closeTarget')).toBe('close')
+      } finally {
+        wrapper.unmount()
+      }
+    },
+  )
+
+  it('keeps the calendar selection when Escape closes the settings window', async () => {
+    const wrapper = await openDemoWorkspace()
+    try {
+      const first = dayjs().startOf('month').date(5)
+      const last = first.add(1, 'day')
+      await wrapper
+        .get(`.day-cell[aria-label^="${first.format('YYYY年M月D日 ')}"]`)
+        .trigger('pointerdown', { button: 0 })
+      await wrapper.get(`.day-cell[aria-label^="${last.format('YYYY年M月D日 ')}"]`).trigger('pointerenter')
+      window.dispatchEvent(new Event('pointerup'))
+      await flushPromises()
+      expect(wrapper.find('.range-overview').exists()).toBe(true)
+
+      await wrapper.get('.app-rail [aria-label="设置"]').trigger('click')
+      await flushPromises()
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))
+      await flushPromises()
+      expect(wrapper.get('.settings-dialog').isVisible()).toBe(false)
+      expect(wrapper.find('.range-overview').exists()).toBe(true)
+    } finally {
+      wrapper.unmount()
+    }
   })
 
   it('saves the settings draft once and waits for success before returning home from the rail', async () => {
@@ -853,12 +993,14 @@ describe('modular home integration', () => {
 
   it('adds and removes modules and resets the split layout from the right rail', async () => {
     const wrapper = await openDemoWorkspace()
+    expect(wrapper.get('.module-panel.is-active').attributes('data-module-id')).toBe('editor')
 
     // 1. 点击右侧“数据概览”功能，模块追加到分栏树最右侧并持久化。
     await wrapper.find('.app-rail [aria-label="数据概览"]').trigger('click')
     await flushPromises()
     expect(wrapper.findAll('.module-panel')).toHaveLength(3)
     expect(savedIds().at(-1)).toBe('overview')
+    expect(wrapper.get('.module-panel.is-active').attributes('data-module-id')).toBe('overview')
 
     // 2. 模块可以从面板关闭。
     const overviewPanel = wrapper.findAll('.module-panel').find((panel) => panel.text().includes('数据概览'))!
@@ -867,6 +1009,7 @@ describe('modular home integration', () => {
     await flushPromises()
     expect(wrapper.findAll('.module-panel')).toHaveLength(2)
     expect(savedIds()).not.toContain('overview')
+    expect(wrapper.get('.module-panel.is-active').attributes('data-module-id')).toBe('editor')
 
     // 3. 布局菜单可以恢复默认分栏。
     await wrapper.find('.app-rail [aria-label="布局"]').trigger('click')

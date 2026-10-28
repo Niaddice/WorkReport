@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import ModulePanel from './ModulePanel.vue'
+import { MAXIMIZE_DURATION, RESTORE_DURATION, MAXIMIZE_EASING, RESTORE_EASING } from '../lib/windowMotion'
 import { moduleById } from '../modules/registry'
 import {
   clampSplitRatio,
@@ -41,6 +42,8 @@ const slots = computed(() => geometry.value.slots)
 const gutters = computed(() => geometry.value.gutters)
 const layoutSignature = computed(() => JSON.stringify(props.layout))
 const announcement = ref('')
+/** 当前操作的模块，仅记录本次工作空间会话，不写入布局设置。 */
+const activeModule = ref<ModuleId | null>(null)
 
 interface DragState {
   id: ModuleId
@@ -204,7 +207,17 @@ async function animateLayoutChange(previous: Map<ModuleId, DOMRect>, immediate =
 }
 /** 右侧功能栏添加/定位模块时，把焦点移到对应模块的拖动手柄。 */
 function revealModule(id: ModuleId) {
+  activateModule(id)
   panelElement(id)?.querySelector<HTMLElement>('.module-drag-handle')?.focus({ preventScroll: true })
+}
+function activateModule(id: ModuleId) {
+  // 日历只负责日期导航，保留内容模块的高亮，避免日报加载后重新聚焦时闪烁。
+  if (id === 'calendar') return
+  if (maximized.value && maximized.value !== id) return
+  if (items.value.some((item) => item.id === id)) activeModule.value = id
+}
+function resetActiveModule() {
+  activeModule.value = items.value.find((item) => item.id === 'editor')?.id ?? items.value[0]?.id ?? null
 }
 function getModuleRect(id: ModuleId): DOMRect | null {
   const rect = panelElement(id)?.getBoundingClientRect()
@@ -440,10 +453,6 @@ function onGutterKeydown(event: KeyboardEvent, gutter: LayoutGutter) {
 }
 
 // ===== 浮层最大化 =====
-const MAXIMIZE_DURATION = 360
-const RESTORE_DURATION = 280
-const MAXIMIZE_EASING = 'cubic-bezier(0.2, 0.8, 0.2, 1)'
-const RESTORE_EASING = 'cubic-bezier(0.4, 0, 0.2, 1)'
 let maximizeAnimation: Animation | null = null
 let restoring = false
 function stopMaximizeAnimation() {
@@ -456,6 +465,7 @@ async function maximizeModule(id: ModuleId) {
   const source = panelElement(id)?.getBoundingClientRect()
   stopMaximizeAnimation()
   maximized.value = id
+  activateModule(id)
   document.body.classList.add('is-module-maximized')
   announcement.value = `已放大「${moduleById(id).title}」模块，按 Esc 或点击遮罩还原。`
   await nextTick()
@@ -553,12 +563,15 @@ watch(
   () => items.value.map((placement) => placement.id),
   (ids) => {
     if (maximized.value && !ids.includes(maximized.value)) void restoreMaximized(true)
+    if (!activeModule.value || !ids.includes(activeModule.value)) resetActiveModule()
   },
+  { immediate: true },
 )
 watch(
   () => props.workspacePath,
   () => {
     void restoreMaximized(true)
+    resetActiveModule()
   },
 )
 
@@ -567,7 +580,13 @@ function onWindowBlur() {
   cancelGutterDrag()
 }
 function onWindowKeydown(event: KeyboardEvent) {
+  if (board.value?.closest('[inert]')) return
   if (event.key !== 'Escape') return
+  if (
+    event.target instanceof Element &&
+    event.target.closest('.module-help-popover, .module-help-button[aria-expanded="true"]')
+  )
+    return
   if (maximized.value) {
     event.preventDefault()
     event.stopImmediatePropagation()
@@ -664,7 +683,9 @@ onBeforeUnmount(() => {
         :help="moduleById(slot.id).help"
         :can-remove="items.length > 1"
         :dragging="drag?.id === slot.id"
+        :active="activeModule === slot.id"
         :maximized="maximized === slot.id"
+        @activate="activateModule(slot.id)"
         @drag-start="startDrag(slot.id, $event)"
         @remove="emit('remove', slot.id)"
         @toggle-maximize="toggleMaximize(slot.id)"

@@ -68,7 +68,6 @@ function fakeContext() {
       requestReload: noop,
       requestRestore: noop,
       openHolidaySettings: noop,
-      openWorkspaceDirectory: noop,
       syncHolidays: noop,
     },
   }
@@ -120,6 +119,37 @@ function pointer(type: string, x: number, y: number, buttons: number) {
 }
 
 describe('module board', () => {
+  it('keeps one active module across pointer, keyboard, rail focus and layout changes', async () => {
+    const wrapper = mountBoard()
+    const activeIds = () =>
+      wrapper.findAll('.module-panel.is-active').map((panel) => panel.attributes('data-module-id'))
+    try {
+      await flushPromises()
+      expect(activeIds()).toEqual(['overview'])
+      await wrapper.get('[data-module-id="history"] .module-panel-body').trigger('pointerdown')
+      expect(activeIds()).toEqual(['history'])
+
+      wrapper.get<HTMLElement>('[data-module-id="overview"] .module-maximize-button').element.focus()
+      await nextTick()
+      expect(activeIds()).toEqual(['overview'])
+      wrapper.vm.reveal('history')
+      await nextTick()
+      expect(activeIds()).toEqual(['history'])
+
+      await wrapper.setProps({ layout: { ...rowLayout, first: leaf('history'), second: leaf('overview') } })
+      expect(activeIds()).toEqual(['history'])
+      await wrapper.setProps({ layout: leaf('overview') })
+      expect(activeIds()).toEqual(['overview'])
+      await wrapper.setProps({ layout: rowLayout })
+      wrapper.vm.reveal('history')
+      await nextTick()
+      await wrapper.setProps({ workspacePath: '/tmp/another-workspace' })
+      expect(activeIds()).toEqual(['overview'])
+    } finally {
+      wrapper.unmount()
+    }
+  })
+
   it('positions modules absolutely from the split tree without scrolling', async () => {
     const wrapper = mountBoard()
     await flushPromises()
@@ -259,5 +289,26 @@ describe('module board', () => {
     expect(wrapper.find('.module-panel.is-maximized').exists()).toBe(false)
     expect(document.body.classList.contains('is-module-maximized')).toBe(false)
     wrapper.unmount()
+  })
+
+  it('dismisses a maximized module help popover before Escape restores the module', async () => {
+    const wrapper = mountBoard()
+    try {
+      await flushPromises()
+      await wrapper.get('.module-maximize-button').trigger('click')
+      await wrapper.get('.module-panel.is-maximized .module-help-button').trigger('click')
+      await flushPromises()
+      const popup = document.querySelector<HTMLElement>('.module-help-popover')!
+      expect(popup).not.toBeNull()
+      popup.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))
+      await flushPromises()
+      expect(document.querySelector('.module-help-popover')).toBeNull()
+      expect(wrapper.find('.module-panel.is-maximized').exists()).toBe(true)
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))
+      await flushPromises()
+      expect(wrapper.find('.module-panel.is-maximized').exists()).toBe(false)
+    } finally {
+      wrapper.unmount()
+    }
   })
 })

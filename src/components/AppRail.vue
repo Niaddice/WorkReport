@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { ref } from 'vue'
 import {
   PhArrowClockwise,
   PhCalendarDots,
@@ -27,6 +28,12 @@ const emit = defineEmits<{
   skin: []
   layout: []
 }>()
+const settingsButton = ref<HTMLButtonElement>()
+function getSettingsRect(): DOMRect | null {
+  const rect = settingsButton.value?.getBoundingClientRect()
+  return rect && rect.width > 0 && rect.height > 0 ? rect : null
+}
+defineExpose({ getSettingsRect })
 
 const moduleButtons = [
   { id: 'calendar', label: '日历', icon: PhCalendarDots },
@@ -89,6 +96,7 @@ const moduleButtons = [
     <div class="rail-bottom">
       <span class="rail-divider" aria-hidden="true"></span>
       <button
+        ref="settingsButton"
         type="button"
         class="rail-button"
         :class="{ 'is-active': settingsActive }"
