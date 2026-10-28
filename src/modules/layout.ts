@@ -6,6 +6,7 @@ import {
   type LayoutGeometry,
   type LayoutGutter,
   type LayoutLeaf,
+  type LayoutMetrics,
   type LayoutNode,
   type LayoutSlot,
   type LayoutSplit,
@@ -21,8 +22,8 @@ import {
  * 分栏比例的安全区间。
  *
  * 产品要求「每个模块最窄可缩到 App 宽度的 1%」：单边比例下限取 0.01，
- * 上限取 0.99，保证两侧都至少有 1% 的宽度。嵌套分栏时叶子占比是各层比例
- * 的乘积，局部拖动（resizeLayoutLocally）会按叶子占比单独钳制，见 minShare。
+ * 上限取 0.99。局部拖动（resizeLayoutLocally）按实际宽高限制贴边模块的
+ * 最小尺寸，并固定非相邻模块；已经小于根尺寸 1% 的模块不再继续缩小。
  */
 const MIN_SPLIT_RATIO = 0.01
 const MAX_SPLIT_RATIO = 0.99
@@ -482,86 +483,119 @@ function findBoundary(layout: LayoutNode, path: readonly number[], share: number
   return null
 }
 
-function collectShares(layout: LayoutNode, share: number, result: Map<ModuleId, number>) {
-  if (layout.type === 'leaf') {
-    result.set(layout.id, share)
-    return
+type ResizeEdge = 'start' | 'end'
+interface ExtentBounds {
+  min: number
+  max: number
+}
+
+/** 固定子树的另一侧边界，计算只移动指定边缘时允许的尺寸范围。 */
+function edgeResizeBounds(
+  layout: LayoutNode,
+  direction: SplitDirection,
+  edge: ResizeEdge,
+  extent: number,
+  gap: number,
+  minimum: number,
+): ExtentBounds {
+  if (layout.type === 'leaf') return { min: Math.min(extent, minimum), max: Infinity }
+  if (layout.direction !== direction) {
+    // 上下分栏共享左右边缘：沿同一侧同时调整两行，而非把整行按比例缩放。
+    const first = edgeResizeBounds(layout.first, direction, edge, extent, gap, minimum)
+    const second = edgeResizeBounds(layout.second, direction, edge, extent, gap, minimum)
+    return { min: Math.max(first.min, second.min), max: Math.min(first.max, second.max) }
   }
-  collectShares(layout.first, share * layout.ratio, result)
-  collectShares(layout.second, share * (1 - layout.ratio), result)
+  const available = extent - gap
+  const first = available * layout.ratio
+  const second = available - first
+  const fixed = edge === 'end' ? first : second
+  const moving = edge === 'end' ? layout.second : layout.first
+  const bounds = edgeResizeBounds(moving, direction, edge, edge === 'end' ? second : first, gap, minimum)
+  return {
+    min: Math.max(gap + fixed + bounds.min, gap + fixed / MAX_SPLIT_RATIO),
+    max: Math.min(gap + fixed + bounds.max, gap + fixed / MIN_SPLIT_RATIO),
+  }
 }
 
-function shareSum(layout: LayoutNode, shares: ReadonlyMap<ModuleId, number>): number {
-  if (layout.type === 'leaf') return shares.get(layout.id) ?? 0
-  return shareSum(layout.first, shares) + shareSum(layout.second, shares)
-}
-
-/** 用叶子占比重建 split 比例，保持叶子在根坐标中的占比不变。 */
-function rebuildFromShares(layout: LayoutNode, shares: ReadonlyMap<ModuleId, number>): LayoutNode {
+/** 从指定边缘吸收尺寸变化，同向分栏只调整贴边子树，垂直分栏同时调整两个子树。 */
+function resizeFromEdge(
+  layout: LayoutNode,
+  direction: SplitDirection,
+  edge: ResizeEdge,
+  extent: number,
+  nextExtent: number,
+  gap: number,
+): LayoutNode {
   if (layout.type === 'leaf') return layout
-  const first = shareSum(layout.first, shares)
-  const second = shareSum(layout.second, shares)
-  const total = first + second
-  if (!(total > 0)) return layout
+  if (layout.direction !== direction) {
+    return {
+      ...layout,
+      first: resizeFromEdge(layout.first, direction, edge, extent, nextExtent, gap),
+      second: resizeFromEdge(layout.second, direction, edge, extent, nextExtent, gap),
+    }
+  }
+  const first = (extent - gap) * layout.ratio
+  const second = extent - gap - first
+  const nextAvailable = nextExtent - gap
+  if (edge === 'end') {
+    return {
+      ...layout,
+      ratio: clampSplitRatio(first / nextAvailable),
+      second: resizeFromEdge(layout.second, direction, edge, second, nextAvailable - first, gap),
+    }
+  }
   return {
     ...layout,
-    ratio: clampSplitRatio(first / total),
-    first: rebuildFromShares(layout.first, shares),
-    second: rebuildFromShares(layout.second, shares),
+    ratio: clampSplitRatio((nextAvailable - second) / nextAvailable),
+    first: resizeFromEdge(layout.first, direction, edge, first, nextAvailable - second, gap),
   }
 }
 
-/**
- * 只改变间隙两侧相邻两个模块的尺寸：
- *
- * - 只有边界叶子到根的路径方向都与目标间隙一致时才生效，避免改变其他模块的宽或高；
- * - 把间隙所在 split 的比例变化换算成根坐标中的位移，只增减左右/上下两个边界叶子的占比；
- * - 其他叶子的占比保持不变，因此它们在屏幕上的尺寸不变，只会随边界移动而平移；
- * - 最后按新的叶子占比重建各层 split 比例，几何仍然填满整个模块板。
- *
- * 如果边界路径穿过与间隙方向相反的嵌套分栏，无法在保持其他叶子尺寸的同时完成
- * 几何对齐，此时回退到普通 setSplitRatio，由整块子树一起缩放。
- */
-function directionsToLeaf(layout: LayoutNode, id: ModuleId, stack: SplitDirection[] = []): SplitDirection[] | null {
-  if (layout.type === 'leaf') return layout.id === id ? [...stack] : null
-  stack.push(layout.direction)
-  const first = directionsToLeaf(layout.first, id, stack)
-  if (first) {
-    stack.pop()
-    return first
+/** 只移动接触目标间隙的边缘；混合嵌套分栏中的非相邻模块保持原有位置和尺寸。 */
+export function resizeLayoutLocally(
+  root: LayoutNode,
+  path: readonly number[],
+  ratio: number,
+  metrics: LayoutMetrics = { width: 1, height: 1, gap: 0 },
+): LayoutNode {
+  const target = splitAtPath(root, path)
+  if (
+    !target ||
+    !isValidExtent(metrics.width) ||
+    !isValidExtent(metrics.height) ||
+    !Number.isFinite(metrics.gap) ||
+    metrics.gap < 0
+  )
+    return root
+  const { direction } = target
+  const { gap } = metrics
+  const rootExtent = direction === 'row' ? metrics.width : metrics.height
+  let extent = rootExtent
+  let node = root
+  for (const step of path) {
+    if (node.type !== 'split') return root
+    if (node.direction === direction) extent = (extent - gap) * (step === 0 ? node.ratio : 1 - node.ratio)
+    node = step === 0 ? node.first : node.second
   }
-  stack.pop()
-  stack.push(layout.direction)
-  const second = directionsToLeaf(layout.second, id, stack)
-  stack.pop()
-  return second
-}
-
-/** 只有边界叶子路径上的所有分栏都与目标同向时，改变叶子占比才不会扭曲其他模块的宽或高。 */
-function canResizeLocally(root: LayoutNode, boundary: BoundaryInfo): boolean {
-  const directions = [
-    ...(directionsToLeaf(root, boundary.leftLeaf) ?? []),
-    ...(directionsToLeaf(root, boundary.rightLeaf) ?? []),
-  ]
-  return directions.every((direction) => direction === boundary.split.direction)
-}
-
-export function resizeLayoutLocally(root: LayoutNode, path: readonly number[], ratio: number): LayoutNode {
-  const boundary = findBoundary(root, path, 1)
-  if (!boundary || !canResizeLocally(root, boundary)) return setSplitRatio(root, [...path], ratio)
-  const clamped = clampSplitRatio(ratio)
-  const delta = (clamped - boundary.split.ratio) * boundary.share
+  const available = extent - gap
+  if (!isValidExtent(available)) return root
+  const first = available * target.ratio
+  const second = available - first
+  const firstBounds = edgeResizeBounds(target.first, direction, 'end', first, gap, rootExtent * MIN_SPLIT_RATIO)
+  const secondBounds = edgeResizeBounds(target.second, direction, 'start', second, gap, rootExtent * MIN_SPLIT_RATIO)
+  const lower = Math.max(firstBounds.min - first, second - secondBounds.max)
+  const upper = Math.min(firstBounds.max - first, second - secondBounds.min)
+  if (lower > upper) return root
+  const requested = (clampSplitRatio(ratio) - target.ratio) * available
+  const delta = Math.max(lower, Math.min(upper, requested))
   if (!Number.isFinite(delta) || Math.abs(delta) < 1e-6) return root
-  const shares = new Map<ModuleId, number>()
-  collectShares(root, 1, shares)
-  const left = shares.get(boundary.leftLeaf) ?? 0
-  const right = shares.get(boundary.rightLeaf) ?? 0
-  const minShare = 0.01
-  const applied = delta > 0 ? Math.min(delta, right - minShare) : Math.max(delta, minShare - left)
-  if (!Number.isFinite(applied) || Math.abs(applied) < 1e-6) return root
-  shares.set(boundary.leftLeaf, left + applied)
-  shares.set(boundary.rightLeaf, right - applied)
-  return rebuildFromShares(root, shares)
+  const resized: LayoutSplit = {
+    ...target,
+    ratio: clampSplitRatio((first + delta) / available),
+    first: resizeFromEdge(target.first, direction, 'end', first, first + delta, gap),
+    second: resizeFromEdge(target.second, direction, 'start', second, second - delta, gap),
+  }
+  return replaceLayoutNode(root, target, resized)
 }
 
 function findSplitByBoundary(layout: LayoutNode, leftLeaf: ModuleId, rightLeaf: ModuleId): LayoutSplit | null {

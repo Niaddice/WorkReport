@@ -4,6 +4,7 @@ mod database;
 mod excel;
 mod history;
 mod holidays;
+mod report_export;
 mod settings;
 mod summary;
 mod ui;
@@ -353,10 +354,6 @@ fn validate_excel_settings(
         if !template.is_absolute() || !template.is_file() {
             return Err("Excel 模板不存在，请重新选择模板文件".into());
         }
-        let directory = std::path::Path::new(settings.output_directory.trim());
-        if !directory.is_absolute() || !directory.is_dir() {
-            return Err("Excel 输出目录不存在，请重新选择目录".into());
-        }
     }
     Ok(())
 }
@@ -519,14 +516,7 @@ async fn open_excel_output_directory(
     state: State<'_, AppState>,
 ) -> Result<(), String> {
     let directory = with_workspace(&state, |workspace| {
-        let settings = settings::load(&workspace.root().join(settings::FILE_NAME))?
-            .unwrap_or_default()
-            .excel;
-        let path = std::path::PathBuf::from(settings.output_directory.trim());
-        if !path.is_absolute() || !path.is_dir() {
-            return Err("Excel 输出目录已不存在，请在设置中重新选择".into());
-        }
-        Ok(path)
+        excel::prepare_directory(workspace.root())
     })?;
     app.opener()
         .open_path(directory.to_string_lossy().into_owned(), None::<&str>)
@@ -543,8 +533,7 @@ struct ExcelSnapshot {
 }
 
 /// Read only the selected workspace reports for the Excel AI preview.
-/// Check every selected date before filtering empty days, so an empty day from
-/// another week cannot bypass the range restriction.
+/// Keep empty days in the selected range while reading only available reports.
 fn excel_snapshot(
     workspace: &mut Workspace,
     stored: settings::StoredSettings,
@@ -613,6 +602,22 @@ fn excel_snapshot(
     })
 }
 
+/// Apply one request's prompt to an in-memory snapshot, retaining the saved settings for confirmation checks.
+fn excel_request_snapshot(
+    workspace: &mut Workspace,
+    mut stored: settings::StoredSettings,
+    dates: &[String],
+    workspace_path: &str,
+    prompt: Option<String>,
+) -> Result<(ExcelSnapshot, excel::Settings), String> {
+    let saved_settings = stored.excel.clone();
+    if let Some(prompt) = prompt {
+        stored.excel.prompt = prompt;
+    }
+    let snapshot = excel_snapshot(workspace, stored, dates, workspace_path)?;
+    Ok((snapshot, saved_settings))
+}
+
 #[tauri::command]
 async fn prepare_excel(
     app: tauri::AppHandle,
@@ -622,15 +627,16 @@ async fn prepare_excel(
     dates: Vec<String>,
     workspace_path: String,
     request_id: String,
+    prompt: Option<String>,
 ) -> Result<excel::ExcelPreview, String> {
     let token = state.begin(request_id.clone())?;
     let result = async {
         let snapshot_path = workspace_path.clone();
         let snapshot_dates = dates.clone();
-        let snapshot = run_workspace(workspace_state.0.clone(), move |workspace| {
+        let (snapshot, saved_settings) = run_workspace(workspace_state.0.clone(), move |workspace| {
             summary::validate_workspace(workspace.root(), &snapshot_path)?;
             let stored = stored_settings_at(&app, workspace.root())?;
-            excel_snapshot(workspace, stored, &snapshot_dates, &snapshot_path)
+            excel_request_snapshot(workspace, stored, &snapshot_dates, &snapshot_path, prompt)
         }).await?;
         if token.is_cancelled() {
             return Err("已取消 Excel 预览".into());
@@ -652,7 +658,7 @@ async fn prepare_excel(
             return Err("已取消 Excel 预览".into());
         }
         let provenance = excel::Provenance {
-            workspace_path, dates, settings: snapshot.settings,
+            workspace_path, dates, settings: saved_settings, prompt: Some(snapshot.settings.prompt),
             source_revision: snapshot.source_revision, template_fingerprint,
         };
         let render_token = token.clone();
@@ -672,7 +678,7 @@ async fn prepare_excel(
 
 fn validate_excel_confirmation(
     workspace: &mut Workspace,
-    stored: settings::StoredSettings,
+    mut stored: settings::StoredSettings,
     workspace_path: &str,
     provenance: &excel::Provenance,
 ) -> Result<(), String> {
@@ -683,6 +689,9 @@ fn validate_excel_confirmation(
     summary::validate_workspace(workspace.root(), workspace_path).map_err(regenerate)?;
     if stored.excel != provenance.settings {
         return Err("Excel 输出设置已修改，请重新生成 Excel 预览".into());
+    }
+    if let Some(prompt) = &provenance.prompt {
+        stored.excel.prompt = prompt.clone();
     }
     let current = excel_snapshot(workspace, stored, &provenance.dates, workspace_path).map_err(regenerate)?;
     if current.source_revision != provenance.source_revision {
@@ -725,12 +734,8 @@ async fn list_excel_exports(
 ) -> Result<Vec<excel::ExportFile>, String> {
     run_workspace(workspace_state.0.clone(), move |workspace| {
         summary::validate_workspace(workspace.root(), &workspace_path)?;
-        let stored = settings::load(&workspace.root().join(settings::FILE_NAME))?.unwrap_or_default();
-        let directory = stored.excel.output_directory.trim();
-        if directory.is_empty() {
-            return Ok(Vec::new());
-        }
-        excel::list_exports(std::path::Path::new(directory))
+        let directory = excel::prepare_directory(workspace.root())?;
+        excel::list_exports(&directory)
     })
     .await
 }
@@ -742,13 +747,7 @@ async fn read_excel_export(
 ) -> Result<excel::ExportPreview, String> {
     run_workspace(workspace_state.0.clone(), move |workspace| {
         summary::validate_workspace(workspace.root(), &workspace_path)?;
-        let stored = settings::load(&workspace.root().join(settings::FILE_NAME))?.unwrap_or_default();
-        let directory = std::path::Path::new(stored.excel.output_directory.trim());
-        if !directory.is_absolute() {
-            return Err("请先在设置中配置 Excel 输出目录".into());
-        }
-        let canonical_directory =
-            std::fs::canonicalize(directory).map_err(|_| "Excel 输出目录不存在".to_string())?;
+        let canonical_directory = excel::prepare_directory(workspace.root())?;
         let target = std::fs::canonicalize(&path).map_err(|_| "Excel 文件不存在".to_string())?;
         if !target.starts_with(&canonical_directory) {
             return Err("只能预览 Excel 输出目录中的文件".into());
@@ -856,8 +855,10 @@ async fn summarize_entries(
     workspace_state: State<'_, AppState>,
     content: String,
     request_id: String,
+    prompt: Option<String>,
 ) -> Result<String, String> {
     let settings = read_ai_settings(&app, &workspace_state)?;
+    let prompt = ai::summary_request_prompt(&settings.summary_prompt, prompt)?;
     let provider = settings
         .providers
         .iter()
@@ -865,20 +866,20 @@ async fn summarize_entries(
         .ok_or("请先在设置中选择默认 AI")?
         .clone();
     let token = state.begin(request_id.clone())?;
-    let result = ai::summarize(&provider, &content, &settings.summary_prompt, token).await;
+    let result = ai::summarize(&provider, &content, &prompt, token).await;
     state.finish(&request_id);
     result
 }
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .setup(|app| {
+        .setup(|_app| {
             #[cfg(target_os = "macos")]
             {
                 // Native menu key equivalents are handled before WebKit keydown.
                 // Replace the predefined Undo/Redo entries with menu items that
                 // forward the action to the editor's own history.
-                if let Some(menu) = app.menu() {
+                if let Some(menu) = _app.menu() {
                     if let Ok(items) = menu.items() {
                         if let Some(edit) = items.into_iter().find_map(|item| match item {
                             tauri::menu::MenuItemKind::Submenu(submenu)
@@ -891,14 +892,14 @@ pub fn run() {
                             let _ = edit.remove_at(0);
                             let _ = edit.remove_at(0);
                             let undo = tauri::menu::MenuItem::with_id(
-                                app,
+                                _app,
                                 "history-undo",
                                 "撤销",
                                 true,
                                 Some("CmdOrCtrl+Z"),
                             )?;
                             let redo = tauri::menu::MenuItem::with_id(
-                                app,
+                                _app,
                                 "history-redo",
                                 "重做",
                                 true,
@@ -1084,7 +1085,6 @@ mod excel_integration_tests {
                 enabled: true,
                 template_path: template.to_string_lossy().into_owned(),
                 prompt: "将工作内容填写到日报模板".into(),
-                output_directory: root.to_string_lossy().into_owned(),
             },
             ai: ai::Settings {
                 providers: vec![provider],
@@ -1260,7 +1260,6 @@ mod excel_integration_tests {
         assert!(error.contains("默认 AI"));
         stored.excel.enabled = false;
         stored.excel.template_path.clear();
-        stored.excel.output_directory.clear();
         stored.excel.prompt.clear();
         assert!(validate_excel_settings(&stored.excel, &stored.ai).is_ok());
     }
@@ -1305,21 +1304,24 @@ mod excel_integration_tests {
     }
 
     #[test]
-    fn excel_checks_empty_selected_days_before_filtering_report_content() {
+    fn excel_keeps_empty_days_in_cross_week_ranges() {
         let root = tempfile::tempdir().unwrap();
         let mut workspace = Workspace::open(root.path().to_str().unwrap()).unwrap();
         workspace
             .create_with_content("20261020", Format::Md, "工作记录")
             .unwrap();
-        let error = excel_snapshot(
+        let snapshot = excel_snapshot(
             &mut workspace,
             configured_settings(root.path()),
             &["20261020".into(), "20261026".into()],
             root.path().to_str().unwrap(),
         )
-        .err()
         .unwrap();
-        assert!(error.contains("同一周"));
+        assert_eq!(snapshot.start, "20261020");
+        assert_eq!(snapshot.end, "20261026");
+        let content: serde_json::Value = serde_json::from_str(&snapshot.content).unwrap();
+        assert_eq!(content["selectedDates"], serde_json::json!(["20261020", "20261026"]));
+        assert_eq!(content["reports"].as_array().unwrap().len(), 1);
         let error = excel_snapshot(
             &mut workspace,
             configured_settings(root.path()),
@@ -1396,6 +1398,7 @@ mod excel_integration_tests {
         let template = excel::read_template(std::path::Path::new(&stored.excel.template_path)).unwrap();
         let provenance = excel::Provenance {
             workspace_path, dates,
+            prompt: None,
             settings: stored.excel.clone(), source_revision: snapshot.source_revision,
             template_fingerprint: template.fingerprint().into(),
         };
@@ -1407,14 +1410,63 @@ mod excel_integration_tests {
         (runtime, preview)
     }
 
+    #[test]
+    fn temporary_excel_prompt_is_request_scoped_and_does_not_invalidate_export_confirmation() {
+        let root = tempfile::tempdir().unwrap();
+        let (mut workspace, stored) = preview_fixture(root.path());
+        let workspace_path = workspace.root().to_string_lossy().into_owned();
+        let settings_path = root.path().join(settings::FILE_NAME);
+        let saved_bytes = fs::read(&settings_path).unwrap();
+        let dates = vec!["20261020".into()];
+        let (snapshot, saved_settings) = excel_request_snapshot(
+            &mut workspace, stored.clone(), &dates, &workspace_path, Some("仅本次按项目分类提炼".into()),
+        ).unwrap();
+        assert_eq!(snapshot.settings.prompt, "仅本次按项目分类提炼");
+        assert_eq!(saved_settings, stored.excel);
+        let template = excel::read_template(std::path::Path::new(&snapshot.settings.template_path)).unwrap();
+        let provenance = excel::Provenance {
+            workspace_path: workspace_path.clone(), dates: dates.clone(), settings: saved_settings,
+            prompt: Some(snapshot.settings.prompt), source_revision: snapshot.source_revision,
+            template_fingerprint: template.fingerprint().into(),
+        };
+        assert!(validate_excel_confirmation(&mut workspace, stored.clone(), &workspace_path, &provenance).is_ok());
+        let mut changed = stored.clone();
+        changed.excel.prompt = "外部修改了设置".into();
+        assert!(validate_excel_confirmation(&mut workspace, changed, &workspace_path, &provenance).unwrap_err().contains("设置已修改"));
+        let pending = excel::prepare(template,
+            &serde_json::json!({"cells":[{"sheet":"Sheet1","cell":"B2","value":"临时规则生成的内容"}]}).to_string(),
+            provenance, snapshot.start, snapshot.end, tokio_util::sync::CancellationToken::new()).unwrap();
+        let runtime = excel::Runtime::default();
+        let preview = runtime.insert(pending).unwrap();
+        let exported = runtime.confirm(&preview.id, |provenance| {
+            validate_excel_confirmation(&mut workspace, stored.clone(), &workspace_path, provenance)
+        }).unwrap();
+        assert!(std::path::Path::new(&exported.path).is_file());
+        assert_eq!(fs::read(&settings_path).unwrap(), saved_bytes);
+        let (next, _) = excel_request_snapshot(&mut workspace, stored.clone(), &dates, &workspace_path, None).unwrap();
+        assert_eq!(next.settings.prompt, stored.excel.prompt);
+    }
+
+    #[test]
+    fn temporary_excel_prompts_are_validated_without_saving_them() {
+        let root = tempfile::tempdir().unwrap();
+        let (mut workspace, stored) = preview_fixture(root.path());
+        let path = workspace.root().to_string_lossy().into_owned();
+        let settings_path = root.path().join(settings::FILE_NAME);
+        let saved_bytes = fs::read(&settings_path).unwrap();
+        for prompt in [" ".into(), "字".repeat(6001)] {
+            assert!(excel_request_snapshot(&mut workspace, stored.clone(), &["20261020".into()], &path, Some(prompt)).is_err());
+        }
+        assert_eq!(fs::read(settings_path).unwrap(), saved_bytes);
+    }
+
     fn preview_fixture(root: &std::path::Path) -> (Workspace, settings::StoredSettings) {
         let mut workspace = Workspace::open(root.to_str().unwrap()).unwrap();
         workspace.create_with_content("20261020", Format::Md, "生成时的日报正文").unwrap();
         workspace.create_with_content("20261021", Format::Txt, " ").unwrap();
-        let mut stored = configured_settings(root);
-        let output = root.join("output");
+        let stored = configured_settings(root);
+        let output = root.join("excel");
         fs::create_dir(&output).unwrap();
-        stored.excel.output_directory = output.to_string_lossy().into_owned();
         umya_spreadsheet::writer::xlsx::write(&umya_spreadsheet::new_file(), std::path::Path::new(&stored.excel.template_path)).unwrap();
         settings::save(&root.join(settings::FILE_NAME), &stored).unwrap();
         (workspace, stored)
@@ -1428,7 +1480,7 @@ mod excel_integration_tests {
             let (mut workspace, mut stored) = preview_fixture(root.path());
             let (runtime, preview) = prepared_preview(&mut workspace, &stored);
             let workspace_path = workspace.root().to_string_lossy().into_owned();
-            let output = root.path().join("output");
+            let output = root.path().join("excel");
             assert_eq!(fs::read_dir(&output).unwrap().count(), 0);
             match mutation {
                 "settings" => {
@@ -1472,7 +1524,7 @@ mod excel_integration_tests {
         let result = runtime.confirm(&preview.id, |provenance| {
             validate_excel_confirmation(&mut workspace, stored, &workspace_path, provenance)
         }).unwrap();
-        assert_eq!(fs::read_dir(root.path().join("output")).unwrap().count(), 1);
+        assert_eq!(fs::read_dir(root.path().join("excel")).unwrap().count(), 1);
         assert!(std::path::Path::new(&result.path).is_file());
         assert_eq!(result.cells, 1);
     }

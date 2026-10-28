@@ -32,15 +32,27 @@ onBeforeUnmount(() => motion.dispose())
     <p class="workspace-switch-path" :title="targetPath">{{ targetPath }}</p>
     <p v-if="error" class="error-text dialog-error" role="alert">{{ error }}</p>
     <div class="dialog-actions">
-      <md-text-button class="dialog-button dialog-button-secondary" :disabled="busy" @click="emit('cancel')"
+      <md-text-button
+        class="dialog-button dialog-button-secondary"
+        data-window-close="default"
+        :disabled="busy"
+        @click="emit('cancel')"
         >取消</md-text-button
       >
-      <md-text-button class="dialog-button dialog-button-secondary" :disabled="busy" @click="emit('keep')"
+      <md-text-button
+        class="dialog-button dialog-button-secondary"
+        data-window-close
+        :disabled="busy"
+        @click="emit('keep')"
         >仅切换</md-text-button
       >
-      <md-filled-button class="dialog-button dialog-button-primary" :disabled="busy" @click="emit('sync')">{{
-        busy ? '正在切换…' : '同步并切换'
-      }}</md-filled-button>
+      <md-filled-button
+        class="dialog-button dialog-button-primary"
+        data-window-close
+        :disabled="busy"
+        @click="emit('sync')"
+        >{{ busy ? '正在切换…' : '同步并切换' }}</md-filled-button
+      >
     </div>
   </dialog>
 </template>

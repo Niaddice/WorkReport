@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import { onBeforeUnmount, ref, watch } from 'vue'
 import { PhCircleNotch, PhX } from '@phosphor-icons/vue'
 import ExcelSheetPreview from './ExcelSheetPreview.vue'
 import type { ExcelSheetPreviewData } from '../lib/excelPreview'
+import { createDialogMotion } from '../lib/dialogMotion'
 
 const props = defineProps<{
   visible: boolean
@@ -13,20 +14,17 @@ const props = defineProps<{
 }>()
 const emit = defineEmits<{ close: [] }>()
 const dialog = ref<HTMLDialogElement>()
+const motion = createDialogMotion(() => dialog.value)
 
 watch(
-  () => props.visible,
-  (visible) => {
-    const element = dialog.value
-    if (!element) return
-    if (visible) {
-      if (!element.open) element.showModal()
-    } else if (element.open) {
-      element.close()
-    }
+  [() => props.visible, dialog],
+  ([visible]) => {
+    if (visible) motion.open()
+    else void motion.close()
   },
-  { flush: 'post' },
+  { flush: 'post', immediate: true },
 )
+onBeforeUnmount(() => motion.dispose())
 
 function onCancel(event: Event) {
   event.preventDefault()
@@ -41,6 +39,7 @@ function onCancel(event: Event) {
       <button
         type="button"
         class="excel-export-preview-close"
+        data-window-close="default"
         aria-label="关闭预览"
         title="关闭预览"
         @click="emit('close')"

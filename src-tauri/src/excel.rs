@@ -44,7 +44,18 @@ pub struct Settings {
     pub enabled: bool,
     pub template_path: String,
     pub prompt: String,
-    pub output_directory: String,
+}
+
+/// All Excel reports belong to the active workspace, independent of legacy settings.
+pub fn prepare_directory(root: &Path) -> Result<PathBuf, String> {
+    let root = fs::canonicalize(root).map_err(|_| "工作空间目录不存在".to_string())?;
+    let directory = root.join("excel");
+    fs::create_dir_all(&directory).map_err(|_| "无法创建或打开工作空间的 excel 目录".to_string())?;
+    let directory = fs::canonicalize(directory).map_err(|_| "无法读取工作空间的 excel 目录".to_string())?;
+    if directory == root || !directory.starts_with(&root) {
+        return Err("Excel 输出目录必须位于当前工作空间内".into());
+    }
+    Ok(directory)
 }
 
 pub struct Template {
@@ -89,6 +100,7 @@ pub struct Provenance {
     pub workspace_path: String,
     pub dates: Vec<String>,
     pub settings: Settings,
+    pub prompt: Option<String>,
     pub source_revision: String,
     pub template_fingerprint: String,
 }
@@ -142,11 +154,11 @@ impl Runtime {
         let index = previews.iter().position(|pending| pending.preview.id == id).ok_or(STALE_PREVIEW)?;
         let pending = previews.remove(index).ok_or(STALE_PREVIEW)?;
         validate(&pending.provenance)?;
-        let directory = Path::new(pending.provenance.settings.output_directory.trim());
-        if fs::canonicalize(directory).ok().as_ref() != Some(&pending.output_path) {
+        let directory = Path::new(&pending.provenance.workspace_path).join("excel");
+        if fs::canonicalize(&directory).ok().as_ref() != Some(&pending.output_path) {
             return Err("Excel 输出目录已变化，请重新生成预览".into());
         }
-        let result = publish_bytes(&pending.bytes, directory, &pending.preview.start, &pending.preview.end, pending.preview.cells.len(), None);
+        let result = publish_bytes(&pending.bytes, &pending.output_path, &pending.preview.start, &pending.preview.end, pending.preview.cells.len(), None);
         if result.is_err() {
             // No final file exists on publication failure. Keep the approved
             // plan available so a temporary disk/permission issue can be retried.
@@ -306,8 +318,8 @@ pub fn validate_settings(settings: &Settings) -> Result<(), String> {
     if settings.prompt.chars().count() > 6000 {
         return Err("Excel 输出提示词最多 6000 字".into());
     }
-    if settings.template_path.len() > 4096 || settings.output_directory.len() > 4096 {
-        return Err("Excel 模板或输出目录路径过长".into());
+    if settings.template_path.len() > 4096 {
+        return Err("Excel 模板路径过长".into());
     }
     if !settings.enabled {
         return Ok(());
@@ -318,9 +330,6 @@ pub fn validate_settings(settings: &Settings) -> Result<(), String> {
     require_xlsx(Path::new(settings.template_path.trim()))?;
     if settings.prompt.trim().is_empty() {
         return Err("请填写 Excel 输出提示词".into());
-    }
-    if settings.output_directory.trim().is_empty() {
-        return Err("请选择 Excel 输出目录".into());
     }
     Ok(())
 }
@@ -349,10 +358,7 @@ fn parse_date(value: &str) -> Result<NaiveDate, String> {
 
 pub fn validate_dates(dates: &[String]) -> Result<(String, String), String> {
     if dates.is_empty() {
-        return Err("请先选择本周内需要输出的日期".into());
-    }
-    if dates.len() > 7 {
-        return Err("Excel 输出只能选择同一周（周一至周日）内的日期".into());
+        return Err("请先选择需要输出的日期或日期范围".into());
     }
     let mut parsed = dates
         .iter()
@@ -360,12 +366,6 @@ pub fn validate_dates(dates: &[String]) -> Result<(String, String), String> {
         .collect::<Result<Vec<_>, _>>()?;
     parsed.sort_unstable();
     parsed.dedup();
-    if parsed
-        .iter()
-        .any(|date| date.iso_week() != parsed[0].iso_week())
-    {
-        return Err("Excel 输出只能选择同一周（周一至周日）内的日期".into());
-    }
     Ok((
         parsed.first().unwrap().format("%Y%m%d").to_string(),
         parsed.last().unwrap().format("%Y%m%d").to_string(),
@@ -891,18 +891,14 @@ pub fn prepare(
     if start != validated_start || end != validated_end || template.fingerprint() != provenance.template_fingerprint {
         return Err("Excel 预览来源不一致，请重新生成预览".into());
     }
-    let directory = Path::new(provenance.settings.output_directory.trim());
-    if !directory.is_dir() {
-        return Err("Excel 输出目录不存在，请重新选择输出目录".into());
-    }
-    let output_path = fs::canonicalize(directory).map_err(|_| "无法读取 Excel 输出目录")?;
+    let output_path = prepare_directory(Path::new(&provenance.workspace_path))?;
     let (bytes, cells, styles, sheets) = render_workbook(template, response, Some(&cancel))?;
     let template_name = Path::new(provenance.settings.template_path.trim())
         .file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default();
     let preview = ExcelPreview {
         id: uuid::Uuid::new_v4().to_string(),
         template_name,
-        output_directory: provenance.settings.output_directory.trim().to_string(),
+        output_directory: output_path.to_string_lossy().into_owned(),
         start,
         end,
         cells,
@@ -1013,7 +1009,7 @@ fn publish_bytes(
 ) -> Result<ExportResult, String> {
     check_cancelled(cancel)?;
     if !output_directory.is_dir() {
-        return Err("Excel 输出目录不存在，请重新选择输出目录".into());
+        return Err("Excel 输出目录不可用，请检查工作空间的 excel 目录".into());
     }
     // A complete temporary workbook is created only after confirmation, then
     // published atomically without replacing an existing output or template.
@@ -1027,16 +1023,8 @@ fn publish_bytes(
         .sync_all()
         .map_err(|_| "无法完成 Excel 文件写入".to_string())?;
     check_cancelled(cancel)?;
-    let suffix = file
-        .path()
-        .file_name()
-        .and_then(|name| name.to_str())
-        .and_then(|name| name.strip_prefix(".workreport-"))
-        .ok_or("无法创建 Excel 文件名")?;
-    let filename = format!("周报_{start}-{end}_{suffix}.xlsx");
-    let path = output_directory.join(&filename);
-    file.persist_noclobber(&path)
-        .map_err(|_| "无法保存 Excel 文件，已有文件不会被覆盖，请重试".to_string())?;
+    let stamp = crate::report_export::current_timestamp()?;
+    let (filename, path) = crate::report_export::publish(file, output_directory, start, end, &stamp, "xlsx")?;
     Ok(ExportResult {
         path: path.to_string_lossy().into_owned(),
         filename,
@@ -1062,6 +1050,36 @@ fn formula_write_error(reason: &str, cells: &[String]) -> String {
 mod tests {
     use super::*;
 
+    #[test]
+    fn output_directory_is_created_inside_each_workspace() {
+        let first = tempfile::tempdir().unwrap();
+        let second = tempfile::tempdir().unwrap();
+        let directory = prepare_directory(first.path()).unwrap();
+        assert_eq!(directory, fs::canonicalize(first.path()).unwrap().join("excel"));
+        assert!(directory.is_dir());
+        assert!(list_exports(&directory).unwrap().is_empty());
+        assert_eq!(prepare_directory(first.path()).unwrap(), directory);
+        assert_ne!(prepare_directory(second.path()).unwrap(), directory);
+    }
+
+    #[test]
+    fn output_directory_preserves_a_conflicting_file() {
+        let root = tempfile::tempdir().unwrap();
+        fs::write(root.path().join("excel"), "existing file").unwrap();
+        assert!(prepare_directory(root.path()).is_err());
+        assert_eq!(fs::read_to_string(root.path().join("excel")).unwrap(), "existing file");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn output_directory_cannot_redirect_outside_the_workspace() {
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        std::os::unix::fs::symlink(outside.path(), root.path().join("excel")).unwrap();
+        assert!(prepare_directory(root.path()).unwrap_err().contains("当前工作空间"));
+        assert_eq!(fs::read_dir(outside.path()).unwrap().count(), 0);
+    }
+
     fn template_file(directory: &Path) -> std::path::PathBuf {
         let mut workbook = umya_spreadsheet::new_file();
         let sheet = workbook.sheet_by_name_mut("Sheet1").unwrap();
@@ -1078,21 +1096,27 @@ mod tests {
     }
 
     #[test]
-    fn dates_accept_any_subset_of_a_monday_to_sunday_week() {
+    fn dates_accept_single_days_and_cross_week_ranges() {
         assert_eq!(
             validate_dates(&["20261025".into(), "20261019".into(), "20261021".into()]).unwrap(),
             ("20261019".into(), "20261025".into())
         );
         assert!(validate_dates(&["20261021".into()]).is_ok());
-        assert!(validate_dates(&["20261026".into(), "20261025".into()]).is_err());
-        assert!(validate_dates(&["20261019".into(), "20261026".into()]).is_err());
+        assert!(validate_dates(&["20261026".into(), "20261025".into()]).is_ok());
+        assert!(validate_dates(&["20261019".into(), "20261026".into()]).is_ok());
     }
 
     #[test]
-    fn dates_support_cross_month_and_cross_year_iso_weeks() {
+    fn dates_support_cross_month_and_cross_year_ranges() {
         assert!(validate_dates(&["20261228".into(), "20270103".into()]).is_ok());
-        assert!(validate_dates(&["20261231".into(), "20270104".into()]).is_err());
+        assert!(validate_dates(&["20261231".into(), "20270104".into()]).is_ok());
         assert!(validate_dates(&["20260928".into(), "20261004".into()]).is_ok());
+    }
+
+    #[test]
+    fn dates_accept_more_than_seven_days() {
+        let dates: Vec<String> = (1..=31).map(|day| format!("202610{day:02}")).collect();
+        assert_eq!(validate_dates(&dates).unwrap(), ("20261001".into(), "20261031".into()));
     }
 
     #[test]
@@ -1118,7 +1142,6 @@ mod tests {
         assert!(validate_settings(&settings).is_err());
         settings.template_path = "template.xlsx".into();
         settings.prompt = "按照日报填入 B2".into();
-        settings.output_directory = "/output".into();
         assert!(validate_settings(&settings).is_ok());
         settings.template_path = "template.xlsm".into();
         assert!(validate_settings(&settings).unwrap_err().contains(".xlsx"));
@@ -1540,16 +1563,16 @@ mod tests {
         assert_eq!(fs::read(&path).unwrap(), original);
     }
 
-    fn pending_preview(template_path: &Path, output: &Path, cancel: CancellationToken) -> PendingPreview {
+    fn pending_preview(template_path: &Path, cancel: CancellationToken) -> PendingPreview {
         let template = read_template(template_path).unwrap();
         let provenance = Provenance {
+            prompt: None,
             workspace_path: template_path.parent().unwrap().to_string_lossy().into_owned(),
             dates: vec!["20261019".into(), "20261025".into()],
             settings: Settings {
                 enabled: true,
                 template_path: template_path.to_string_lossy().into_owned(),
                 prompt: "写入内容".into(),
-                output_directory: output.to_string_lossy().into_owned(),
             },
             source_revision: "source-hash".into(),
             template_fingerprint: template.fingerprint().into(),
@@ -1568,14 +1591,15 @@ mod tests {
     #[test]
     fn two_step_preview_has_no_output_and_confirmation_publishes_exact_prepared_bytes_once() {
         let root = tempfile::tempdir().unwrap();
-        let output = root.path().join("output");
+        let output = root.path().join("excel");
         fs::create_dir(&output).unwrap();
         let template_path = template_file(root.path());
         let original = fs::read(&template_path).unwrap();
-        let pending = pending_preview(&template_path, &output, CancellationToken::new());
+        let pending = pending_preview(&template_path, CancellationToken::new());
         let approved_bytes = pending.bytes.clone();
         let runtime = Runtime::default();
         let preview = runtime.insert(pending).unwrap();
+        assert_eq!(Path::new(&preview.output_directory), fs::canonicalize(&output).unwrap());
         assert_eq!(fs::read_dir(&output).unwrap().count(), 0);
         assert_eq!(preview.template_name, "template.xlsx");
         assert_eq!(preview.cells[0].previous_value, "待填写");
@@ -1598,6 +1622,11 @@ mod tests {
         assert!(serialized.get("bytes").is_none());
         assert!(serialized.get("provenance").is_none());
         let exported = runtime.confirm(&preview.id, |_| Ok(())).unwrap();
+        let stamp = exported.filename.strip_prefix("总结_20261019-20261025_").unwrap().strip_suffix(".xlsx").unwrap();
+        chrono::NaiveDateTime::parse_from_str(stamp, "%Y%m%d_%H%M%S").unwrap();
+        assert_eq!(Path::new(&exported.path).parent().unwrap(), fs::canonicalize(&output).unwrap());
+        assert_eq!(list_exports(&output).unwrap()[0].filename, exported.filename);
+        assert!(!read_export(Path::new(&exported.path)).unwrap().is_empty());
         assert_eq!(fs::read(&exported.path).unwrap(), approved_bytes);
         let output_workbook = umya_spreadsheet::reader::xlsx::read(Path::new(&exported.path)).unwrap();
         assert_eq!(output_workbook.sheet_by_name("Sheet1").unwrap().cell("B2").unwrap().formatted_value(), filled_preview.text);
@@ -1615,27 +1644,27 @@ mod tests {
     #[test]
     fn discarded_expired_cancelled_and_invalidated_previews_never_create_files() {
         let root = tempfile::tempdir().unwrap();
-        let output = root.path().join("output");
+        let output = root.path().join("excel");
         fs::create_dir(&output).unwrap();
         let path = template_file(root.path());
         let runtime = Runtime::default();
-        let preview = runtime.insert(pending_preview(&path, &output, CancellationToken::new())).unwrap();
+        let preview = runtime.insert(pending_preview(&path, CancellationToken::new())).unwrap();
         runtime.discard(&preview.id);
         runtime.discard(&preview.id);
         assert!(runtime.confirm(&preview.id, |_| Ok(())).is_err());
-        let mut pending = pending_preview(&path, &output, CancellationToken::new());
+        let mut pending = pending_preview(&path, CancellationToken::new());
         pending.created = Instant::now() - PREVIEW_LIFETIME;
         let expired = runtime.insert(pending).unwrap();
         assert!(runtime.confirm(&expired.id, |_| Ok(())).is_err());
         let cancel = CancellationToken::new();
-        let pending = pending_preview(&path, &output, cancel.clone());
+        let pending = pending_preview(&path, cancel.clone());
         cancel.cancel();
         assert!(runtime.insert(pending).is_err());
         let cancel = CancellationToken::new();
-        let preview = runtime.insert(pending_preview(&path, &output, cancel.clone())).unwrap();
+        let preview = runtime.insert(pending_preview(&path, cancel.clone())).unwrap();
         cancel.cancel();
         assert!(runtime.confirm(&preview.id, |_| Ok(())).is_err());
-        let preview = runtime.insert(pending_preview(&path, &output, CancellationToken::new())).unwrap();
+        let preview = runtime.insert(pending_preview(&path, CancellationToken::new())).unwrap();
         let error = runtime.confirm(&preview.id, |_| Err("内容已修改，请重新生成 Excel 预览".into())).unwrap_err();
         assert!(error.contains("内容已修改"));
         assert!(runtime.confirm(&preview.id, |_| Ok(())).is_err());
@@ -1647,23 +1676,23 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let path = template_file(root.path());
         let runtime = Runtime::default();
-        let first = runtime.insert(pending_preview(&path, root.path(), CancellationToken::new())).unwrap();
+        let first = runtime.insert(pending_preview(&path, CancellationToken::new())).unwrap();
         for _ in 0..MAX_PENDING_PREVIEWS {
-            runtime.insert(pending_preview(&path, root.path(), CancellationToken::new())).unwrap();
+            runtime.insert(pending_preview(&path, CancellationToken::new())).unwrap();
         }
         assert_eq!(runtime.0.lock().unwrap().len(), MAX_PENDING_PREVIEWS);
         assert!(runtime.confirm(&first.id, |_| Ok(())).is_err());
-        assert_eq!(fs::read_dir(root.path()).unwrap().count(), 1);
+        assert_eq!(fs::read_dir(root.path()).unwrap().count(), 2);
     }
 
     #[test]
     fn concurrent_confirmation_is_rejected_without_duplicate_publication() {
         let root = tempfile::tempdir().unwrap();
-        let output = root.path().join("output");
+        let output = root.path().join("excel");
         fs::create_dir(&output).unwrap();
         let path = template_file(root.path());
         let runtime = Runtime::default();
-        let preview = runtime.insert(pending_preview(&path, &output, CancellationToken::new())).unwrap();
+        let preview = runtime.insert(pending_preview(&path, CancellationToken::new())).unwrap();
         let other = runtime.clone();
         let id = preview.id.clone();
         let (entered_tx, entered_rx) = std::sync::mpsc::channel();
@@ -1685,12 +1714,12 @@ mod tests {
     #[test]
     fn temporary_publication_failure_keeps_the_same_approved_preview_for_retry() {
         let root = tempfile::tempdir().unwrap();
-        let output = root.path().join("output");
+        let output = root.path().join("excel");
         let backup = root.path().join("output-backup");
         fs::create_dir(&output).unwrap();
         let path = template_file(root.path());
         let runtime = Runtime::default();
-        let preview = runtime.insert(pending_preview(&path, &output, CancellationToken::new())).unwrap();
+        let preview = runtime.insert(pending_preview(&path, CancellationToken::new())).unwrap();
         fs::rename(&output, &backup).unwrap();
         fs::write(&output, "not a directory").unwrap();
         assert!(runtime.confirm(&preview.id, |_| Ok(())).is_err());

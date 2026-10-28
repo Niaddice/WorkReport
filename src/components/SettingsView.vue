@@ -203,7 +203,7 @@ const navigation = [
     label: '文件输出',
     items: [
       { id: 'summary', title: '总结文件', description: 'Markdown 与 TXT 导出目录', icon: PhFileText },
-      { id: 'excel', title: 'Excel 周报', description: '模板、填充规则与输出目录', icon: PhFileXls },
+      { id: 'excel', title: 'Excel报告', description: '模板与填充规则', icon: PhFileXls },
     ],
   },
 ] satisfies {
@@ -926,7 +926,7 @@ function remove(id: string) {
               <div class="settings-section-heading">
                 <div>
                   <h3 id="excel-settings-title">模板填充</h3>
-                  <p>使用默认 AI，将所选日报整理为 Excel 周报。</p>
+                  <p>使用默认 AI，将所选日报整理为 Excel报告。</p>
                 </div>
               </div>
               <ExcelSettings

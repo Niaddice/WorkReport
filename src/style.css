@@ -180,7 +180,7 @@ md-filled-tonal-button svg[slot='icon'] {
   height: 16px;
 }
 .app-shell {
-  /* 全局统一间隙：模块之间与 App 四周都是 0.5rem（默认 8px），不随界面缩放变化。 */
+  /* App 四周留白为 0.5rem（默认 8px），不随界面字体缩放变化。 */
   --app-gap: 0.5rem;
   --page-inset: var(--app-gap);
   width: 100%;
@@ -550,6 +550,7 @@ md-filled-tonal-button svg[slot='icon'] {
 .calendar-toolbar {
   flex: 0 0 auto;
   display: flex;
+  flex-wrap: wrap;
   justify-content: space-between;
   align-items: center;
   gap: 10px;
@@ -576,6 +577,9 @@ md-filled-tonal-button svg[slot='icon'] {
 }
 .view-controls {
   gap: 12px;
+  margin-left: auto;
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
 .today-button {
   --md-outlined-button-container-height: var(--control-small-height);
@@ -807,72 +811,12 @@ md-filled-tonal-button svg[slot='icon'] {
   color: #7eaaeb;
 }
 .calendar-selection-status {
+  flex: 0 0 auto;
+  margin-left: auto;
   color: #4f7fc6;
-  font-weight: 500;
-}
-.calendar-footer-tools {
-  min-width: 0;
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 9px;
-  white-space: nowrap;
-}
-.multi-toggle {
-  flex: 0 0 auto;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  border: 0;
-  background: none;
-  padding: 0;
-  color: #8a97a8;
-  font: inherit;
   font-size: var(--text-small);
-  cursor: pointer;
-}
-.multi-toggle-track {
-  width: 24px;
-  height: 14px;
-  border-radius: 999px;
-  background: #dfe6f0;
-  position: relative;
-  flex: 0 0 auto;
-  transition: background 0.16s ease;
-}
-.multi-toggle-track > span {
-  position: absolute;
-  top: 2px;
-  left: 2px;
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
-  background: #fff;
-  box-shadow: 0 1px 2px #5f789b33;
-  transition: transform 0.16s ease;
-}
-.multi-toggle.active {
-  color: #0b57d0;
   font-weight: 500;
-}
-.multi-toggle.active .multi-toggle-track {
-  background: #0b57d0;
-}
-.multi-toggle.active .multi-toggle-track > span {
-  transform: translateX(10px);
-}
-.multi-toggle:focus-visible {
-  outline: 2px solid #0b57d0;
-  outline-offset: 3px;
-  border-radius: 4px;
-}
-.multi-toggle:disabled {
-  opacity: 0.45;
-  cursor: default;
-}
-.footer-divider {
-  margin: 0 9px;
-  color: #c4c9d1;
+  white-space: nowrap;
 }
 .week-view .month-grid {
   grid-template-rows: 1fr;
@@ -2182,7 +2126,8 @@ input[type='radio'] {
   gap: 10px;
   margin-bottom: 26px;
 }
-.generation-preference > label {
+.generation-preference > label,
+.excel-prompt-heading > label {
   color: #4d627f;
   font-size: var(--text-subtitle);
   font-weight: 500;
@@ -3389,7 +3334,8 @@ input[type='radio'] {
   font-size: var(--text-body);
   margin-top: 10px;
 }
-.excel-preview-dialog {
+.excel-preview-dialog,
+.summary-generation-dialog {
   width: min(1160px, calc(var(--viewport-width) - 48px));
   height: min(780px, calc(var(--viewport-height) - 48px));
 }
@@ -3579,8 +3525,11 @@ input[type='radio'] {
   flex-wrap: wrap;
   gap: 12px;
 }
-.excel-preview-actions > .excel-preview-directory {
+.excel-preview-actions > .excel-preview-directory,
+:is(.excel-generation-actions, .summary-generation-actions) > .excel-preview-directory {
   flex: 1 1 180px;
+  display: flex;
+  align-items: center;
   min-width: 0;
   gap: 7px;
   color: #8a98ab;
@@ -3752,9 +3701,6 @@ input[type='radio'] {
   .calendar-footer {
     padding-inline: 14px;
     font-size: var(--text-caption);
-  }
-  .footer-divider {
-    margin-inline: 5px;
   }
   .year-grid {
     padding-inline: 12px;
@@ -4135,6 +4081,13 @@ input[type='radio'] {
 }
 .excel-prompt-field {
   margin: 0;
+}
+.excel-prompt-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px 12px;
 }
 .excel-range-note {
   padding: 12px 14px;
@@ -4556,7 +4509,7 @@ input[type='radio'] {
 }
 :is(button, md-icon-button, md-filled-button, md-filled-tonal-button, md-outlined-button, md-text-button):not(
     :disabled
-  ):not([disabled]):not(.day-cell):not(.multi-toggle):not(.app-select-trigger):not(.app-select-option):active {
+  ):not([disabled]):not(.day-cell):not(.app-select-trigger):not(.app-select-option):active {
   transform: scale(0.96);
 }
 .mini-days button:active {
@@ -4886,6 +4839,19 @@ dialog[open].is-closing {
 }
 dialog[open].is-closing::backdrop {
   animation: backdrop-exit var(--motion-duration) ease both;
+}
+dialog[open].has-window-motion,
+dialog[open].has-window-motion.is-closing {
+  animation: none;
+}
+dialog[open].has-window-motion::backdrop {
+  animation-duration: 360ms;
+}
+dialog[open].has-window-motion.is-closing::backdrop {
+  animation-duration: 280ms;
+}
+.is-surface-closing {
+  pointer-events: none;
 }
 @keyframes dialog-enter {
   from {
@@ -5219,8 +5185,8 @@ dialog[open].is-closing::backdrop {
 
 /* ===== 模块化拖放首页 ===== */
 .module-board {
-  /* 模块之间与 App 四周统一 0.5rem；模块板本身始终一屏，绝不出现滚动条。 */
-  --module-gap: var(--app-gap, 0.5rem);
+  /* 布局几何读取此间距的实际像素值；模块板本身始终一屏。 */
+  gap: 0.2rem;
   position: relative;
   flex: 1;
   min-width: 0;
@@ -5243,47 +5209,14 @@ dialog[open].is-closing::backdrop {
 .module-gutter {
   position: absolute;
   z-index: 8;
-  border-radius: 999px;
   touch-action: none;
   background: transparent;
-  transition: background-color 0.12s ease;
 }
 .module-gutter.is-row {
   cursor: col-resize;
 }
 .module-gutter.is-column {
   cursor: row-resize;
-}
-.module-gutter::after {
-  content: '';
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  width: 3px;
-  height: 26px;
-  border-radius: 999px;
-  background: #d3dfee;
-  transform: translate(-50%, -50%);
-  transition:
-    background-color 0.12s ease,
-    height 0.12s ease,
-    width 0.12s ease;
-}
-.module-gutter.is-column::after {
-  width: 26px;
-  height: 3px;
-}
-.module-gutter:hover::after,
-.module-gutter:focus-visible::after {
-  background: #0b57d0;
-}
-.module-gutter.is-row:hover::after,
-.module-gutter.is-row:focus-visible::after {
-  height: 34px;
-}
-.module-gutter.is-column:hover::after,
-.module-gutter.is-column:focus-visible::after {
-  width: 34px;
 }
 .module-gutter:focus-visible {
   outline: 2px solid rgba(11, 87, 208, 0.55);
@@ -5355,13 +5288,10 @@ body.is-module-resizing * {
   border-style: dashed;
   border-color: #9dbce8;
 }
-.module-panel:not([data-module-id='calendar']):focus-within {
-  border-color: #cfdff3;
-}
-.module-panel.is-active:not([data-module-id='calendar']):not(.is-dragging) {
+.module-panel.is-active:not(.is-dragging) {
   border-color: var(--skin-accent);
 }
-.module-panel.is-active:not([data-module-id='calendar']):not(.is-dragging)::after {
+.module-panel.is-active:not(.is-dragging)::after {
   opacity: 1;
 }
 .module-panel-header {
@@ -5371,32 +5301,19 @@ body.is-module-resizing * {
   align-items: center;
   gap: 7px;
   min-height: 36px;
-  padding: 4px 8px 4px 5px;
+  padding: 4px 8px;
   border-bottom: 1px solid #eef2f7;
   background: rgba(248, 250, 253, 0.72);
-}
-.module-drag-handle {
-  flex: 0 0 24px;
-  width: 24px;
-  height: 24px;
-  display: grid;
-  place-items: center;
-  padding: 0;
-  border: 0;
-  border-radius: 7px;
-  background: transparent;
-  color: #a7b3c4;
   cursor: grab;
   touch-action: none;
 }
-.module-drag-handle:hover {
-  background: #e8effa;
-  color: #3f6fae;
-}
-.module-drag-handle:active {
+.module-panel-header:active {
   cursor: grabbing;
 }
-.module-drag-handle:focus-visible,
+.module-panel-title,
+.module-panel-subtitle {
+  cursor: default;
+}
 .module-panel-action:focus-visible {
   outline: 2px solid #0b57d0;
   outline-offset: 1px;
@@ -5758,6 +5675,8 @@ body.is-module-dragging * {
 }
 .module-panel.is-maximized .module-panel-header {
   background: rgba(248, 250, 253, 0.94);
+  cursor: default;
+  touch-action: auto;
 }
 .module-panel.is-maximized .module-panel-body {
   min-height: 0;
@@ -6183,24 +6102,6 @@ body.is-module-maximized * {
     width var(--motion-page) var(--motion-ease),
     height var(--motion-page) var(--motion-ease);
 }
-.journal-preview-window.journal-preview-enter-active {
-  transition:
-    opacity var(--motion-duration) ease,
-    transform var(--motion-page) var(--motion-ease);
-  will-change: opacity, transform;
-}
-.journal-preview-window.journal-preview-leave-active {
-  pointer-events: none;
-  transition:
-    opacity var(--motion-fast) ease,
-    transform var(--motion-duration) var(--motion-ease);
-  will-change: opacity, transform;
-}
-.journal-preview-enter-from,
-.journal-preview-leave-to {
-  opacity: 0;
-  transform: translate(var(--preview-enter-x, -10px), -4px) scale(0.97);
-}
 .journal-preview-window-header {
   flex: 0 0 auto;
   display: flex;
@@ -6307,10 +6208,6 @@ body.is-preview-window-resizing * {
   .journal-preview-window-actions button {
     transition: none !important;
     transform: none !important;
-  }
-  .journal-preview-enter-from,
-  .journal-preview-leave-to {
-    opacity: 1;
   }
 }
 
@@ -6467,12 +6364,15 @@ body.is-preview-window-resizing * {
   color: #a1adbc;
   font-size: var(--text-subtitle);
 }
+.history-module-row {
+  position: relative;
+}
 .history-module-item {
   width: 100%;
   display: flex;
   align-items: center;
   gap: 7px;
-  padding: 7px 10px;
+  padding: 7px 40px 7px 10px;
   border: 1px solid #e4ebf4;
   border-radius: 9px;
   background: #fff;
@@ -6483,11 +6383,58 @@ body.is-preview-window-resizing * {
     border-color 0.12s ease,
     background-color 0.12s ease;
 }
-.history-module-item:hover,
+.history-module-row:hover .history-module-item,
 .history-module-item:focus-visible {
   border-color: #9fc0e9;
   background: #eef6ff;
   outline: none;
+}
+.history-copy-button {
+  position: absolute;
+  top: 50%;
+  right: 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #6c839e;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(-50%);
+  transition:
+    opacity 0.12s ease,
+    background-color 0.12s ease;
+}
+.history-module-row:hover .history-copy-button,
+.history-module-row:focus-within .history-copy-button {
+  opacity: 1;
+  pointer-events: auto;
+}
+.history-copy-button:hover,
+.history-copy-button:focus-visible {
+  background: #dceafb;
+  color: #315d91;
+}
+.history-copy-button:focus-visible {
+  outline: 2px solid var(--skin-accent);
+  outline-offset: 1px;
+}
+.history-copy-button.is-copied {
+  color: #20835a;
+}
+.history-copy-button:disabled {
+  cursor: wait;
+}
+@media (hover: none) {
+  .history-copy-button {
+    opacity: 1;
+    pointer-events: auto;
+  }
 }
 .history-module-time {
   font-variant-numeric: tabular-nums;
@@ -6670,7 +6617,7 @@ body.is-preview-window-resizing * {
   color: #8190a5;
   font-size: var(--text-small);
 }
-/* Excel 周报：范围 + 功能按钮 + 分割线 + 已导出列表 */
+/* Excel报告：日期范围与已导出区域的悬浮操作。 */
 .excel-module-main {
   flex: 1;
   min-height: 0;
@@ -6721,6 +6668,203 @@ body.is-preview-window-resizing * {
   border-radius: 8px;
   font-size: var(--text-subtitle);
   line-height: 1.5;
+  box-shadow: 0 2px 6px rgba(23, 42, 70, 0.12);
+}
+.excel-generate-button:focus-visible,
+.excel-text-button:focus-visible {
+  outline: 2px solid var(--skin-accent);
+  outline-offset: 2px;
+}
+:is(.excel-workflow-steps, .summary-workflow-steps) {
+  flex: 0 0 auto;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  margin: 0 0 18px;
+  padding: 0;
+  list-style: none;
+}
+:is(.excel-workflow-steps, .summary-workflow-steps) li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: #f0f3f8;
+  color: #8795aa;
+  font-size: var(--text-body);
+}
+:is(.excel-workflow-steps, .summary-workflow-steps) li > span {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: #e3e9f2;
+  font-size: var(--text-small);
+}
+:is(.excel-workflow-steps, .summary-workflow-steps) .is-current {
+  background: #eaf2ff;
+  color: #174ea6;
+  font-weight: 500;
+}
+:is(.excel-workflow-steps, .summary-workflow-steps) .is-current > span {
+  background: #0b57d0;
+  color: white;
+}
+:is(.excel-workflow-steps, .summary-workflow-steps) .is-complete {
+  color: #357255;
+}
+:is(.excel-session-overview, .summary-session-overview) {
+  flex: 0 0 auto;
+  display: grid;
+  grid-template-columns: 1.4fr 1fr 1fr;
+  gap: 12px;
+  margin-bottom: 18px;
+  padding: 14px 16px;
+  border: 1px solid #e3eaf4;
+  border-radius: 12px;
+}
+:is(.excel-session-overview, .summary-session-overview) > div {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+:is(.excel-session-overview, .summary-session-overview) span {
+  font-size: var(--text-small);
+  color: #8795aa;
+}
+:is(.excel-session-overview, .summary-session-overview) strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--text-body);
+  font-weight: 500;
+  color: #4d627f;
+}
+:is(.excel-generation-editor, .summary-generation-editor) {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  overflow: auto;
+}
+:is(.excel-generation-editor-heading, .summary-generation-editor-heading),
+:is(.excel-generation-editor-hint, .summary-generation-editor-hint) {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+}
+:is(.excel-generation-editor-heading, .summary-generation-editor-heading) label {
+  color: #4d627f;
+  font-size: var(--text-subtitle);
+  font-weight: 500;
+}
+:is(.excel-generation-editor-heading, .summary-generation-editor-heading) span {
+  padding: 3px 9px;
+  border-radius: 999px;
+  background: #edf5ee;
+  color: #357255;
+  font-size: var(--text-small);
+}
+:is(.excel-generation-editor, .summary-generation-editor) textarea {
+  flex: 1;
+  width: 100%;
+  min-height: 160px;
+  padding: 12px 14px;
+  resize: none;
+  border: 1px solid #dce5f1;
+  border-radius: 12px;
+  background: #fff;
+  color: #405873;
+  font: inherit;
+  font-size: var(--text-body);
+  line-height: 1.9;
+}
+:is(.excel-generation-editor, .summary-generation-editor) textarea:focus {
+  outline: 2px solid var(--skin-accent);
+  outline-offset: -1px;
+}
+:is(.excel-generation-editor-hint, .summary-generation-editor-hint) {
+  color: #8795aa;
+  font-size: var(--text-small);
+  line-height: 1.6;
+}
+:is(.excel-generation-editor-hint, .summary-generation-editor-hint) p {
+  margin: 0;
+}
+:is(.excel-generation-actions, .summary-generation-actions) {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid #e3eaf4;
+}
+:is(.excel-generation-actions, .summary-generation-actions) .ai-dialog-confirm-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-left: auto;
+}
+:is(.excel-session-prompt, .summary-session-prompt) {
+  flex: 0 0 auto;
+  max-height: 140px;
+  overflow: auto;
+  margin-bottom: 14px;
+  color: #617b9c;
+  font-size: var(--text-small);
+}
+:is(.excel-session-prompt, .summary-session-prompt) summary {
+  cursor: pointer;
+  width: fit-content;
+}
+:is(.excel-session-prompt, .summary-session-prompt) pre {
+  margin: 8px 0 0;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: #f0f3f8;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font: inherit;
+  line-height: 1.8;
+}
+@media (max-width: 700px) {
+  :is(.excel-session-overview, .summary-session-overview) {
+    grid-template-columns: 1fr;
+    gap: 8px;
+  }
+  :is(.excel-session-overview, .summary-session-overview) > div {
+    flex-direction: row;
+    justify-content: space-between;
+  }
+  :is(.excel-workflow-steps, .summary-workflow-steps) li {
+    padding: 8px 6px;
+    gap: 4px;
+  }
+}
+:is(.excel-generation-progress, .summary-generation-progress) {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 16px;
+}
+:is(.excel-generation-scope, .summary-generation-scope) {
+  margin: 0;
+  color: #617b9c;
+  font-size: var(--text-body);
 }
 .excel-generate-button {
   border: 1px solid #cfe0fb;
@@ -6765,12 +6909,38 @@ body.is-preview-window-resizing * {
   background: #eef2f7;
 }
 .excel-exports {
+  position: relative;
   flex: 1;
   min-height: 0;
-  overflow: auto;
+  overflow: hidden;
   display: flex;
   flex-direction: column;
   gap: 6px;
+}
+.excel-exports-header {
+  position: relative;
+  flex: 0 0 auto;
+  min-height: 32px;
+  padding-right: 112px;
+  display: flex;
+  align-items: center;
+}
+.excel-exports-header h3 {
+  margin: 0;
+  color: #8190a5;
+  font-size: var(--text-subtitle);
+  font-weight: 500;
+}
+.excel-exports-header .excel-module-actions {
+  position: absolute;
+  top: 0;
+  right: 0;
+  flex-wrap: nowrap;
+}
+.excel-exports-content {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
 }
 .excel-exports-state {
   margin: 0;
@@ -6973,7 +7143,6 @@ body.is-preview-window-resizing * {
     font-size: var(--text-micro);
   }
   .calendar-footer > span:first-child,
-  .calendar-footer .footer-divider,
   .calendar-footer-hint {
     display: none;
   }
@@ -7077,12 +7246,6 @@ body.is-preview-window-resizing * {
     padding: 4px 6px;
     font-size: var(--text-micro);
   }
-  .calendar-footer-tools {
-    gap: 3px;
-  }
-  .calendar-footer .multi-toggle span:last-child {
-    display: none;
-  }
   .year-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
     grid-template-rows: repeat(6, minmax(0, 1fr));
@@ -7124,7 +7287,6 @@ body.is-preview-window-resizing * {
     padding-bottom: 2px;
   }
   .calendar-footer > span:first-child,
-  .calendar-footer .footer-divider,
   .calendar-footer-hint {
     display: none;
   }
@@ -7247,7 +7409,7 @@ body.is-preview-window-resizing * {
   outline: 2px solid var(--skin-accent);
   outline-offset: 2px;
 }
-/* 日期行右侧的“总结”按钮：点击后弹出确认 popover。 */
+/* 日期行右侧的“总结”按钮：直接打开 AI 总结生成窗口。 */
 .summary-run-button {
   display: inline-flex;
   align-items: center;
@@ -7273,41 +7435,27 @@ body.is-preview-window-resizing * {
   outline: 2px solid var(--skin-accent);
   outline-offset: 2px;
 }
-.summary-confirm-menu {
-  width: 220px;
-  padding: 10px;
+.summary-generation-result {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 16px 20px;
+  border: 1px solid #e3eaf4;
+  border-radius: 12px;
+  background: #fff;
 }
-.summary-confirm-copy {
-  margin: 0 0 10px;
-  color: #5c718e;
-  font-size: var(--text-small);
-  line-height: 1.6;
-  white-space: normal;
-}
-.summary-confirm-actions {
+.summary-generation-actions > .excel-preview-directory {
+  flex: 1 1 140px;
+  min-width: 0;
   display: flex;
-  justify-content: flex-end;
-  gap: 6px;
-}
-.summary-confirm-actions > button {
-  height: 26px;
-  padding: 0 10px;
-  border: 0;
-  border-radius: 7px;
+  align-items: center;
+  gap: 7px;
+  color: #8a98ab;
   font-size: var(--text-small);
-  line-height: 1.5;
 }
-.summary-confirm-cancel {
-  background: #eef2f8;
-  color: #5c718e;
-}
-.summary-confirm-cancel:hover {
-  background: #e3eaf5;
-}
-.summary-confirm-primary {
-  background: #0b57d0;
-  color: #fff;
-}
-.summary-confirm-primary:hover {
-  background: #0a4cb8;
+.summary-generation-dialog md-outlined-button {
+  --md-outlined-button-container-height: var(--control-height);
+  --md-outlined-button-container-shape: 9px;
+  --md-outlined-button-label-text-size: var(--text-body);
+  --md-outlined-button-label-text-weight: 500;
 }

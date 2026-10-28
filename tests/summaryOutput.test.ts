@@ -12,8 +12,8 @@ vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn(), isTauri: vi.fn() }))
 
 const configured: SummaryOutputSettings = { outputDirectory: '归档/工作总结' }
 const exported: SummaryExportResult = {
-  path: '/workspace/归档/工作总结/20261019-20261022.md',
-  filename: '20261019-20261022.md',
+  path: '/workspace/归档/工作总结/总结_20261019-20261022_20261028_160500.md',
+  filename: '总结_20261019-20261022_20261028_160500.md',
 }
 function deferred<T>() {
   let resolve!: (value: T) => void
@@ -37,6 +37,13 @@ afterEach(() => {
 })
 
 describe('summary output settings', () => {
+  it('defaults to summary and migrates the old default directory', async () => {
+    const output = useSummaryOutput()
+    expect(output.settings.value.outputDirectory).toBe('summary')
+    vi.mocked(invoke).mockResolvedValueOnce({ outputDirectory: '总结' })
+    expect(await output.load()).toBe(true)
+    expect(output.settings.value.outputDirectory).toBe('summary')
+  })
   it('loads the workspace directory without writing defaults', async () => {
     const output = useSummaryOutput()
     expect(output.settings.value).toEqual(DEFAULT_SUMMARY_OUTPUT_SETTINGS)

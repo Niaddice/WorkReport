@@ -3,7 +3,7 @@ import { computed, ref, watch } from 'vue'
 import { isTauri } from '@tauri-apps/api/core'
 import { open } from '@tauri-apps/plugin-dialog'
 import { PhFolderOpen } from '@phosphor-icons/vue'
-import { type SummaryOutputSettings } from '../lib/useSummaryOutput'
+import { DEFAULT_SUMMARY_OUTPUT_SETTINGS, type SummaryOutputSettings } from '../lib/useSummaryOutput'
 
 const props = defineProps<{ modelValue: SummaryOutputSettings; busy: boolean; workspacePath: string }>()
 const emit = defineEmits<{ 'update:modelValue': [settings: SummaryOutputSettings] }>()
@@ -45,7 +45,7 @@ function normalizedDirectory(): string | null {
     /[\x00-\x1f\x7f]/.test(value) ||
     value.split('/').some((part) => !part || part === '.' || part === '..')
   ) {
-    localError.value = '请输入工作空间内的相对目录，例如“总结”或“总结/周报”，不能使用根目录或上级目录。'
+    localError.value = '请输入工作空间内的相对目录，例如“summary”或“summary/周报”，不能使用根目录或上级目录。'
     return null
   }
   return value
@@ -103,7 +103,7 @@ async function chooseDirectory() {
 
 function restoreDefault() {
   if (formBusy.value || !props.workspacePath) return
-  updateDirectory('总结')
+  updateDirectory(DEFAULT_SUMMARY_OUTPUT_SETTINGS.outputDirectory)
 }
 
 defineExpose({ validate })
@@ -119,7 +119,7 @@ defineExpose({ validate })
           :value="draft.outputDirectory"
           :disabled="formBusy || !workspacePath"
           type="text"
-          placeholder="总结"
+          :placeholder="DEFAULT_SUMMARY_OUTPUT_SETTINGS.outputDirectory"
           spellcheck="false"
           aria-describedby="summary-output-directory-hint"
           @input="updateDirectory(($event.target as HTMLInputElement).value)"
@@ -129,7 +129,8 @@ defineExpose({ validate })
         </button>
       </div>
       <p id="summary-output-directory-hint" class="field-hint">
-        填写工作空间内的相对目录，例如“总结/周报”。导出的 Markdown 和 TXT 文件保存在此处，目录不存在时会自动创建。
+        填写工作空间内的相对目录，默认“summary”，也可填写“summary/周报”。导出的 Markdown 和 TXT
+        文件保存在此处，目录不存在时会自动创建。
       </p>
     </div>
     <div class="workspace-location summary-output-location">
@@ -143,7 +144,9 @@ defineExpose({ validate })
       ><button
         type="button"
         class="text-action"
-        :disabled="formBusy || !workspacePath || draft.outputDirectory === '总结'"
+        :disabled="
+          formBusy || !workspacePath || draft.outputDirectory === DEFAULT_SUMMARY_OUTPUT_SETTINGS.outputDirectory
+        "
         @click="restoreDefault"
       >
         恢复默认目录

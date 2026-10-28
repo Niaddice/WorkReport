@@ -15,6 +15,7 @@ vi.mock('@tauri-apps/plugin-dialog', () => ({ open: pickDirectory }))
 import App from '../src/App.vue'
 import ModuleBoard from '../src/components/ModuleBoard.vue'
 import SettingsDialog from '../src/components/SettingsDialog.vue'
+import AiSummaryDialog from '../src/components/AiSummaryDialog.vue'
 import { flattenLayout } from '../src/modules/layout'
 import { DEFAULT_DATABASE_SETTINGS } from '../src/lib/database'
 import type { WorkspaceSettings } from '../src/lib/settingsDraft'
@@ -56,11 +57,11 @@ function commandResult(command: string): unknown {
     case 'load_appearance_settings':
       return { scale: 100 }
     case 'load_excel_settings':
-      return { enabled: false, templatePath: '', prompt: '', outputDirectory: '' }
+      return { enabled: false, templatePath: '', prompt: '' }
     case 'list_excel_exports':
       return []
     case 'load_summary_settings':
-      return { outputDirectory: '总结' }
+      return { outputDirectory: 'summary' }
     case 'load_database_settings':
       return { ...DEFAULT_DATABASE_SETTINGS }
     case 'load_ui_preferences':
@@ -206,55 +207,297 @@ describe('workspace settings sync confirmation', () => {
 })
 
 describe('modular home integration', () => {
-  it('keeps the editor highlighted while calendar selection waits for the next report', async () => {
-    const today = dayjs()
-    const target = today.startOf('month').date(today.date() === 5 ? 6 : 5)
-    const makeDocument = (date: ReturnType<typeof dayjs>) => ({
-      date: date.format('YYYYMMDD'),
-      filename: `${date.format('YYYYMMDD')}.md`,
-      format: 'md',
-      content: `日报 ${date.format('YYYYMMDD')}`,
-      revision: date.format('YYYYMMDD'),
-    })
-    const currentDocument = makeDocument(today)
-    const targetDocument = makeDocument(target)
-    let completeRead!: (document: typeof targetDocument) => void
-    const nextRead = new Promise<typeof targetDocument>((resolve) => {
-      completeRead = resolve
-    })
-    invoke.mockImplementation(async (command: string, args?: { date?: string }) => {
-      if (command === 'list_entries') return [currentDocument, targetDocument]
-      if (command === 'read_entry') return args?.date === targetDocument.date ? nextRead : currentDocument
+  it('keeps summary prompt edits temporary and cancels a confirmation while AI settings are still loading', async () => {
+    const date = dayjs().format('YYYYMMDD')
+    const aiSettings = {
+      providers: [
+        {
+          id: 'ai',
+          name: '默认 AI',
+          kind: 'http',
+          model: 'example',
+          executable: '',
+          baseUrl: 'https://example.test',
+          apiKey: '',
+        },
+      ],
+      defaultProviderId: 'ai',
+      generationPreference: '',
+      summaryPrompt: '设置中的总结规则',
+    }
+    let delayLoad = false
+    let finishLoad!: (value: typeof aiSettings) => void
+    invoke.mockImplementation(async (command: string) => {
+      if (command === 'load_ai_settings')
+        return delayLoad
+          ? new Promise((resolve) => {
+              finishLoad = resolve
+            })
+          : aiSettings
+      if (command === 'list_entries') return [{ date, filename: `${date}.md`, format: 'md' }]
+      if (command === 'read_entry')
+        return { date, filename: `${date}.md`, format: 'md', content: '完成项目任务', revision: 'v1' }
+      if (command === 'summarize_entries') return '## 项目成果\n\n完成任务'
       return commandResult(command)
     })
     const wrapper = await openDemoWorkspace()
-    const activeIds = () =>
-      wrapper.findAll('.module-panel.is-active').map((panel) => panel.attributes('data-module-id'))
     try {
-      expect(activeIds()).toEqual(['editor'])
+      await wrapper.get('.app-rail [aria-label="总结"]').trigger('click')
+      await flushPromises()
+      await wrapper.get('.summary-run-button').trigger('click')
+      expect(wrapper.get<HTMLTextAreaElement>('#summary-session-prompt').element.value).toBe(aiSettings.summaryPrompt)
+      await wrapper.get('#summary-session-prompt').setValue('仅本次按项目总结')
+      delayLoad = true
+      await wrapper.get('.summary-start-generation').trigger('click')
+      await flushPromises()
+      await wrapper.get('#summary-generation-dialog [aria-label="关闭 AI 总结"]').trigger('click')
+      finishLoad(aiSettings)
+      await flushPromises()
+      expect(invoke.mock.calls.some(([command]) => command === 'summarize_entries')).toBe(false)
+      delayLoad = false
+      await wrapper.get('.summary-run-button').trigger('click')
+      expect(wrapper.get<HTMLTextAreaElement>('#summary-session-prompt').element.value).toBe(aiSettings.summaryPrompt)
+      await wrapper.get('#summary-session-prompt').setValue('本次突出交付成果')
+      await wrapper.get('.summary-start-generation').trigger('click')
+      await flushPromises()
+      expect(invoke).toHaveBeenCalledWith('summarize_entries', {
+        content: expect.stringContaining('完成项目任务'),
+        requestId: expect.any(String),
+        prompt: '本次突出交付成果',
+      })
+      expect(wrapper.get('.summary-generation-result').text()).toContain('完成任务')
+      expect(invoke.mock.calls.some(([command]) => command === 'save_workspace_settings')).toBe(false)
+    } finally {
+      wrapper.unmount()
+    }
+  })
+
+  it('sends the temporary Excel prompt through generation without saving it to workspace settings', async () => {
+    const configured = { enabled: true, templatePath: '/templates/report.xlsx', prompt: '设置中的原始规则' }
+    invoke.mockImplementation(async (command: string) => {
+      if (command === 'load_excel_settings') return configured
+      if (command === 'load_ai_settings')
+        return {
+          providers: [
+            {
+              id: 'ai',
+              name: '默认 AI',
+              kind: 'http',
+              model: 'example',
+              executable: '',
+              baseUrl: 'https://example.test',
+              apiKey: '',
+            },
+          ],
+          defaultProviderId: 'ai',
+          generationPreference: '',
+          summaryPrompt: '',
+        }
+      if (command === 'prepare_excel')
+        return {
+          id: 'temporary-preview',
+          templateName: 'report.xlsx',
+          outputDirectory: `${DEMO_WORKSPACE}/excel`,
+          start: dayjs().format('YYYYMMDD'),
+          end: dayjs().format('YYYYMMDD'),
+          cells: [],
+          styles: [],
+          sheets: [],
+        }
+      return commandResult(command)
+    })
+    const wrapper = await openDemoWorkspace()
+    try {
+      await wrapper.get('.app-rail [aria-label="Excel报告"]').trigger('click')
+      await flushPromises()
+      await wrapper.get('.excel-generate-button').trigger('click')
+      expect(invoke.mock.calls.some(([command]) => command === 'prepare_excel')).toBe(false)
+      await wrapper.get('#excel-session-prompt').setValue('本次只提炼项目成果')
+      await wrapper.get('.excel-start-generation').trigger('click')
+      await flushPromises()
+      expect(invoke).toHaveBeenCalledWith('prepare_excel', {
+        workspacePath: DEMO_WORKSPACE,
+        dates: [dayjs().format('YYYYMMDD')],
+        requestId: expect.any(String),
+        prompt: '本次只提炼项目成果',
+      })
+      expect(invoke.mock.calls.some(([command]) => command === 'save_workspace_settings')).toBe(false)
+      await wrapper.get('.excel-preview-dialog [aria-label="关闭 Excel报告"]').trigger('click')
+      await flushPromises()
+      await wrapper.get('.excel-generate-button').trigger('click')
+      expect(wrapper.get<HTMLTextAreaElement>('#excel-session-prompt').element.value).toBe(configured.prompt)
+    } finally {
+      wrapper.unmount()
+    }
+  })
+
+  it('exports a summary with the complete selected range, including empty boundary days', async () => {
+    const start = dayjs().startOf('month').date(10)
+    const middle = start.add(1, 'day')
+    const end = start.add(2, 'day')
+    const date = middle.format('YYYYMMDD')
+    const entry = { date, filename: `${date}.md`, format: 'md' }
+    invoke.mockImplementation(async (command: string) => {
+      if (command === 'list_entries') return [entry]
+      if (command === 'read_entry') return { ...entry, content: '完成范围内的任务', revision: 'v1' }
+      if (command === 'export_summary')
+        return { filename: '总结_export.md', path: `${DEMO_WORKSPACE}/summary/总结_export.md` }
+      return commandResult(command)
+    })
+    const wrapper = await openDemoWorkspace()
+    try {
+      await wrapper.get('.app-rail [aria-label="总结"]').trigger('click')
+      await flushPromises()
+      const day = (value: ReturnType<typeof dayjs>) =>
+        wrapper.get(`.calendar-panel .day-cell[aria-label^="${value.format('YYYY年M月D日 ')}"]`)
+      await day(start).trigger('pointerdown', { button: 0 })
+      await day(end).trigger('pointerenter')
+      window.dispatchEvent(new Event('pointerup'))
+      await flushPromises()
+      expect(wrapper.get('.summary-module .summary-result').text()).toContain('完成范围内的任务')
+      expect(wrapper.get('.summary-module .summary-export-icon').attributes('disabled')).toBeUndefined()
+      wrapper.getComponent(AiSummaryDialog).vm.$emit('export', 'md')
+      await flushPromises()
+      expect(invoke).toHaveBeenCalledWith('export_summary', {
+        workspacePath: DEMO_WORKSPACE,
+        dates: [start, middle, end].map((value) => value.format('YYYYMMDD')),
+        content: expect.stringContaining('完成范围内的任务'),
+        format: 'md',
+      })
+    } finally {
+      wrapper.unmount()
+    }
+  })
+
+  it.each(['single', 'range', 'same-day'] as const)(
+    'reloads Excel reports from disk after a %s calendar selection without manual refresh',
+    async (selection) => {
+      const target = selection === 'same-day' ? dayjs() : dayjs().startOf('month').date(10)
+      const end = target.add(2, 'day')
+      const filename = `总结_${target.format('YYYYMMDD')}-${end.format('YYYYMMDD')}_calendar.xlsx`
+      let diskReports: { filename: string; path: string; modified: number; size: number }[] = []
+      invoke.mockImplementation(async (command: string) =>
+        command === 'list_excel_exports' ? [...diskReports] : commandResult(command),
+      )
+      const wrapper = await openDemoWorkspace()
+      try {
+        await wrapper.get('.app-rail [aria-label="Excel报告"]').trigger('click')
+        await flushPromises()
+        expect(wrapper.findAll('.excel-export-name')).toHaveLength(0)
+        const reads = invoke.mock.calls.filter(([command]) => command === 'list_excel_exports').length
+        diskReports = [{ filename, path: `${DEMO_WORKSPACE}/excel/${filename}`, modified: 0, size: 100 }]
+        const day = (date: ReturnType<typeof dayjs>) =>
+          wrapper.get(`.calendar-panel .day-cell[aria-label^="${date.format('YYYY年M月D日 ')}"]`)
+        if (selection === 'range') {
+          await day(target).trigger('pointerdown', { button: 0 })
+          await day(end).trigger('pointerenter')
+          window.dispatchEvent(new Event('pointerup'))
+        } else await day(target).trigger('click')
+        await flushPromises()
+        expect(wrapper.findAll('.excel-export-name').map((item) => item.text())).toEqual([filename])
+        expect(invoke.mock.calls.filter(([command]) => command === 'list_excel_exports').length).toBeGreaterThan(reads)
+      } finally {
+        wrapper.unmount()
+      }
+    },
+  )
+
+  it.each(['calendar', 'overview'] as const)(
+    'keeps the last clicked module %s active after a delayed calendar selection',
+    async (lastClicked) => {
+      const today = dayjs()
+      const target = today.startOf('month').date(today.date() === 5 ? 6 : 5)
+      const makeDocument = (date: ReturnType<typeof dayjs>) => ({
+        date: date.format('YYYYMMDD'),
+        filename: `${date.format('YYYYMMDD')}.md`,
+        format: 'md',
+        content: `日报 ${date.format('YYYYMMDD')}`,
+        revision: date.format('YYYYMMDD'),
+      })
+      const currentDocument = makeDocument(today)
+      const targetDocument = makeDocument(target)
+      let completeRead!: (document: typeof targetDocument) => void
+      const nextRead = new Promise<typeof targetDocument>((resolve) => {
+        completeRead = resolve
+      })
+      invoke.mockImplementation(async (command: string, args?: { date?: string }) => {
+        if (command === 'list_entries') return [currentDocument, targetDocument]
+        if (command === 'read_entry') return args?.date === targetDocument.date ? nextRead : currentDocument
+        return commandResult(command)
+      })
+      const wrapper = await openDemoWorkspace()
+      const activeIds = () =>
+        wrapper.findAll('.module-panel.is-active').map((panel) => panel.attributes('data-module-id'))
+      try {
+        expect(activeIds()).toEqual(['editor'])
+        if (lastClicked === 'overview') {
+          await wrapper.get('.app-rail [aria-label="数据概览"]').trigger('click')
+          await flushPromises()
+        }
+        wrapper.get<HTMLTextAreaElement>('.markdown-editor').element.focus()
+        await wrapper.vm.$nextTick()
+        expect(activeIds()).toEqual(['editor'])
+        const day = wrapper.get<HTMLButtonElement>(
+          `.calendar-panel .day-cell[aria-label^="${target.format('YYYY年M月D日 ')}"]`,
+        )
+        await day.trigger('pointerdown', { button: 0 })
+        expect(activeIds()).toEqual(['calendar'])
+        day.element.focus()
+        await wrapper.vm.$nextTick()
+        expect(activeIds()).toEqual(['calendar'])
+        window.dispatchEvent(new Event('pointerup'))
+        await day.trigger('click')
+        await flushPromises()
+        expect(invoke).toHaveBeenCalledWith('read_entry', { date: targetDocument.date, format: 'md' })
+        expect(wrapper.get('.markdown-editor').attributes('disabled')).toBeDefined()
+        expect(activeIds()).toEqual(['calendar'])
+
+        if (lastClicked === 'overview') {
+          const overview = wrapper.get('[data-module-id="overview"]')
+          await overview.get('.module-panel-header').trigger('pointerdown', { button: 0 })
+          overview.get<HTMLButtonElement>('.module-maximize-button').element.focus()
+          await wrapper.vm.$nextTick()
+          expect(activeIds()).toEqual(['overview'])
+        }
+
+        completeRead(targetDocument)
+        await flushPromises()
+        const editor = wrapper.get<HTMLTextAreaElement>('.markdown-editor').element
+        expect(editor.value).toBe(targetDocument.content)
+        expect(document.activeElement).not.toBe(editor)
+        expect(activeIds()).toEqual([lastClicked])
+
+        await wrapper.get('.markdown-editor').trigger('pointerdown', { button: 0 })
+        editor.focus()
+        await wrapper.vm.$nextTick()
+        expect(document.activeElement).toBe(editor)
+        expect(activeIds()).toEqual(['editor'])
+      } finally {
+        completeRead(targetDocument)
+        wrapper.unmount()
+      }
+    },
+  )
+
+  it.each(['current', 'missing'] as const)('keeps calendar navigation active for a %s report', async (kind) => {
+    const today = dayjs()
+    const target = kind === 'current' ? today : today.startOf('month').date(today.date() === 5 ? 6 : 5)
+    const wrapper = await openDemoWorkspace()
+    try {
+      const editor = wrapper.get<HTMLTextAreaElement>('.markdown-editor').element
+      editor.focus()
+      await wrapper.vm.$nextTick()
       const day = wrapper.get<HTMLButtonElement>(
         `.calendar-panel .day-cell[aria-label^="${target.format('YYYY年M月D日 ')}"]`,
       )
-      await day.trigger('pointerdown', { button: 0 })
-      expect(activeIds()).toEqual(['editor'])
       day.element.focus()
-      await wrapper.vm.$nextTick()
-      expect(activeIds()).toEqual(['editor'])
-      window.dispatchEvent(new Event('pointerup'))
       await day.trigger('click')
       await flushPromises()
-      expect(invoke).toHaveBeenCalledWith('read_entry', { date: targetDocument.date, format: 'md' })
-      expect(wrapper.get('.markdown-editor').attributes('disabled')).toBeDefined()
-      expect(activeIds()).toEqual(['editor'])
 
-      completeRead(targetDocument)
-      await flushPromises()
-      const editor = wrapper.get<HTMLTextAreaElement>('.markdown-editor').element
-      expect(editor.value).toBe(targetDocument.content)
-      expect(document.activeElement).toBe(editor)
-      expect(activeIds()).toEqual(['editor'])
+      expect(wrapper.get('.module-panel.is-active').attributes('data-module-id')).toBe('calendar')
+      expect(document.activeElement).not.toBe(editor)
+      expect(invoke.mock.calls.some(([command]) => command === 'create_entry')).toBe(false)
     } finally {
-      completeRead(targetDocument)
       wrapper.unmount()
     }
   })
@@ -607,7 +850,7 @@ describe('modular home integration', () => {
 
   it('adds history, AI summary and Excel modules from the right rail', async () => {
     const wrapper = await openDemoWorkspace()
-    for (const label of ['历史记录', '总结', 'Excel 周报']) {
+    for (const label of ['历史记录', '总结', 'Excel报告']) {
       await wrapper.find(`.app-rail [aria-label="${label}"]`).trigger('click')
       await flushPromises()
     }
@@ -663,6 +906,8 @@ describe('modular home integration', () => {
     await flushPromises()
 
     expect(wrapper.find('.directory-item.is-current').find('.directory-item-name').text()).toBe(yesterdayName)
+    expect(wrapper.get('.module-panel.is-active').attributes('data-module-id')).toBe('directory')
+    expect(document.activeElement).not.toBe(wrapper.get('.markdown-editor').element)
     wrapper.unmount()
   })
 
@@ -778,7 +1023,7 @@ describe('modular home integration', () => {
         const runButton = summary.find('.summary-run-button')
         expect((runButton.element as HTMLButtonElement).disabled).toBe(false)
         await runButton.trigger('click')
-        await summary.find('.summary-confirm-primary').trigger('click')
+        await wrapper.get('#summary-generation-dialog .summary-start-generation').trigger('click')
       }
       await flushPromises()
 

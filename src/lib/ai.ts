@@ -37,13 +37,16 @@ export interface AiModel {
   name: string
 }
 export type SummaryMode = 'ai' | 'direct' | ''
+export const DEFAULT_SUMMARY_PROMPT =
+  '根据所选日期的日报，按项目或主题归纳工作成果、进展、问题和下一步计划，突出跨日期的变化与关联。只使用日报中的事实，保持数字、状态和原意，不编造、不夸大，使用 Markdown 输出清晰、精炼的总结。'
 export const aiApi = {
   load: () => invoke<AiSettings>('load_ai_settings'),
   detect: () => invoke<DetectedCli[]>('detect_ai_clis'),
   models: (baseUrl: string, apiKey: string, kind: ProviderKind) =>
     invoke<AiModel[]>('list_ai_models', { baseUrl, apiKey, kind }),
   cliModels: (kind: ProviderKind, executable: string) => invoke<AiModel[]>('list_cli_models', { kind, executable }),
-  summarize: (content: string, requestId: string) => invoke<string>('summarize_entries', { content, requestId }),
+  summarize: (content: string, requestId: string, prompt?: string) =>
+    invoke<string>('summarize_entries', { content, requestId, ...(prompt === undefined ? {} : { prompt }) }),
   cancel: (requestId: string) => invoke<void>('cancel_ai', { requestId }),
 }
 export function useAi() {
@@ -66,6 +69,7 @@ export function useAi() {
   const summaryResult = ref('')
   const summaryError = ref('')
   const summaryMode = ref<SummaryMode>('')
+  const summaryPromptUsed = ref('')
   let summaryRequestId = ''
   let summaryContent = ''
   let summaryDirectContent = ''
@@ -122,21 +126,28 @@ export function useAi() {
     settings.value = cloneAiSettings(value)
     error.value = ''
   }
-  async function generateSummary() {
+  async function generateSummary(prompt?: string) {
     if (summaryGenerating.value || !summaryVisible.value) return
+    if (prompt !== undefined && (!prompt.trim() || prompt.length > 2000)) {
+      summaryError.value = '请填写本次总结提示词，长度不能超过 2000 字。'
+      return
+    }
     if (!summaryContent.trim()) {
       summaryError.value = '所选日期没有可总结的日报内容'
       return
     }
     const id = crypto.randomUUID()
     summaryRequestId = id
+    summaryPromptUsed.value = prompt ?? settings.value.summaryPrompt
     summaryMode.value = 'ai'
     summaryGenerating.value = true
     summaryError.value = ''
     summaryResult.value = ''
     startSummaryProgress()
     try {
-      const text = await aiApi.summarize(summaryContent, id)
+      const text = await (prompt === undefined
+        ? aiApi.summarize(summaryContent, id)
+        : aiApi.summarize(summaryContent, id, prompt))
       if (summaryRequestId === id && summaryVisible.value) summaryResult.value = text
     } catch (cause) {
       if (summaryRequestId === id && summaryVisible.value) summaryError.value = String(cause)
@@ -159,6 +170,7 @@ export function useAi() {
     summaryResult.value = summaryDirectContent
   }
   function openSummary(contents: { ai: string; direct: string }, dates: string[], scopeDates: string[] = dates) {
+    cancelSummary()
     summaryContent = contents.ai
     summaryDirectContent = contents.direct
     summaryDates.value = [...dates].sort()
@@ -168,14 +180,18 @@ export function useAi() {
     summaryMode.value = ''
     summaryVisible.value = true
   }
-  function closeSummary() {
+  function cancelSummary() {
     const id = summaryRequestId
     summaryRequestId = ''
-    summaryVisible.value = false
     summaryGenerating.value = false
-    summaryMode.value = ''
     stopSummaryProgress()
     if (id) void aiApi.cancel(id).catch(() => {})
+  }
+  function closeSummary() {
+    cancelSummary()
+    summaryVisible.value = false
+    summaryMode.value = ''
+    summaryPromptUsed.value = ''
   }
   return {
     settings,
@@ -189,6 +205,7 @@ export function useAi() {
     summaryResult,
     summaryError,
     summaryMode,
+    summaryPromptUsed,
     load,
     reload,
     acceptSaved,
@@ -196,5 +213,6 @@ export function useAi() {
     directSummary,
     openSummary,
     closeSummary,
+    cancelSummary,
   }
 }

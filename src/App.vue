@@ -18,17 +18,18 @@ import WorkspaceSwitchDialog from './components/WorkspaceSwitchDialog.vue'
 import MessageHost from './components/MessageHost.vue'
 import { api, type Document, type FileFormat } from './lib/workspace'
 import { historyShortcut } from './lib/shortcuts'
+import { installContextMenuGuard } from './lib/contextMenus'
 import { useJournal } from './lib/useJournal'
 import { aiSummarySource, plainTextSummary } from './lib/summary'
 import { useAi } from './lib/ai'
 import ModuleBoard from './components/ModuleBoard.vue'
 import LayoutDialog from './components/LayoutDialog.vue'
-import type { DropSide, ModuleId } from './modules/types'
+import type { DropSide, LayoutMetrics, ModuleId } from './modules/types'
 import { MODULE_CONTEXT, type CalendarHandle, type EditorHandle, type ModuleActions } from './modules/context'
 import { useModuleLayout } from './modules/useModuleLayout'
 import type { SkinId } from './lib/skins'
 import { useAppearance } from './lib/useAppearance'
-import { sameWeekRange, useExcel } from './lib/useExcel'
+import { validExcelDates, useExcel } from './lib/useExcel'
 import { useSummaryOutput } from './lib/useSummaryOutput'
 import { settingsApi, type WorkspaceSettings } from './lib/settingsDraft'
 import {
@@ -83,15 +84,7 @@ watch(workspace, (value, previous) => {
   if (!value || value.path === previous?.path) return
   void loadWorkspaceSettings(true)
 })
-const {
-  settings: aiSettings,
-  error: aiSettingsError,
-  defaultProvider,
-  summaryVisible,
-  summaryDates,
-  summaryResult,
-  summaryMode,
-} = ai
+const { settings: aiSettings, error: aiSettingsError, defaultProvider, summaryVisible, summaryResult, summaryMode } = ai
 watch(summaryResult, () => summaryOutput.clearExport())
 const page = ref<'home' | 'settings'>('home')
 const recent = ref<string | null>(null)
@@ -231,8 +224,8 @@ function insertModuleAtGutter(dragged: ModuleId, path: number[]) {
 function moveModuleToEdge(dragged: ModuleId, side: 'left' | 'right') {
   moduleLayout.moveToEdge(dragged, side)
 }
-function resizeModules(path: number[], ratio: number) {
-  moduleLayout.resize(path, ratio)
+function resizeModules(path: number[], ratio: number, metrics: LayoutMetrics) {
+  moduleLayout.resize(path, ratio, metrics)
 }
 function resetLayout() {
   moduleLayout.reset()
@@ -275,11 +268,9 @@ const journalPreview = useJournalPreview(journal, {
   error: rangeError,
 })
 const excelBlockedReason = computed(() => {
-  if (!sameWeekRange(summarySelectionDates.value))
-    return '仅支持同一周内的日期范围（周一至周日），包括没有日报的所选日期。'
+  if (!validExcelDates(summarySelectionDates.value)) return '请选择有效的日期或日期范围。'
   if (!defaultProvider.value) return '请先在设置中配置并选择默认 AI。'
-  if (!excelSettings.value.templatePath || !excelSettings.value.prompt.trim() || !excelSettings.value.outputDirectory)
-    return '请先完成 Excel 输出设置。'
+  if (!excelSettings.value.templatePath) return '请先完成 Excel 输出设置。'
   return ''
 })
 let rangeRevision = 0
@@ -310,6 +301,7 @@ const backups = ref<Record<string, string>>({})
 const canRestore = computed(() => backups.value[documentKey.value] !== undefined)
 let unlistenClose: (() => void) | undefined
 let unlistenHistory: (() => void) | undefined
+let removeContextMenuGuard: (() => void) | undefined
 let historyMenuAvailable = false
 let clockTimer: ReturnType<typeof setInterval> | undefined
 let appDisposed = false
@@ -604,7 +596,8 @@ function showConfirmation() {
 }
 async function selectDate(date: string) {
   if (excelBusy.value) return
-  if (await journal.select(date)) editorHandle.value?.focus()
+  // 日期导航只更新日报，保留用户当前操作模块的焦点和激活状态。
+  await journal.select(date)
 }
 async function requestFormat(format: FileFormat) {
   if (isNewDraft.value) {
@@ -646,7 +639,7 @@ function cancelConfirm() {
   if (!busy.value) void confirmDialog.value?.close()
 }
 function clearRange() {
-  excel.clearExport()
+  excel.clearSelection()
   rangeRevision++
   rangeDates.value = []
   rangeDocuments.value = []
@@ -660,7 +653,7 @@ async function loadRange(dates: string[]) {
     return
   }
   const revision = ++rangeRevision
-  excel.clearExport()
+  excel.clearSelection()
   rangeDates.value = [...dates].sort()
   rangeDocuments.value = []
   rangeError.value = ''
@@ -784,18 +777,17 @@ function exportSummary(format: FileFormat) {
     return
   void summaryOutput.exportSummary(
     summaryWorkspacePath.value,
-    [...summaryDates.value],
+    [...ai.summaryScopeDates.value],
     summaryResult.value,
     format,
     summaryMode.value,
   )
 }
-async function prepareExcel(dates: string[]) {
+async function prepareExcel(dates: string[], prompt?: string) {
   if (busy.value || excelBusy.value || !workspace.value) return
   const workspacePath = workspace.value.path
   summaryWorkspacePath.value = workspacePath
   summarySelectionDates.value = [...dates].sort()
-  excel.clearExport()
   excel.exportError.value = ''
   if (!excelSettings.value.enabled) {
     excel.exportError.value = '请先在设置中启用 Excel 输出。'
@@ -806,7 +798,7 @@ async function prepareExcel(dates: string[]) {
     excel.exportError.value = blockedReason
     return
   }
-  await excel.prepareSelection(workspacePath, summarySelectionDates.value)
+  await excel.prepareSelection(workspacePath, summarySelectionDates.value, prompt)
 }
 async function confirmExcelPreview() {
   if (excelExporting.value || excelBusy.value || !excel.preview.value) return
@@ -828,23 +820,39 @@ async function openExcelOutputDirectory() {
     excel.exportError.value = `无法打开 Excel 输出目录：${String(cause)}`
   }
 }
-async function startAiSummary() {
+let summaryGenerationRevision = 0
+function cancelAiSummary() {
+  summaryGenerationRevision++
+  requestingAi.value = false
+  ai.cancelSummary()
+}
+async function startAiSummary(prompt?: string) {
   if (requestingAi.value || ai.summaryGenerating.value || excelBusy.value || !summaryVisible.value) return
+  const revision = ++summaryGenerationRevision
+  const workspacePath = workspace.value?.path
+  const scope = ai.summaryScopeDates.value.join(',')
   requestingAi.value = true
   try {
     const loaded = await ai.load()
+    if (
+      revision !== summaryGenerationRevision ||
+      workspacePath !== workspace.value?.path ||
+      scope !== ai.summaryScopeDates.value.join(',') ||
+      !summaryVisible.value
+    )
+      return
     if (!loaded) {
-      journal.reportError(`无法读取 AI 设置：${aiSettingsError.value}`)
+      ai.summaryError.value = `无法读取 AI 设置：${aiSettingsError.value}`
       return
     }
     if (!defaultProvider.value) {
-      journal.reportError('请先在设置中配置并选择默认 AI。')
-      void navigate('settings')
+      ai.summaryError.value = '请先在设置中配置并选择默认 AI。'
       return
     }
-    void ai.generateSummary()
-  } finally {
     requestingAi.value = false
+    await ai.generateSummary(prompt)
+  } finally {
+    if (revision === summaryGenerationRevision) requestingAi.value = false
   }
 }
 const moduleDisabled = computed(() => page.value !== 'home' || busy.value || requestingAi.value)
@@ -853,9 +861,8 @@ const moduleActions: ModuleActions = {
   selectReport,
   loadRange,
   requestSummary,
-  generateSummary: () => {
-    void startAiSummary()
-  },
+  generateSummary: startAiSummary,
+  cancelSummary: cancelAiSummary,
   directSummary: ai.directSummary,
   closeSummary,
   exportSummary,
@@ -967,7 +974,7 @@ watch(
 watch(
   () => excel.result.value,
   (value) => {
-    if (value?.filename) pushMessage({ tone: 'success', text: `Excel 周报已生成：${value.filename}` })
+    if (value?.filename) pushMessage({ tone: 'success', text: `Excel报告已生成：${value.filename}` })
   },
 )
 watch(
@@ -1027,6 +1034,7 @@ function onFocus() {
     void journal.refresh()
 }
 onMounted(async () => {
+  removeContextMenuGuard = installContextMenuGuard()
   window.addEventListener('beforeunload', beforeUnload)
   window.addEventListener('focus', onFocus)
   window.addEventListener('keydown', onHistoryKeydown)
@@ -1077,6 +1085,7 @@ onBeforeUnmount(() => {
   window.removeEventListener('beforeunload', beforeUnload)
   window.removeEventListener('focus', onFocus)
   window.removeEventListener('keydown', onHistoryKeydown)
+  removeContextMenuGuard?.()
   clearInterval(clockTimer)
   unlistenClose?.()
   unlistenHistory?.()

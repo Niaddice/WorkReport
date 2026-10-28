@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import AiSummaryDialog from '../AiSummaryDialog.vue'
+import SummaryGenerationDialog from '../SummaryGenerationDialog.vue'
+import { DEFAULT_SUMMARY_PROMPT } from '../../lib/ai'
 import { useModuleContext } from '../../modules/context'
-import { pushMessage } from '../../lib/messages'
 
 const context = useModuleContext()
 const { journal, ai, summaryOutput, actions, disabled } = context
@@ -42,18 +43,90 @@ const outputError = computed(
 /** Excel 相关事件在内嵌总结里不可用（excel-enabled 为 false），统一 no-op。 */
 function noop() {}
 
-function generateSummary() {
-  if (!aiConfigured.value) {
-    pushMessage({
-      tone: 'info',
-      text: '尚未设置默认 AI，AI 总结暂不可用。请先前往 AI 设置完成配置。',
-      actions: [{ label: '前往 AI 设置', run: () => actions.openAiSettings() }],
-      duration: 0,
-    })
-    return
-  }
-  actions.generateSummary()
+const sessionOpen = ref(false)
+const sessionEditing = ref(true)
+const sessionStarting = ref(false)
+const sessionPrompt = ref('')
+const sessionDates = ref<string[]>([])
+const sessionError = ref('')
+let sessionRevision = 0
+const sessionBusy = computed(() => sessionStarting.value || summaryGenerating.value)
+const sessionBlockedReason = computed(() =>
+  !aiConfigured.value ? '请先在设置中配置并选择默认 AI。' : !prepared.value ? '所选日期没有可总结的日报。' : '',
+)
+const outputDirectory = computed(
+  () =>
+    `${(journal.workspace.value?.path ?? '').replace(/[\\/]+$/, '')}/${summaryOutput.settings.value.outputDirectory}`,
+)
+
+function openGeneration() {
+  if (!prepared.value || preparing.value || disabled.value || sessionBusy.value || outputExporting.value) return
+  sessionPrompt.value = ai.settings.value.summaryPrompt || DEFAULT_SUMMARY_PROMPT
+  sessionDates.value = [...scopeDates.value]
+  sessionEditing.value = true
+  sessionError.value = ''
+  summaryOutput.clearExport()
+  sessionOpen.value = true
 }
+async function generateSummary() {
+  if (
+    sessionBusy.value ||
+    outputExporting.value ||
+    sessionBlockedReason.value ||
+    !sessionPrompt.value.trim() ||
+    sessionPrompt.value.length > 2000
+  )
+    return
+  const revision = ++sessionRevision
+  sessionEditing.value = false
+  sessionStarting.value = true
+  sessionError.value = ''
+  summaryError.value = ''
+  try {
+    await actions.generateSummary(sessionPrompt.value)
+  } catch (cause) {
+    if (revision === sessionRevision) sessionError.value = String(cause)
+  } finally {
+    if (revision === sessionRevision) {
+      sessionStarting.value = false
+      if (summaryError.value || sessionError.value) sessionEditing.value = true
+    }
+  }
+}
+function closeGeneration() {
+  if (outputExporting.value) return
+  sessionRevision++
+  sessionOpen.value = false
+  if (sessionBusy.value) {
+    actions.cancelSummary()
+  }
+  if (!summaryResult.value) actions.directSummary()
+  sessionStarting.value = false
+}
+function editGeneration() {
+  if (sessionBusy.value || outputExporting.value) return
+  sessionEditing.value = true
+  sessionError.value = ''
+  summaryError.value = ''
+  summaryOutput.clearExport()
+}
+function configureAi() {
+  closeGeneration()
+  actions.openAiSettings()
+}
+function stopSummary() {
+  actions.cancelSummary()
+  if (!summaryResult.value) actions.directSummary()
+}
+watch(sourceKey, () => {
+  if (sessionOpen.value) closeGeneration()
+})
+watch(
+  () => summaryOutput.result.value,
+  (value) => {
+    if (value) sessionOpen.value = false
+  },
+)
 
 async function prepareContent() {
   if (preparing.value || disabled.value || summaryGenerating.value) return
@@ -90,6 +163,7 @@ watch(
 )
 onBeforeUnmount(() => {
   prepareToken++
+  if (sessionOpen.value && sessionBusy.value) actions.cancelSummary()
 })
 
 // 原文准备好后默认直接合并所选日报；AI 总结改由“总结”按钮确认后触发。
@@ -130,8 +204,8 @@ watch(
         :excel-result="null"
         :excel-preview="null"
         :excel-error="''"
-        @close="actions.closeSummary"
-        @ai="generateSummary"
+        @close="stopSummary"
+        @ai="openGeneration"
         @configure-ai="actions.openAiSettings"
         @export="actions.exportSummary"
         @excel="noop"
@@ -143,5 +217,26 @@ watch(
         @open-excel-directory="noop"
       />
     </div>
+    <SummaryGenerationDialog
+      v-model:prompt="sessionPrompt"
+      :visible="sessionOpen"
+      :configuring="sessionEditing"
+      :provider="providerName"
+      :dates="sessionDates"
+      :report-count="summaryDates.length"
+      :generating="sessionBusy"
+      :elapsed-seconds="summaryElapsedSeconds"
+      :result="summaryMode === 'ai' ? summaryResult : ''"
+      :error="sessionError || summaryError"
+      :blocked-reason="sessionBlockedReason"
+      :exporting="outputExporting"
+      :output-directory="outputDirectory"
+      :output-error="outputError"
+      @close="closeGeneration"
+      @generate="generateSummary"
+      @edit="editGeneration"
+      @configure="configureAi"
+      @export="actions.exportSummary"
+    />
   </div>
 </template>

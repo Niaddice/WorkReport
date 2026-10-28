@@ -31,12 +31,13 @@ export interface ModuleActions {
   selectReport(date: string): Promise<void>
   loadRange(dates: string[]): Promise<void>
   requestSummary(dates: string[]): Promise<void>
-  generateSummary(): void
+  generateSummary(prompt?: string): Promise<void>
+  cancelSummary(): void
   directSummary(): void
   closeSummary(): void
   exportSummary(format: FileFormat): void
-  /** 准备 Excel 预览（同一周日期），供 Excel 周报模块内嵌使用。 */
-  prepareExcel(dates: string[]): Promise<void>
+  /** 按所选单日或日期范围生成 Excel报告预览。 */
+  prepareExcel(dates: string[], prompt?: string): Promise<void>
   confirmExcel(): Promise<void>
   discardExcelPreview(): void
   openExcelOutputDirectory(): Promise<void>

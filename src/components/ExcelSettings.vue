@@ -2,8 +2,8 @@
 import { computed, ref, watch } from 'vue'
 import { isTauri } from '@tauri-apps/api/core'
 import { open } from '@tauri-apps/plugin-dialog'
-import { PhFileXls, PhFolderOpen } from '@phosphor-icons/vue'
-import { cloneExcelSettings, type ExcelSettings } from '../lib/useExcel'
+import { PhFileXls, PhSparkle } from '@phosphor-icons/vue'
+import { cloneExcelSettings, RECOMMENDED_EXCEL_PROMPT, type ExcelSettings } from '../lib/useExcel'
 
 const props = defineProps<{ modelValue: ExcelSettings; busy: boolean; aiReady: boolean; workspacePath: string }>()
 const emit = defineEmits<{ 'update:modelValue': [settings: ExcelSettings]; configureAi: [] }>()
@@ -36,6 +36,11 @@ function toggle() {
   update({ enabled: !draft.value.enabled })
 }
 
+function applyRecommendedPrompt() {
+  if (formBusy.value || !props.workspacePath) return
+  update({ prompt: RECOMMENDED_EXCEL_PROMPT })
+}
+
 async function chooseTemplate() {
   if (formBusy.value || !props.workspacePath) return
   if (!nativeApp) {
@@ -60,29 +65,10 @@ async function chooseTemplate() {
   }
 }
 
-async function chooseDirectory() {
-  if (formBusy.value || !props.workspacePath) return
-  if (!nativeApp) {
-    localError.value = '请在桌面应用中选择 Excel 输出目录。'
-    return
-  }
-  const workspacePath = props.workspacePath
-  picking.value = true
-  localError.value = ''
-  try {
-    const path = await open({ title: '选择 Excel 输出目录', multiple: false, directory: true })
-    if (typeof path === 'string' && props.workspacePath === workspacePath) update({ outputDirectory: path })
-  } catch (cause) {
-    localError.value = `选择输出目录失败：${String(cause)}`
-  } finally {
-    picking.value = false
-  }
-}
-
 function validate(): boolean {
   localError.value = ''
   if (picking.value) {
-    localError.value = '请先完成模板或目录选择。'
+    localError.value = '请先完成模板选择。'
     return false
   }
   if (draft.value.enabled) {
@@ -106,10 +92,6 @@ function validate(): boolean {
       localError.value = 'Excel 输出提示词不能超过 6000 字。'
       return false
     }
-    if (!draft.value.outputDirectory.trim()) {
-      localError.value = '请选择 Excel 输出目录。'
-      return false
-    }
   }
   return true
 }
@@ -123,7 +105,7 @@ defineExpose({ validate })
       <div class="excel-enable-copy">
         <h3 id="excel-enable-label">启用 Excel 输出</h3>
         <p id="excel-enable-description">
-          在总结弹窗点击“Excel 输出”，确认后自动调用默认 AI，按下方提示词整理所选日报并填充模板。
+          在 Excel报告模块点击 Xls 图标，在窗口内核对或临时修改提示词，确认后调用默认 AI 整理日报并填充模板。
         </p>
       </div>
       <button
@@ -175,9 +157,20 @@ defineExpose({ validate })
               </p>
             </div>
             <div class="generation-preference excel-prompt-field">
-              <label for="excel-output-prompt">Excel 输出提示词</label>
+              <div class="excel-prompt-heading">
+                <label for="excel-output-prompt">Excel 输出提示词</label>
+                <button
+                  type="button"
+                  class="text-action"
+                  :disabled="formBusy || !workspacePath || draft.prompt === RECOMMENDED_EXCEL_PROMPT"
+                  @click="applyRecommendedPrompt"
+                >
+                  <PhSparkle :size="16" aria-hidden="true" />使用推荐设置
+                </button>
+              </div>
               <p id="excel-output-prompt-hint">
                 说明日报整理方式和填写位置，也可要求黑色细边框、自动换行及按内容增高行高。仅对指定区域应用格式。
+                推荐设置会替换当前提示词，点击“保存设置”后生效。
               </p>
               <textarea
                 id="excel-output-prompt"
@@ -186,34 +179,14 @@ defineExpose({ validate })
                 maxlength="6000"
                 rows="5"
                 aria-describedby="excel-output-prompt-hint"
-                placeholder="例如：把本周工作从“周报”第 14 行开始填写，明细区域使用黑色边框、自动换行并按内容调整行高，保留其他区域的格式。"
+                placeholder="使用推荐设置填入按项目分类、日期和工时的模板规则，也可输入自定义提示词。"
                 spellcheck="false"
                 @input="update({ prompt: ($event.target as HTMLTextAreaElement).value })"
               ></textarea
               ><span class="preference-count">{{ draft.prompt.length }} / 6000</span>
             </div>
-            <div class="excel-path-field">
-              <label for="excel-output-directory">Excel 输出目录</label>
-              <div class="excel-path-control">
-                <input
-                  id="excel-output-directory"
-                  :value="draft.outputDirectory"
-                  type="text"
-                  placeholder="选择生成文件的保存目录"
-                  readonly
-                  :disabled="formBusy || !workspacePath"
-                  spellcheck="false"
-                /><button
-                  type="button"
-                  class="text-action"
-                  :disabled="formBusy || !workspacePath"
-                  @click="chooseDirectory"
-                >
-                  <PhFolderOpen :size="17" aria-hidden="true" />选择目录
-                </button>
-              </div>
-            </div>
-            <p class="field-hint excel-range-note">仅支持同一周内的日期范围：周一至周日中任意范围，可跨月或跨年。</p>
+            <p class="field-hint">报告固定保存到当前工作空间下的 excel 目录，目录不存在时自动创建。</p>
+            <p class="field-hint excel-range-note">支持单日或任意日期范围，可跨周、跨月或跨年。</p>
           </div>
         </div>
       </div>

@@ -36,6 +36,17 @@ pub fn record(
     content: &str,
     limit_bytes: u64,
 ) -> Result<(), String> {
+    record_at(root, date, format, content, limit_bytes, now_millis())
+}
+
+fn record_at(
+    root: &Path,
+    date: &str,
+    format: Format,
+    content: &str,
+    limit_bytes: u64,
+    timestamp: u64,
+) -> Result<(), String> {
     validate_date(date)?;
     if content.trim().is_empty() {
         return Ok(());
@@ -46,12 +57,19 @@ pub fn record(
     let directory = root.join(DIR).join(date);
     fs::create_dir_all(&directory).map_err(|error| format!("无法创建历史记录目录：{error}"))?;
     let hash = short_hash(content);
-    if let Some((_, id)) = newest(&directory)? {
+    let latest = newest(&directory)?;
+    if let Some((_, id)) = &latest {
         if id.contains(&format!("-{hash}.")) {
             return Ok(());
         }
     }
-    let id = format!("{}-{hash}.{}", now_millis(), format.extension());
+    // fsync 在不同平台耗时不同，连续保存可能发生在同一毫秒。
+    // 从磁盘最新版本递增，兼顾时钟回拨和重新打开工作空间，保留原文件名格式。
+    let timestamp = timestamp.max(latest.as_ref().map_or(0, |(stamp, _)| stamp + 1));
+    let id = format!("{timestamp}-{hash}.{}", format.extension());
+    if parse_id(&id).is_none() {
+        return Err("无法保存历史记录：版本时间超出支持范围".into());
+    }
     let mut file = NamedTempFile::new_in(&directory)
         .map_err(|error| format!("无法创建历史记录临时文件：{error}"))?;
     file.write_all(content.as_bytes())
@@ -174,7 +192,10 @@ fn newest(directory: &Path) -> Result<Option<(u64, String)>, String> {
         let Some((saved_at, _)) = parse_id(&id) else {
             continue;
         };
-        if latest.as_ref().is_none_or(|(stamp, _)| saved_at > *stamp) {
+        // 兼容旧版本中相同毫秒的快照，与 list 的排序保持一致。
+        if latest.as_ref().is_none_or(|(stamp, latest_id)| {
+            saved_at > *stamp || (saved_at == *stamp && id > *latest_id)
+        }) {
             latest = Some((saved_at, id));
         }
     }
@@ -243,7 +264,7 @@ fn trim_oldest_file(directory: &Path) -> bool {
             let id = entry.file_name().to_string_lossy().into_owned();
             parse_id(&id).map(|(saved_at, _)| (saved_at, entry.path()))
         })
-        .min_by_key(|(saved_at, _)| *saved_at);
+        .min();
     match oldest {
         Some((_, path)) => fs::remove_file(path).is_ok(),
         None => false,
@@ -264,7 +285,7 @@ fn trim_day(directory: &Path) {
     if versions.len() <= MAX_VERSIONS_PER_DAY {
         return;
     }
-    versions.sort_by_key(|(saved_at, _)| *saved_at);
+    versions.sort();
     let excess = versions.len() - MAX_VERSIONS_PER_DAY;
     for (_, path) in versions.iter().take(excess) {
         let _ = fs::remove_file(path);
@@ -299,6 +320,78 @@ mod tests {
 
     fn day_list(dir: &tempfile::TempDir, date: &str) -> Result<Vec<Version>, String> {
         list(dir.path(), Some(date))
+    }
+
+    #[test]
+    fn same_millisecond_saves_keep_every_snapshot_in_save_order() {
+        let dir = root();
+        let timestamp = 1_700_000_000_000;
+        record_at(dir.path(), "20261024", Format::Md, "第一版", UNLIMITED, timestamp).unwrap();
+        record_at(dir.path(), "20261024", Format::Txt, "第二版", UNLIMITED, timestamp).unwrap();
+        record_at(dir.path(), "20261024", Format::Md, "第一版", UNLIMITED, timestamp).unwrap();
+
+        let versions = day_list(&dir, "20261024").unwrap();
+        assert_eq!(versions.len(), 3);
+        assert_eq!(versions[0].format, Format::Md);
+        assert_eq!(versions[1].format, Format::Txt);
+        assert_eq!(read(dir.path(), "20261024", &versions[0].id).unwrap(), "第一版");
+        assert_eq!(read(dir.path(), "20261024", &versions[1].id).unwrap(), "第二版");
+        assert_eq!(read(dir.path(), "20261024", &versions[2].id).unwrap(), "第一版");
+        assert!(versions[0].saved_at > versions[1].saved_at);
+        assert!(versions[1].saved_at > versions[2].saved_at);
+
+        record_at(dir.path(), "20261024", Format::Md, "第一版", UNLIMITED, timestamp).unwrap();
+        assert_eq!(day_list(&dir, "20261024").unwrap(), versions);
+    }
+
+    #[test]
+    fn clock_rollback_keeps_new_snapshots_after_existing_versions() {
+        let dir = root();
+        let timestamp = 1_700_000_000_000;
+        record_at(dir.path(), "20261024", Format::Md, "时钟调整前", UNLIMITED, timestamp).unwrap();
+        record_at(dir.path(), "20261024", Format::Txt, "时钟调整后", UNLIMITED, timestamp - 60_000).unwrap();
+
+        let versions = day_list(&dir, "20261024").unwrap();
+        assert_eq!(versions.len(), 2);
+        assert_eq!(versions[0].saved_at, timestamp + 1);
+        assert_eq!(read(dir.path(), "20261024", &versions[0].id).unwrap(), "时钟调整后");
+        assert_eq!(read(dir.path(), "20261024", &versions[1].id).unwrap(), "时钟调整前");
+    }
+
+    #[test]
+    fn legacy_timestamp_ties_use_consistent_listing_deduplication_and_cleanup_order() {
+        let dir = root();
+        let directory = dir.path().join(DIR).join("20261024");
+        fs::create_dir_all(&directory).unwrap();
+        let latest_content = "旧版快照";
+        let latest_id = format!("1700000000000-{}.md", short_hash(latest_content));
+        let older_id = "1700000000000-00000000.txt";
+        fs::write(directory.join(&latest_id), latest_content).unwrap();
+        fs::write(directory.join(older_id), "较旧的同毫秒快照").unwrap();
+        let before = day_list(&dir, "20261024").unwrap();
+        assert_eq!(before[0].id, latest_id);
+        assert_eq!(newest(&directory).unwrap().unwrap().1, latest_id);
+
+        record_at(dir.path(), "20261024", Format::Md, latest_content, UNLIMITED, 1_700_000_000_000).unwrap();
+        assert_eq!(day_list(&dir, "20261024").unwrap(), before);
+        assert!(trim_oldest_file(&directory));
+        assert!(!directory.join(older_id).exists());
+        assert!(directory.join(&latest_id).exists());
+
+        record_at(dir.path(), "20261024", Format::Txt, "新的快照", UNLIMITED, 1_700_000_000_000).unwrap();
+        let after = day_list(&dir, "20261024").unwrap();
+        assert_eq!(after[0].saved_at, 1_700_000_000_001);
+        assert_eq!(read(dir.path(), "20261024", &after[0].id).unwrap(), "新的快照");
+    }
+
+    #[test]
+    fn timestamp_overflow_never_publishes_an_unreadable_version() {
+        let dir = root();
+        record_at(dir.path(), "20261024", Format::Md, "最后可读版本", UNLIMITED, 9_999_999_999_999).unwrap();
+        let before = day_list(&dir, "20261024").unwrap();
+        assert!(record_at(dir.path(), "20261024", Format::Txt, "新的内容", UNLIMITED, 1_700_000_000_000).is_err());
+        assert_eq!(day_list(&dir, "20261024").unwrap(), before);
+        assert_eq!(fs::read_dir(dir.path().join(DIR).join("20261024")).unwrap().count(), 1);
     }
 
     #[test]
@@ -351,8 +444,8 @@ mod tests {
     #[test]
     fn keeps_the_current_day_within_the_limit_by_dropping_its_oldest_version() {
         let dir = root();
-        record(dir.path(), "20261024", Format::Md, &text('a', 80), UNLIMITED).unwrap();
-        record(dir.path(), "20261024", Format::Md, &text('b', 80), 100).unwrap();
+        record_at(dir.path(), "20261024", Format::Md, &text('a', 80), UNLIMITED, 1_700_000_000_000).unwrap();
+        record_at(dir.path(), "20261024", Format::Md, &text('b', 80), 100, 1_700_000_000_000).unwrap();
         let versions = day_list(&dir, "20261024").unwrap();
         assert_eq!(versions.len(), 1);
         assert_eq!(read(dir.path(), "20261024", &versions[0].id).unwrap(), text('b', 80));
@@ -382,10 +475,11 @@ mod tests {
     fn trims_a_day_to_the_version_cap() {
         let dir = root();
         for index in 0..105 {
-            record(dir.path(), "20261024", Format::Md, &format!("版本{index}"), UNLIMITED).unwrap();
+            record_at(dir.path(), "20261024", Format::Md, &format!("版本{index}"), UNLIMITED, 1_700_000_000_000).unwrap();
         }
         let versions = day_list(&dir, "20261024").unwrap();
         assert_eq!(versions.len(), MAX_VERSIONS_PER_DAY);
         assert_eq!(read(dir.path(), "20261024", &versions[0].id).unwrap(), "版本104");
+        assert_eq!(read(dir.path(), "20261024", &versions[MAX_VERSIONS_PER_DAY - 1].id).unwrap(), "版本5");
     }
 }

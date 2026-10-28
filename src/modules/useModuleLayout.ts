@@ -14,7 +14,7 @@ import {
   splitLayout,
 } from './layout'
 import type { SkinId } from '../lib/skins'
-import type { DropSide, ModuleId, UiPreferences } from './types'
+import type { DropSide, LayoutMetrics, ModuleId, UiPreferences } from './types'
 
 export interface ModuleLayoutOptions {
   /** 读取或保存布局失败时通知页面编排层显示错误。 */
@@ -174,8 +174,8 @@ export function useModuleLayout(options: ModuleLayoutOptions = {}) {
   }
 
   /** 拖动分栏间隙后更新比例。path 是 split 在树中的 0/1 路径。 */
-  function resize(path: number[], ratio: number) {
-    const next = resizeLayoutLocally(preferences.value.layout, path, ratio)
+  function resize(path: number[], ratio: number, metrics?: LayoutMetrics) {
+    const next = resizeLayoutLocally(preferences.value.layout, path, ratio, metrics)
     if (next === preferences.value.layout) return
     update({ ...preferences.value, layout: next })
   }

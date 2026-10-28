@@ -1,10 +1,10 @@
 <script setup lang="ts">
 import { ref, type Component } from 'vue'
-import { PhCornersIn, PhCornersOut, PhDotsSixVertical, PhQuestion, PhX } from '@phosphor-icons/vue'
+import { PhCornersIn, PhCornersOut, PhQuestion, PhX } from '@phosphor-icons/vue'
 import ModuleHelpPopover from './ModuleHelpPopover.vue'
 import type { ModuleId } from '../modules/types'
 
-withDefaults(
+const props = withDefaults(
   defineProps<{
     id: ModuleId
     title: string
@@ -31,8 +31,23 @@ const emit = defineEmits<{
 const helpPopover = ref<InstanceType<typeof ModuleHelpPopover>>()
 const helpButton = ref<HTMLButtonElement>()
 
+function activateFromPointer(event: Event) {
+  const panel = event.currentTarget as HTMLElement
+  const focused = document.activeElement
+  // WebKit 点击按钮或留白不一定转移焦点，不能让旧模块的输入框继续接收打字。
+  if (focused instanceof HTMLElement && focused.closest('.module-panel') && !panel.contains(focused)) focused.blur()
+  emit('activate')
+}
 function onPointerDown(event: PointerEvent) {
-  if (event.button !== 0) return
+  if (props.maximized || event.button !== 0 || event.defaultPrevented) return
+  const target = event.target
+  if (
+    !(target instanceof Element) ||
+    target.closest(
+      '.module-panel-title, .module-panel-subtitle, button, a, input, select, textarea, label, [role="button"], [contenteditable]:not([contenteditable="false"])',
+    )
+  )
+    return
   emit('drag-start', event)
 }
 function openHelp() {
@@ -47,23 +62,13 @@ function openHelp() {
     :data-module-id="id"
     :role="maximized ? 'dialog' : undefined"
     :aria-modal="maximized ? 'true' : undefined"
-    :aria-label="maximized ? title : undefined"
-    @pointerdown.capture="emit('activate')"
-    @click.capture="emit('activate')"
+    :aria-label="title"
+    tabindex="-1"
+    @pointerdown.capture="activateFromPointer"
+    @click.capture="activateFromPointer"
     @focusin="emit('activate')"
   >
-    <header class="module-panel-header">
-      <button
-        type="button"
-        class="module-drag-handle"
-        :aria-label="`拖动「${title}」模块到其他模块上分栏`"
-        aria-roledescription="可拖动模块"
-        :disabled="maximized"
-        title="拖动到其他模块上分栏"
-        @pointerdown="onPointerDown"
-      >
-        <PhDotsSixVertical :size="15" aria-hidden="true" />
-      </button>
+    <header class="module-panel-header" @pointerdown="onPointerDown">
       <component :is="icon" class="module-panel-icon" :size="15" aria-hidden="true" />
       <h2 class="module-panel-title">{{ title }}</h2>
       <slot name="subtitle" />

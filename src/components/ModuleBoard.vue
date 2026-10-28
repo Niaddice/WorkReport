@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import ModulePanel from './ModulePanel.vue'
-import { MAXIMIZE_DURATION, RESTORE_DURATION, MAXIMIZE_EASING, RESTORE_EASING } from '../lib/windowMotion'
+import { createSurfaceMotion } from '../lib/surfaceMotion'
+import type { WindowMotionRect } from '../lib/windowMotion'
 import { moduleById } from '../modules/registry'
 import {
   clampSplitRatio,
@@ -12,7 +13,7 @@ import {
   layoutGeometry,
   resizeLayoutLocally,
 } from '../modules/layout'
-import type { DropSide, LayoutGutter, LayoutNode, LayoutSlot, ModuleId, Rect } from '../modules/types'
+import type { DropSide, LayoutGutter, LayoutMetrics, LayoutNode, LayoutSlot, ModuleId, Rect } from '../modules/types'
 
 const props = defineProps<{
   layout: LayoutNode
@@ -24,20 +25,23 @@ const emit = defineEmits<{
   split: [dragged: ModuleId, target: ModuleId, side: DropSide]
   insert: [dragged: ModuleId, path: number[]]
   edge: [dragged: ModuleId, side: 'left' | 'right']
-  resize: [path: number[], ratio: number]
+  resize: [path: number[], ratio: number, metrics: LayoutMetrics]
 }>()
 
-/** 与 style.css 中 --app-gap 的默认值保持一致；几何计算需要像素值。 */
-const GAP = 8
+/** 挂载前使用默认 0.2rem（16px 根字号下约 3.2px），挂载后读取 CSS 实际像素间距。 */
+const boardGap = ref(3.2)
 /** 拖放到模块板最左 / 最右边缘的命中条带宽度。 */
 const EDGE_BAND = 40
 const board = ref<HTMLElement>()
 const boardSize = ref({ width: 0, height: 0 })
+const resizeMetrics = computed(() => ({ ...boardSize.value, gap: boardGap.value }))
 /** 拖动分栏间隙时只在本组件内预览新布局，松手后才写回。 */
 const previewLayout = ref<LayoutNode | null>(null)
 const activeLayout = computed(() => previewLayout.value ?? props.layout)
 const items = computed(() => flattenLayout(activeLayout.value))
-const geometry = computed(() => layoutGeometry(activeLayout.value, boardSize.value.width, boardSize.value.height, GAP))
+const geometry = computed(() =>
+  layoutGeometry(activeLayout.value, boardSize.value.width, boardSize.value.height, boardGap.value),
+)
 const slots = computed(() => geometry.value.slots)
 const gutters = computed(() => geometry.value.gutters)
 const layoutSignature = computed(() => JSON.stringify(props.layout))
@@ -205,14 +209,12 @@ async function animateLayoutChange(previous: Map<ModuleId, DOMRect>, immediate =
     animation.finished.catch(() => {}).finally(() => layoutAnimations.delete(animation))
   }
 }
-/** 右侧功能栏添加/定位模块时，把焦点移到对应模块的拖动手柄。 */
+/** 右侧功能栏添加/定位模块时，聚焦模块外壳，不进入内容编辑。 */
 function revealModule(id: ModuleId) {
   activateModule(id)
-  panelElement(id)?.querySelector<HTMLElement>('.module-drag-handle')?.focus({ preventScroll: true })
+  panelElement(id)?.focus({ preventScroll: true })
 }
 function activateModule(id: ModuleId) {
-  // 日历只负责日期导航，保留内容模块的高亮，避免日报加载后重新聚焦时闪烁。
-  if (id === 'calendar') return
   if (maximized.value && maximized.value !== id) return
   if (items.value.some((item) => item.id === id)) activeModule.value = id
 }
@@ -284,7 +286,7 @@ function updateDropTarget(event: PointerEvent) {
     dropTarget.value = { kind: 'edge', side: 'right' }
     return
   }
-  // 滑块本身只有 8px 宽，向两侧各扩 3px 方便把模块塞进两个模块之间。
+  // 插入模块时向间隙两侧各扩 3px，方便命中较窄的间隙。
   const gutter = gutters.value.find(
     (item) =>
       x >= item.left - 3 && x <= item.left + item.width + 3 && y >= item.top - 3 && y <= item.top + item.height + 3,
@@ -369,7 +371,7 @@ function onDragEnd(event?: PointerEvent) {
 function startDrag(id: ModuleId, event: PointerEvent) {
   if (drag.value || gutterDrag.value) return
   event.preventDefault()
-  const target = event.target
+  const target = event.currentTarget
   if (target instanceof HTMLElement && typeof target.setPointerCapture === 'function') {
     try {
       target.setPointerCapture(event.pointerId)
@@ -414,19 +416,19 @@ function onGutterMove(event: PointerEvent) {
   const rect = element.getBoundingClientRect()
   const clientPosition = state.direction === 'row' ? event.clientX - rect.left : event.clientY - rect.top
   const origin = state.direction === 'row' ? state.parent.left : state.parent.top
-  const span = state.direction === 'row' ? state.parent.width - GAP : state.parent.height - GAP
+  const span = state.direction === 'row' ? state.parent.width - boardGap.value : state.parent.height - boardGap.value
   if (span <= 0) return
   const ratio = clampSplitRatio((clientPosition - origin) / span)
   if (Math.abs(ratio - state.ratio) < 1e-4) return
   state.ratio = ratio
-  previewLayout.value = resizeLayoutLocally(props.layout, state.path, ratio)
+  previewLayout.value = resizeLayoutLocally(props.layout, state.path, ratio, resizeMetrics.value)
 }
 function finishGutterDrag() {
   const state = gutterDrag.value
   if (!state) return
   gutterDrag.value = null
   document.body.classList.remove('is-module-resizing')
-  emit('resize', [...state.path], state.ratio)
+  emit('resize', [...state.path], state.ratio, resizeMetrics.value)
   // 等父级应用新布局后再清掉预览，避免中间帧回跳。
   void nextTick(() => {
     previewLayout.value = null
@@ -449,111 +451,56 @@ function onGutterKeydown(event: KeyboardEvent, gutter: LayoutGutter) {
     (gutter.direction === 'column' && event.key === 'ArrowDown')
   if (!decrease && !increase) return
   event.preventDefault()
-  emit('resize', [...gutter.path], clampSplitRatio(gutter.ratio + (increase ? 0.03 : -0.03)))
+  emit('resize', [...gutter.path], clampSplitRatio(gutter.ratio + (increase ? 0.03 : -0.03)), resizeMetrics.value)
 }
 
 // ===== 浮层最大化 =====
-let maximizeAnimation: Animation | null = null
 let restoring = false
+let maximizeSource: WindowMotionRect | null = null
+let maximizeRevision = 0
+const maximizeMotion = createSurfaceMotion({
+  openingRect: () => maximizeSource,
+  closingRect: () =>
+    maximized.value ? panelElement(maximized.value)?.closest('.module-slot')?.getBoundingClientRect() : null,
+  backdrop: backdropElement,
+  fade: false,
+})
 function stopMaximizeAnimation() {
-  if (!maximizeAnimation) return
-  maximizeAnimation.cancel()
-  maximizeAnimation = null
+  maximizeRevision++
+  maximizeMotion.cancel(false)
 }
 async function maximizeModule(id: ModuleId) {
   if (drag.value || gutterDrag.value || restoring) return
-  const source = panelElement(id)?.getBoundingClientRect()
+  maximizeSource = panelElement(id)?.getBoundingClientRect() ?? null
+  cancelLayoutAnimations()
   stopMaximizeAnimation()
+  const revision = maximizeRevision
   maximized.value = id
   activateModule(id)
   document.body.classList.add('is-module-maximized')
-  announcement.value = `已放大「${moduleById(id).title}」模块，按 Esc 或点击遮罩还原。`
+  announcement.value = `正在放大「${moduleById(id).title}」模块，按 Esc 或点击遮罩还原。`
   await nextTick()
   const panel = panelElement(id)
-  const backdrop = backdropElement()
-  if (!panel || !source || prefersReducedMotion() || typeof panel.animate !== 'function') return
-  const target = panel.getBoundingClientRect()
-  if (!target.width || !target.height) return
-  panel.style.transformOrigin = 'top left'
-  const animation = panel.animate(
-    [
-      {
-        transform: `translate(${source.left - target.left}px, ${source.top - target.top}px) scale(${
-          source.width / target.width
-        }, ${source.height / target.height})`,
-        opacity: 0.72,
-      },
-      { transform: 'translate(0px, 0px) scale(1, 1)', opacity: 1 },
-    ],
-    { duration: MAXIMIZE_DURATION, easing: MAXIMIZE_EASING, fill: 'none' },
-  )
-  maximizeAnimation = animation
-  animation.finished
-    .catch(() => {})
-    .finally(() => {
-      if (maximizeAnimation === animation) maximizeAnimation = null
-    })
-  backdrop?.animate([{ opacity: 0 }, { opacity: 1 }], {
-    duration: MAXIMIZE_DURATION,
-    easing: 'ease-out',
-    fill: 'none',
-  })
+  if (panel && revision === maximizeRevision && maximized.value === id) maximizeMotion.enter(panel, () => {})
 }
 async function restoreMaximized(immediate = false) {
   const id = maximized.value
-  if (!id) return
-  if (restoring && !immediate) return
+  if (!id || (restoring && !immediate)) return
   const title = moduleById(id).title
   const panel = panelElement(id)
-  const slot = panel?.closest<HTMLElement>('.module-slot') ?? null
-  const backdrop = backdropElement()
-  const finish = () => {
-    maximized.value = null
-    restoring = false
-    document.body.classList.remove('is-module-maximized')
-    announcement.value = `已还原「${title}」模块大小。`
+  if (immediate || !panel) stopMaximizeAnimation()
+  else {
+    restoring = true
+    const revision = ++maximizeRevision
+    await new Promise<void>((done) => maximizeMotion.leave(panel, done))
+    if (revision !== maximizeRevision || maximized.value !== id) return
   }
-  if (immediate || !panel || !slot || prefersReducedMotion() || typeof panel.animate !== 'function') {
-    stopMaximizeAnimation()
-    finish()
-    return
-  }
-  const current = panel.getBoundingClientRect()
-  const target = slot.getBoundingClientRect()
-  if (!current.width || !current.height || !target.width || !target.height) {
-    stopMaximizeAnimation()
-    finish()
-    return
-  }
-  restoring = true
-  stopMaximizeAnimation()
-  panel.style.transformOrigin = 'top left'
-  const animation = panel.animate(
-    [
-      { transform: 'translate(0px, 0px) scale(1, 1)', opacity: 1 },
-      {
-        transform: `translate(${target.left - current.left}px, ${target.top - current.top}px) scale(${
-          target.width / current.width
-        }, ${target.height / current.height})`,
-        opacity: 0.6,
-      },
-    ],
-    { duration: RESTORE_DURATION, easing: RESTORE_EASING, fill: 'none' },
-  )
-  maximizeAnimation = animation
-  backdrop?.animate([{ opacity: 1 }, { opacity: 0 }], {
-    duration: RESTORE_DURATION,
-    easing: 'ease-in',
-    fill: 'none',
-  })
-  try {
-    await animation.finished
-  } catch {
-    /* 被新的最大化或卸载取消 */
-  }
-  if (maximizeAnimation === animation) maximizeAnimation = null
-  if (maximized.value === id) finish()
+  maximized.value = null
+  restoring = false
+  document.body.classList.remove('is-module-maximized')
+  announcement.value = `已还原「${title}」模块大小。`
 }
+
 function toggleMaximize(id: ModuleId) {
   if (restoring) return
   if (maximized.value === id) void restoreMaximized()
@@ -621,16 +568,20 @@ function onPointerCancel(event: PointerEvent) {
 let resizeObserver: ResizeObserver | undefined
 let hasMeasuredBoard = false
 function measureBoard() {
-  const width = board.value?.clientWidth ?? 0
-  const height = board.value?.clientHeight ?? 0
+  const element = board.value
+  const width = element?.clientWidth ?? 0
+  const height = element?.clientHeight ?? 0
   // 设置页用 v-show 隐藏首页时尺寸为 0，保留上一次有效尺寸避免布局跳回默认。
-  if (!width || !height) return
+  if (!element || !width || !height) return
+  const cssGap = Number.parseFloat(getComputedStyle(element).columnGap)
+  const gap = Number.isFinite(cssGap) && cssGap >= 0 ? cssGap : boardGap.value
   const previousSize = boardSize.value
-  if (previousSize.width === width && previousSize.height === height) return
+  if (previousSize.width === width && previousSize.height === height && boardGap.value === gap) return
   // 绝对定位的模块不会随窗口自动重排，先记下当前屏幕矩形，再更新几何并做 FLIP，
   // 这样连续拖动窗口、最大化/还原时模块会平滑跟随缩放，而不是逐帧硬跳。
   const previous = hasMeasuredBoard ? capturePanelRects() : new Map<ModuleId, DOMRect>()
   hasMeasuredBoard = true
+  boardGap.value = gap
   boardSize.value = { width, height }
   if (previous.size) animateBoardResize(previous)
 }
@@ -655,6 +606,7 @@ onBeforeUnmount(() => {
   window.removeEventListener('blur', onWindowBlur)
   window.removeEventListener('keydown', onWindowKeydown, true)
   stopMaximizeAnimation()
+  maximizeMotion.dispose()
   document.body.classList.remove('is-module-dragging')
   document.body.classList.remove('is-module-resizing')
   document.body.classList.remove('is-module-maximized')

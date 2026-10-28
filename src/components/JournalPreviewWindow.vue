@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch, useId } from 'vue'
 import { PhBrowsers, PhCornersIn, PhCornersOut, PhX } from '@phosphor-icons/vue'
+import { createSurfaceMotion } from '../lib/surfaceMotion'
 import {
   placePreviewBesideEditor,
   PREVIEW_MIN_HEIGHT,
@@ -15,12 +16,12 @@ const props = withDefaults(
 const emit = defineEmits<{ close: [] }>()
 type Rect = PreviewWindowRect
 const titleId = useId()
+const motion = createSurfaceMotion()
 const viewport = ref({ width: window.innerWidth, height: window.innerHeight })
 const normal = ref<Rect | null>(null)
 let preferredSize = { width: 520, height: 560 }
 const maximized = ref(false)
 const geometryMotion = ref(false)
-const dockSide = ref<'left' | 'right'>('right')
 const bounds = computed<Rect>(() => ({
   x: 8,
   y: props.topInset + 8,
@@ -33,8 +34,6 @@ const windowStyle = computed(() => ({
   top: `${rectangle.value.y}px`,
   width: `${rectangle.value.width}px`,
   height: `${rectangle.value.height}px`,
-  '--preview-enter-x': dockSide.value === 'right' ? '-10px' : '10px',
-  transformOrigin: dockSide.value === 'right' ? 'left top' : 'right top',
 }))
 let interaction: {
   kind: 'move' | 'resize'
@@ -158,7 +157,6 @@ watch(
     const anchor = props.anchorRect?.()
     if (anchor && anchor.width > 0 && anchor.height > 0) {
       normal.value = placePreviewBesideEditor(anchor, bounds.value, preferredSize)
-      dockSide.value = normal.value.x + normal.value.width / 2 < anchor.x + anchor.width / 2 ? 'left' : 'right'
     } else {
       normal.value ??= fit({
         x: viewport.value.width - 584,
@@ -174,13 +172,21 @@ watch(() => props.topInset, measureViewport)
 onMounted(() => window.addEventListener('resize', measureViewport))
 onBeforeUnmount(() => {
   stopInteraction()
+  motion.dispose()
   window.removeEventListener('resize', measureViewport)
 })
 </script>
 
 <template>
   <Teleport to="body">
-    <Transition name="journal-preview" appear>
+    <Transition
+      :css="false"
+      appear
+      @enter="motion.enter"
+      @leave="motion.leave"
+      @enter-cancelled="motion.cancel()"
+      @leave-cancelled="motion.cancel()"
+    >
       <section
         v-if="visible"
         class="journal-preview-window"
@@ -211,7 +217,13 @@ onBeforeUnmount(() => {
                 aria-hidden="true"
               />
             </button>
-            <button type="button" aria-label="关闭日报预览" title="关闭" @click="emit('close')">
+            <button
+              type="button"
+              data-window-close="default"
+              aria-label="关闭日报预览"
+              title="关闭"
+              @click="emit('close')"
+            >
               <PhX :size="16" aria-hidden="true" />
             </button>
           </div>

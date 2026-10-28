@@ -1,23 +1,35 @@
-use chrono::{Datelike, Local, NaiveDate, TimeZone, Utc};
+use chrono::{Datelike, NaiveDate};
 use serde::{Deserialize, Serialize};
 use std::{
     fs,
     io::{self, Write},
     path::{Component, Path, PathBuf},
-    time::{SystemTime, UNIX_EPOCH},
 };
 use tempfile::NamedTempFile;
 
 use crate::workspace::Format;
 
 fn default_output_directory() -> String {
-    "总结".into()
+    "summary".into()
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Settings {
+    #[serde(deserialize_with = "read_output_directory")]
     pub output_directory: String,
+}
+
+fn migrate_default_directory(value: String) -> String {
+    if value.trim() == "总结" {
+        default_output_directory()
+    } else {
+        value
+    }
+}
+
+fn read_output_directory<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<String, D::Error> {
+    String::deserialize(deserializer).map(migrate_default_directory)
 }
 
 impl Default for Settings {
@@ -47,7 +59,7 @@ pub fn validate_workspace(root: &Path, requested: &str) -> Result<(), String> {
 /// Store portable, workspace-relative paths. Reject parent components rather
 /// than silently normalizing them, and reserve the journal's year namespaces.
 pub fn normalize_settings(root: &Path, settings: &Settings) -> Result<Settings, String> {
-    let raw = settings.output_directory.trim().replace('\\', "/");
+    let raw = migrate_default_directory(settings.output_directory.trim().replace('\\', "/"));
     if raw.is_empty() {
         return Err("请设置总结输出目录".into());
     }
@@ -174,24 +186,8 @@ pub fn export(
     content: &str,
     format: Format,
 ) -> Result<ExportResult, String> {
-    let seconds = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_err(|_| "系统时间无效，无法生成总结文件名")?
-        .as_secs();
-    let stamp = export_timestamp(seconds, &Local)?;
+    let stamp = crate::report_export::current_timestamp()?;
     export_at(root, settings, dates, content, format, &stamp)
-}
-
-fn export_timestamp<Tz: TimeZone>(seconds: u64, time_zone: &Tz) -> Result<String, String>
-where
-    Tz::Offset: std::fmt::Display,
-{
-    let seconds = i64::try_from(seconds).map_err(|_| "系统时间无效，无法生成总结文件名")?;
-    Ok(chrono::DateTime::<Utc>::from_timestamp(seconds, 0)
-        .ok_or("系统时间无效，无法生成总结文件名")?
-        .with_timezone(time_zone)
-        .format("%Y%m%d_%H%M%S")
-        .to_string())
 }
 
 fn export_at(
@@ -207,7 +203,6 @@ fn export_at(
         return Err("总结内容为空，无法导出".into());
     }
     let directory = prepare_directory(root, settings)?;
-    let stem = format!("总结_{start}-{end}_{stamp}");
     let mut temporary =
         NamedTempFile::new_in(&directory).map_err(|error| format!("无法创建总结文件：{error}"))?;
     temporary
@@ -217,28 +212,13 @@ fn export_at(
         .as_file()
         .sync_all()
         .map_err(|error| format!("无法同步总结文件：{error}"))?;
-    for sequence in 0_u32..10_000 {
-        let suffix = if sequence == 0 {
-            String::new()
-        } else {
-            format!("_{sequence}")
-        };
-        let filename = format!("{stem}{suffix}.{}", format.extension());
-        let path = directory.join(&filename);
-        match temporary.persist_noclobber(&path) {
-            Ok(_) => {
-                return Ok(ExportResult {
-                    filename,
-                    path: path.to_string_lossy().into_owned(),
-                })
-            }
-            Err(error) if error.error.kind() == io::ErrorKind::AlreadyExists => {
-                temporary = error.file;
-            }
-            Err(error) => return Err(format!("无法保存总结文件：{}", error.error)),
-        }
-    }
-    Err("相同时间的总结文件过多，请稍后重新导出".into())
+    let (filename, path) = crate::report_export::publish(
+        temporary, &directory, &start, &end, stamp, format.extension(),
+    )?;
+    Ok(ExportResult {
+        filename,
+        path: path.to_string_lossy().into_owned(),
+    })
 }
 
 #[cfg(test)]
@@ -254,6 +234,19 @@ mod tests {
 
     fn dates() -> Vec<String> {
         vec!["20261022".into(), "20261014".into(), "20261022".into()]
+    }
+
+    #[test]
+    fn default_directory_uses_summary_and_migrates_only_the_legacy_default() {
+        assert_eq!(Settings::default().output_directory, "summary");
+        let missing: Settings = serde_json::from_str("{}").unwrap();
+        assert_eq!(missing.output_directory, "summary");
+        let legacy: Settings = serde_json::from_str(r#"{"outputDirectory":"总结"}"#).unwrap();
+        assert_eq!(legacy.output_directory, "summary");
+        let custom: Settings = serde_json::from_str(r#"{"outputDirectory":"归档/总结"}"#).unwrap();
+        assert_eq!(custom.output_directory, "归档/总结");
+        let root = tempfile::tempdir().unwrap();
+        assert_eq!(prepare_directory(root.path(), &settings("总结")).unwrap(), root.path().join("summary"));
     }
 
     #[test]
@@ -379,7 +372,7 @@ mod tests {
             "工作总结\n保留纯文本"
         );
         assert!(workspace.list().unwrap().is_empty());
-        assert_eq!(fs::read_dir(root.join("总结")).unwrap().count(), 3);
+        assert_eq!(fs::read_dir(root.join("summary")).unwrap().count(), 3);
     }
 
     #[test]
@@ -393,7 +386,7 @@ mod tests {
                 .unwrap()
                 .timestamp() as u64;
             let time_zone = chrono::FixedOffset::east_opt(offset_seconds).unwrap();
-            let stamp = export_timestamp(seconds, &time_zone).unwrap();
+            let stamp = crate::report_export::timestamp(seconds, &time_zone).unwrap();
             assert_eq!(stamp, expected_stamp);
             let output = export_at(
                 root.path(),

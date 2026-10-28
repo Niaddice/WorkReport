@@ -73,6 +73,13 @@ export interface LayoutGeometry {
   gutters: LayoutGutter[]
 }
 
+/** 模块板的实际像素尺寸和间距，供预览与保存使用同一套局部缩放计算。 */
+export interface LayoutMetrics {
+  width: number
+  height: number
+  gap: number
+}
+
 /** 用户保存的布局快照：名字 + 布局树。 */
 export interface SavedLayout {
   name: string

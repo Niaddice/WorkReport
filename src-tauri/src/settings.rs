@@ -89,6 +89,19 @@ mod tests {
     }
 
     #[test]
+    fn legacy_excel_output_directory_is_ignored_and_no_longer_saved() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join(FILE_NAME);
+        fs::write(&path, r#"{"excel":{"enabled":false,"templatePath":"/template.xlsx","prompt":"保留提示词","outputDirectory":"/old-reports"}}"#).unwrap();
+        let stored = load(&path).unwrap().unwrap();
+        assert_eq!(stored.excel.template_path, "/template.xlsx");
+        assert_eq!(stored.excel.prompt, "保留提示词");
+        save(&path, &stored).unwrap();
+        let saved: serde_json::Value = serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
+        assert!(saved["excel"].get("outputDirectory").is_none());
+    }
+
+    #[test]
     fn failed_atomic_replace_preserves_destination_and_removes_temporary_file() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join(FILE_NAME);
@@ -122,7 +135,6 @@ mod tests {
                 enabled: false,
                 template_path: "/templates/weekly.xlsx".into(),
                 prompt: "填写本周工作进展".into(),
-                output_directory: "/reports".into(),
             },
             summary: crate::summary::Settings {
                 output_directory: "总结/每周".into(),
@@ -181,7 +193,7 @@ mod tests {
         assert!(restored.ai.providers.is_empty());
         assert!(!restored.excel.enabled);
         assert!(restored.excel.template_path.is_empty());
-        assert_eq!(restored.summary.output_directory, "总结");
+        assert_eq!(restored.summary.output_directory, "summary");
         // 旧文件没有 ui 段：读取后是 None，由界面层回退默认布局。
         assert!(restored.ui.is_none());
     }
@@ -217,7 +229,7 @@ mod tests {
         let path = root.path().join(FILE_NAME);
         fs::write(&path, r#"{"appearance":{"scale":120},"ai":{"providers":[],"defaultProviderId":null,"generationPreference":"保留措辞","summaryPrompt":"保留总结提示词"},"excel":{"enabled":false,"templatePath":"/weekly.xlsx","prompt":"保留 Excel 提示词","outputDirectory":"/reports"}}"#).unwrap();
         let mut stored = load(&path).unwrap().unwrap();
-        assert_eq!(stored.summary.output_directory, "总结");
+        assert_eq!(stored.summary.output_directory, "summary");
         stored.summary = crate::summary::normalize_settings(
             root.path(),
             &crate::summary::Settings {

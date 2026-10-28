@@ -66,7 +66,7 @@ onBeforeUnmount(() => motion.dispose())
       </div>
     </div>
     <footer class="skin-dialog-actions">
-      <button type="button" class="text-action" @click="emit('close')">关闭</button>
+      <button type="button" class="text-action" data-window-close="default" @click="emit('close')">关闭</button>
     </footer>
   </dialog>
 </template>

@@ -150,7 +150,7 @@ function isClickable(node: TreeNode) {
   return !!reportDate(node) || isExcel(node)
 }
 
-/** Excel 文件点击后在弹窗中预览，样式与「Excel 周报」导出预览一致。 */
+/** Excel 文件点击后在弹窗中预览，样式与「Excel报告」导出预览一致。 */
 const excelPreview = ref<ExcelExportPreview | null>(null)
 const excelOpening = ref(false)
 const excelOpenError = ref('')

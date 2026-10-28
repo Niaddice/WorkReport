@@ -65,12 +65,22 @@ onBeforeUnmount(() => motion.dispose())
     </p>
     <p v-if="error" class="error-text dialog-error" role="alert">{{ error }}</p>
     <div class="dialog-actions">
-      <md-text-button class="dialog-button dialog-button-secondary" :disabled="busy" @click="emit('cancel')"
+      <md-text-button
+        class="dialog-button dialog-button-secondary"
+        data-window-close="default"
+        :disabled="busy"
+        @click="emit('cancel')"
         >取消</md-text-button
       >
-      <md-filled-button class="dialog-button dialog-button-primary" :disabled="busy" @click="emit('confirm')">{{
-        busy ? '处理中…' : kind === 'format' ? '确认切换' : kind === 'restore' ? '恢复原文' : '重新载入'
-      }}</md-filled-button>
+      <md-filled-button
+        class="dialog-button dialog-button-primary"
+        data-window-close
+        :disabled="busy"
+        @click="emit('confirm')"
+        >{{
+          busy ? '处理中…' : kind === 'format' ? '确认切换' : kind === 'restore' ? '恢复原文' : '重新载入'
+        }}</md-filled-button
+      >
     </div>
   </dialog>
 </template>

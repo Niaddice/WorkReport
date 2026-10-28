@@ -6,9 +6,10 @@ import ModulePanel from '../src/components/ModulePanel.vue'
 
 const icon = markRaw({ template: '<span class="test-icon" />' })
 
-function mountPanel(overrides: Record<string, unknown> = {}) {
+function mountPanel(overrides: Record<string, unknown> = {}, subtitle = '') {
   return mount(ModulePanel, {
     attachTo: document.body,
+    slots: { subtitle },
     props: {
       id: 'overview',
       title: '数据概览',
@@ -21,6 +22,32 @@ function mountPanel(overrides: Record<string, unknown> = {}) {
 }
 
 describe('module panel', () => {
+  it('leaves the previous module input when clicking another module without focusing a control', async () => {
+    const editor = mount(ModulePanel, {
+      attachTo: document.body,
+      props: { id: 'editor', title: '日报编辑', icon, canRemove: true, dragging: false },
+      slots: { default: '<textarea aria-label="测试日报" />' },
+    })
+    const calendar = mountPanel({ id: 'calendar', title: '日历' })
+    try {
+      const input = editor.get<HTMLTextAreaElement>('textarea').element
+      input.focus()
+      await editor.get('.module-panel-body').trigger('pointerdown')
+      expect(document.activeElement).toBe(input)
+
+      await calendar.get('.module-panel-body').trigger('pointerdown')
+      expect(document.activeElement).not.toBe(input)
+      expect(calendar.emitted('activate')).toBeDefined()
+
+      input.focus()
+      await calendar.get('.module-panel-header').trigger('click')
+      expect(document.activeElement).not.toBe(input)
+    } finally {
+      editor.unmount()
+      calendar.unmount()
+    }
+  })
+
   it('anchors help beside the icon, keeps internal clicks open and dismisses outside clicks', async () => {
     const wrapper = mountPanel({ help: ['说明内容 A', '说明内容 B'] })
     const button = wrapper.get<HTMLButtonElement>('.module-help-button')
@@ -102,11 +129,11 @@ describe('module panel', () => {
     }
   })
 
-  it('renders the module chrome and drag handle without a position counter', () => {
+  it('renders the module chrome without a drag button or position counter', () => {
     const wrapper = mountPanel()
     expect(wrapper.find('.module-panel-title').text()).toBe('数据概览')
     expect(wrapper.find('.module-panel-position').exists()).toBe(false)
-    expect(wrapper.find('.module-drag-handle').attributes('aria-label')).toBe('拖动「数据概览」模块到其他模块上分栏')
+    expect(wrapper.find('.module-drag-handle').exists()).toBe(false)
     expect(wrapper.find('.module-maximize-button').attributes('aria-label')).toContain('放大')
     wrapper.unmount()
   })
@@ -125,9 +152,50 @@ describe('module panel', () => {
     await wrapper.find('.module-panel-remove').trigger('click')
     expect(wrapper.emitted('remove')).toHaveLength(1)
 
-    await wrapper.find('.module-drag-handle').trigger('pointerdown', { button: 0 })
+    await wrapper.find('.module-panel-header').trigger('pointerdown', { button: 0 })
     expect(wrapper.emitted('drag-start')).toHaveLength(1)
     wrapper.unmount()
+  })
+
+  it('keeps title and date text plus action buttons out of the drag area', async () => {
+    const wrapper = mountPanel(
+      { help: ['说明内容'] },
+      '<span class="module-panel-subtitle"><span>星期三</span><span>10 月 28 日</span></span>',
+    )
+    try {
+      for (const selector of [
+        '.module-panel-title',
+        '.module-panel-subtitle span',
+        '.module-help-button',
+        '.module-help-button svg',
+        '.module-maximize-button',
+        '.module-maximize-button svg',
+        '.module-panel-remove',
+        '.module-panel-remove svg',
+      ]) {
+        await wrapper.get(selector).trigger('pointerdown', { button: 0 })
+      }
+      expect(wrapper.emitted('drag-start')).toBeUndefined()
+    } finally {
+      wrapper.unmount()
+    }
+  })
+
+  it('ignores non-left clicks and header drags while maximized', async () => {
+    const wrapper = mountPanel()
+    try {
+      await wrapper.get('.module-panel-header').trigger('pointerdown', { button: 2 })
+      await wrapper.setProps({ maximized: true })
+      for (const selector of ['.module-panel-header', '.module-panel-icon']) {
+        await wrapper.get(selector).trigger('pointerdown', { button: 0 })
+      }
+      expect(wrapper.emitted('drag-start')).toBeUndefined()
+      await wrapper.setProps({ maximized: false })
+      await wrapper.get('.module-panel-header').trigger('pointerdown', { button: 0 })
+      expect(wrapper.emitted('drag-start')).toHaveLength(1)
+    } finally {
+      wrapper.unmount()
+    }
   })
 
   it('emits maximize requests and reflects the maximized state', async () => {
@@ -141,7 +209,7 @@ describe('module panel', () => {
     expect(maximized.attributes('role')).toBe('dialog')
     expect(maximized.attributes('aria-modal')).toBe('true')
     expect(maximized.find('.module-panel-remove').exists()).toBe(false)
-    expect(maximized.find('.module-drag-handle').attributes('disabled')).toBeDefined()
+    expect(maximized.find('.module-drag-handle').exists()).toBe(false)
     expect(maximized.find('.module-maximize-button').attributes('aria-label')).toContain('还原')
     await maximized.find('.module-maximize-button').trigger('click')
     expect(maximized.emitted('toggle-maximize')).toHaveLength(1)

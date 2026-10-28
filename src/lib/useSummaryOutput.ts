@@ -10,11 +10,14 @@ export interface SummaryExportResult {
   path: string
 }
 export type SummaryExportFormat = 'md' | 'txt'
-export const DEFAULT_SUMMARY_OUTPUT_SETTINGS: SummaryOutputSettings = { outputDirectory: '总结' }
+export const DEFAULT_SUMMARY_OUTPUT_SETTINGS: SummaryOutputSettings = { outputDirectory: 'summary' }
 export const SUMMARY_OUTPUT_STORAGE_KEY = 'work-report.summary-output-preview'
 
 function cloneSettings(value: SummaryOutputSettings): SummaryOutputSettings {
-  return { outputDirectory: value.outputDirectory }
+  return {
+    outputDirectory:
+      value.outputDirectory.trim() === '总结' ? DEFAULT_SUMMARY_OUTPUT_SETTINGS.outputDirectory : value.outputDirectory,
+  }
 }
 
 function readPreviewSettings(): SummaryOutputSettings {

@@ -1,5 +1,8 @@
+import { createSurfaceMotion } from './surfaceMotion'
+
 /** Keep a native modal in the top layer until its closing animation finishes. */
 export function createDialogMotion(getDialog: () => HTMLDialogElement | null | undefined) {
+  const surface = createSurfaceMotion()
   let revision = 0
   let closeTimer: ReturnType<typeof setTimeout> | undefined
   let activeDialog: HTMLDialogElement | undefined
@@ -16,6 +19,7 @@ export function createDialogMotion(getDialog: () => HTMLDialogElement | null | u
   }
 
   function open() {
+    const reopening = pendingClose !== undefined
     cancelPendingClose()
     const dialog = getDialog()
     if (!dialog) return
@@ -26,8 +30,14 @@ export function createDialogMotion(getDialog: () => HTMLDialogElement | null | u
     activeDialog = dialog
     dialog.classList.remove('is-closing')
     if (!dialog.open) {
+      surface.captureOpening(dialog)
+      dialog.classList.remove('has-window-motion')
       dialog.showModal()
       dialog.focus({ preventScroll: true })
+      surface.animate(dialog, true, () => {})
+    } else if (reopening) {
+      // 快速重新打开时，接续尚未完成的收缩动画。
+      surface.animate(dialog, true, () => {})
     }
   }
 
@@ -55,13 +65,15 @@ export function createDialogMotion(getDialog: () => HTMLDialogElement | null | u
       pendingClose = undefined
       dialog.classList.remove('is-closing')
       if (dialog.open) dialog.close()
+      dialog.classList.remove('has-window-motion')
       resolveClose(true)
     }
+    dialog.classList.add('is-closing')
+    if (surface.animate(dialog, false, finish)) return completion
     if (dialog.ownerDocument.defaultView?.matchMedia?.('(prefers-reduced-motion: reduce)').matches) {
       finish()
       return completion
     }
-    dialog.classList.add('is-closing')
     const style = dialog.ownerDocument.defaultView?.getComputedStyle(dialog)
     const durations = style?.animationDuration.split(',').map(toMilliseconds) ?? []
     const delays = style?.animationDelay.split(',').map(toMilliseconds) ?? []
@@ -82,8 +94,10 @@ export function createDialogMotion(getDialog: () => HTMLDialogElement | null | u
     cancelPendingClose()
     const dialog = activeDialog ?? getDialog()
     dialog?.classList.remove('is-closing')
+    dialog?.classList.remove('has-window-motion')
     if (dialog?.open) dialog.close()
     activeDialog = undefined
+    surface.dispose()
   }
 
   return { open, close, dispose }

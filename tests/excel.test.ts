@@ -5,8 +5,9 @@ import {
   EXCEL_STORAGE_KEY,
   reportDateRange,
   reportOverlapsRange,
-  sameWeekRange,
+  validExcelDates,
   useExcel,
+  type ExcelExportFile,
   type ExcelExportResult,
   type ExcelPreview,
   type ExcelSettings,
@@ -18,7 +19,6 @@ const configured: ExcelSettings = {
   enabled: true,
   templatePath: '/templates/week.xlsx',
   prompt: '将本周工作填入周报 B5，保留公式。',
-  outputDirectory: '/reports',
 }
 const exported: ExcelExportResult = { path: '/reports/week.xlsx', filename: 'week.xlsx', cells: 3 }
 const prepared: ExcelPreview = {
@@ -49,19 +49,19 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
-describe('Excel selection week', () => {
+describe('Excel selection dates', () => {
   it('accepts any dates from Monday through Sunday in the same week', () => {
-    expect(sameWeekRange(['20261019', '20261025'])).toBe(true)
-    expect(sameWeekRange(['20261025', '20261021', '20261021'])).toBe(true)
-    expect(sameWeekRange(['20261021'])).toBe(true)
+    expect(validExcelDates(['20261019', '20261025'])).toBe(true)
+    expect(validExcelDates(['20261025', '20261021', '20261021'])).toBe(true)
+    expect(validExcelDates(['20261021'])).toBe(true)
   })
   it('accepts weeks that cross a month or year boundary', () => {
-    expect(sameWeekRange(['20260928', '20261004'])).toBe(true)
-    expect(sameWeekRange(['20261228', '20270103'])).toBe(true)
+    expect(validExcelDates(['20260928', '20261004'])).toBe(true)
+    expect(validExcelDates(['20261228', '20270103'])).toBe(true)
   })
-  it('rejects Sunday to Monday even when the dates are adjacent', () => {
-    expect(sameWeekRange(['20261018', '20261019'])).toBe(false)
-    expect(sameWeekRange(['20261025', '20261026'])).toBe(false)
+  it('accepts ranges that span weeks', () => {
+    expect(validExcelDates(['20261018', '20261019'])).toBe(true)
+    expect(validExcelDates(['20261025', '20261026'])).toBe(true)
   })
   it('strictly validates actual calendar dates without local timezone conversion', () => {
     for (const dates of [
@@ -76,8 +76,8 @@ describe('Excel selection week', () => {
       ['202610211'],
       ['20260431'],
     ])
-      expect(sameWeekRange(dates)).toBe(false)
-    expect(sameWeekRange(['20240229'])).toBe(true)
+      expect(validExcelDates(dates)).toBe(false)
+    expect(validExcelDates(['20240229'])).toBe(true)
   })
 })
 
@@ -85,6 +85,22 @@ describe('report date range parsing', () => {
   it('parses the standard weekly filename range', () => {
     expect(reportDateRange('周报_20261019-20261025_abc123.xlsx')).toEqual({ start: '20261019', end: '20261025' })
     expect(reportDateRange('周报_20260928-20261004_xyz.xlsx')).toEqual({ start: '20260928', end: '20261004' })
+  })
+  it('parses general report names and keeps legacy weekly names compatible', () => {
+    expect(reportDateRange('总结_20261001-20261115_20261028_160500.xlsx')).toEqual({
+      start: '20261001',
+      end: '20261115',
+    })
+    expect(reportDateRange('总结_20261001-20261115_20261028_160500_1.xlsx')).toEqual({
+      start: '20261001',
+      end: '20261115',
+    })
+    expect(reportDateRange('报告_20261001-20261115_new.xlsx')).toEqual({ start: '20261001', end: '20261115' })
+    expect(reportDateRange('Excel报告_20261201-20270131_new.xlsx')).toEqual({ start: '20261201', end: '20270131' })
+  })
+  it('does not treat invalid or reversed date ranges as recognised metadata', () => {
+    expect(reportDateRange('报告_20260229-20260301_bad.xlsx')).toBeNull()
+    expect(reportDateRange('报告_20261101-20261001_bad.xlsx')).toBeNull()
   })
   it('returns null for unrecognised filenames', () => {
     expect(reportDateRange('week.xlsx')).toBeNull()
@@ -97,10 +113,13 @@ describe('report date range parsing', () => {
 describe('report range overlap', () => {
   const report = '周报_20261026-20261101_abc.xlsx'
   it('matches when the report overlaps the selected range', () => {
-    // 选中这一周内的任意一天或子范围，都应显示这一周的周报。
+    // 单日、范围边界与任意交集均匹配。
     expect(reportOverlapsRange(report, '20261026', '20261101')).toBe(true)
     expect(reportOverlapsRange(report, '20261028', '20261028')).toBe(true)
     expect(reportOverlapsRange(report, '20261028', '20261030')).toBe(true)
+    expect(reportOverlapsRange(report, '20261001', '20261026')).toBe(true)
+    expect(reportOverlapsRange(report, '20261101', '20261130')).toBe(true)
+    expect(reportOverlapsRange(report, '20261001', '20261231')).toBe(true)
   })
   it('keeps unrecognised files visible regardless of the range', () => {
     expect(reportOverlapsRange('week.xlsx', '20261026', '20261101')).toBe(true)
@@ -111,7 +130,72 @@ describe('report range overlap', () => {
   })
 })
 
+describe('Excel export list refresh', () => {
+  const file = (name: string): ExcelExportFile => ({
+    filename: name,
+    path: `/workspace/excel/${name}`,
+    modified: 0,
+    size: 1,
+  })
+
+  it('keeps the latest list when an earlier directory read finishes later', async () => {
+    const earlier = deferred<ExcelExportFile[]>()
+    const latest = deferred<ExcelExportFile[]>()
+    vi.mocked(invoke).mockReturnValueOnce(earlier.promise).mockReturnValueOnce(latest.promise)
+    const excel = useExcel()
+    const previousRead = excel.loadExports('/workspace')
+    const currentRead = excel.loadExports('/workspace')
+    latest.resolve([file('new.xlsx')])
+    expect(await currentRead).toBe(true)
+    earlier.resolve([])
+    expect(await previousRead).toBe(false)
+    expect(excel.exports.value).toEqual([file('new.xlsx')])
+  })
+
+  it('ignores a stale error while the latest workspace read is pending', async () => {
+    const earlier = deferred<ExcelExportFile[]>()
+    const latest = deferred<ExcelExportFile[]>()
+    vi.mocked(invoke).mockReturnValueOnce(earlier.promise).mockReturnValueOnce(latest.promise)
+    const excel = useExcel()
+    excel.exports.value = [file('old-workspace.xlsx')]
+    const previousRead = excel.loadExports('/old-workspace')
+    const currentRead = excel.loadExports('/new-workspace')
+    expect(excel.exports.value).toEqual([])
+    earlier.reject('旧目录已关闭')
+    expect(await previousRead).toBe(false)
+    expect(excel.exportsError.value).toBe('')
+    expect(excel.exportsLoading.value).toBe(true)
+    latest.resolve([file('new-workspace.xlsx')])
+    expect(await currentRead).toBe(true)
+    expect(excel.exportsLoading.value).toBe(false)
+  })
+
+  it('preserves exported files on selection resets and invalidates pending reads on a full reset', async () => {
+    const excel = useExcel()
+    excel.exports.value = [file('existing.xlsx')]
+    excel.clearSelection()
+    expect(excel.exports.value).toEqual([file('existing.xlsx')])
+    excel.acceptSaved(configured)
+    expect(excel.exports.value).toEqual([file('existing.xlsx')])
+    const pending = deferred<ExcelExportFile[]>()
+    vi.mocked(invoke).mockReturnValueOnce(pending.promise)
+    const read = excel.loadExports('/workspace')
+    excel.clearExport()
+    pending.resolve([file('late.xlsx')])
+    expect(await read).toBe(false)
+    expect(excel.exports.value).toEqual([])
+    expect(excel.exportsLoading.value).toBe(false)
+  })
+})
+
 describe('Excel settings state', () => {
+  it('ignores the custom output directory from legacy settings', async () => {
+    vi.mocked(invoke).mockResolvedValueOnce({ ...configured, outputDirectory: '/old-custom-reports' })
+    const excel = useExcel()
+    expect(await excel.load()).toBe(true)
+    expect(excel.settings.value).toEqual(configured)
+    expect(excel.settings.value).not.toHaveProperty('outputDirectory')
+  })
   it('loads settings and does not write disabled defaults', async () => {
     const excel = useExcel()
     expect(excel.settings.value).toEqual(DEFAULT_EXCEL_SETTINGS)
@@ -191,6 +275,58 @@ describe('Excel preview and confirmation lifecycle', () => {
     )
   })
 
+  it('uses a temporary prompt only for the current request and preserves saved settings', async () => {
+    mockConfiguredCommands()
+    const excel = useExcel()
+    expect(await excel.prepareSelection('/workspace', ['20261021'], '仅本次按项目整理')).toBe(true)
+    expect(invoke).toHaveBeenLastCalledWith('prepare_excel', {
+      workspacePath: '/workspace',
+      dates: ['20261021'],
+      requestId: expect.any(String),
+      prompt: '仅本次按项目整理',
+    })
+    expect(excel.settings.value).toEqual(configured)
+    expect(excel.previewPrompt.value).toBe('仅本次按项目整理')
+    await excel.discardPreview()
+    expect(excel.previewPrompt.value).toBe('')
+    expect(await excel.prepareSelection('/workspace', ['20261021'])).toBe(true)
+    expect(invoke).toHaveBeenLastCalledWith('prepare_excel', {
+      workspacePath: '/workspace',
+      dates: ['20261021'],
+      requestId: expect.any(String),
+    })
+    expect(vi.mocked(invoke).mock.calls.some(([command]) => command === 'save_workspace_settings')).toBe(false)
+  })
+
+  it.each(['  ', '字'.repeat(6001)])('rejects an invalid temporary prompt before requesting AI', async (prompt) => {
+    const excel = useExcel()
+    expect(await excel.prepareSelection('/workspace', ['20261021'], prompt)).toBe(false)
+    expect(excel.exportError.value).toContain('本次提示词')
+    expect(invoke).not.toHaveBeenCalled()
+  })
+
+  it('prepares a range of more than seven days across weeks and years', async () => {
+    mockConfiguredCommands()
+    const excel = useExcel()
+    const dates = [
+      '20261225',
+      '20261226',
+      '20261227',
+      '20261228',
+      '20261229',
+      '20261230',
+      '20261231',
+      '20270101',
+      '20270102',
+    ]
+    expect(await excel.prepareSelection('/workspace', dates)).toBe(true)
+    expect(invoke).toHaveBeenLastCalledWith('prepare_excel', {
+      workspacePath: '/workspace',
+      dates,
+      requestId: expect.any(String),
+    })
+  })
+
   it('writes only after confirmation using the same preview without requesting AI again', async () => {
     mockConfiguredCommands()
     const write = deferred<ExcelExportResult>()
@@ -239,8 +375,8 @@ describe('Excel preview and confirmation lifecycle', () => {
 
   it('checks all selected dates, including dates without a journal, before reading config', async () => {
     const excel = useExcel()
-    expect(await excel.prepareSelection('/workspace', ['20261025', '20261026'])).toBe(false)
-    expect(excel.exportError.value).toContain('同一周')
+    expect(await excel.prepareSelection('/workspace', ['20261025', '20260229'])).toBe(false)
+    expect(excel.exportError.value).toContain('有效的日期')
     expect(invoke).not.toHaveBeenCalled()
   })
 

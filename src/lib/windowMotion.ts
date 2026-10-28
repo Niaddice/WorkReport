@@ -1,4 +1,4 @@
-/** 模块最大化与设置窗口共用的动效节奏。 */
+/** 弹窗、浮窗与模块最大化共用的动效节奏。 */
 export const MAXIMIZE_DURATION = 360
 export const RESTORE_DURATION = 280
 export const MAXIMIZE_EASING = 'cubic-bezier(0.2, 0.8, 0.2, 1)'

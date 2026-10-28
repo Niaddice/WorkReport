@@ -6,7 +6,6 @@ export interface ExcelSettings {
   enabled: boolean
   templatePath: string
   prompt: string
-  outputDirectory: string
 }
 export interface ExcelExportResult {
   path: string
@@ -47,11 +46,16 @@ export interface ExcelExportPreview {
   sheets: ExcelSheetPreviewData[]
 }
 export const EXCEL_STORAGE_KEY = 'work-report.excel-preview'
+export const RECOMMENDED_EXCEL_PROMPT = `1、F2填写框选区域的最后日期，格式按照YYYYMMDD
+2、根据项目分类提炼成果
+3、在第14行开始填写根据分类提炼的成果内容，A列序号，从1开始递增；B列项目分类名称；C列固定文本：开发；D列固定文本：功能正常；E列引入F2内容；F列固定文本：张三；G列根据项目分类预估工时，保证所有任务总和工时为工作日数*8；H列固定文本：进行中；I列固定文本：李四；J列每个项目分类提炼的详细内容；K列留空
+4、D11为G列工时的总和
+5、B11为任务数量
+6、第14行开始的单元格格式使用黑色边框，多个子任务内容换行显示`
 export const DEFAULT_EXCEL_SETTINGS: ExcelSettings = {
   enabled: false,
   templatePath: '',
   prompt: '',
-  outputDirectory: '',
 }
 
 export function cloneExcelSettings(value: ExcelSettings): ExcelSettings {
@@ -59,14 +63,12 @@ export function cloneExcelSettings(value: ExcelSettings): ExcelSettings {
     enabled: value.enabled,
     templatePath: value.templatePath,
     prompt: value.prompt,
-    outputDirectory: value.outputDirectory,
   }
 }
 
-/** Dates use the journal's YYYYMMDD format. Weeks always begin on Monday. */
-export function sameWeekRange(dates: string[]): boolean {
+/** Validate journal dates without restricting the selected range to one week. */
+export function validExcelDates(dates: string[]): boolean {
   if (!dates.length) return false
-  let week: number | undefined
   for (const key of dates) {
     if (!/^\d{8}$/.test(key)) return false
     const year = Number(key.slice(0, 4))
@@ -77,24 +79,22 @@ export function sameWeekRange(dates: string[]): boolean {
     date.setUTCFullYear(year, month - 1, day)
     date.setUTCHours(0, 0, 0, 0)
     if (date.getUTCFullYear() !== year || date.getUTCMonth() !== month - 1 || date.getUTCDate() !== day) return false
-    const start = date.getTime() - ((date.getUTCDay() + 6) % 7) * 86_400_000
-    if (week !== undefined && week !== start) return false
-    week = start
   }
   return true
 }
 
 /**
- * 周报文件名形如 `周报_20261020-20261026_xxx.xlsx`，解析其中的起止日期；
+ * 解析报告文件名中的起止日期，兼容原有的「周报」前缀；
  * 无法识别（非标准命名）时返回 null，调用方按“始终显示”处理。
  */
 export function reportDateRange(filename: string): { start: string; end: string } | null {
-  const match = /^周报_(\d{8})-(\d{8})_/.exec(filename)
-  return match ? { start: match[1]!, end: match[2]! } : null
+  const match = /^(?:总结|周报|报告|Excel报告)_(\d{8})-(\d{8})_/.exec(filename)
+  if (!match || !validExcelDates([match[1]!, match[2]!]) || match[1]! > match[2]!) return null
+  return { start: match[1]!, end: match[2]! }
 }
 
 /**
- * 判断周报是否与给定的日期范围（闭区间，YYYYMMDD）有交集；
+ * 判断报告是否与给定的日期范围（闭区间，YYYYMMDD）有交集；
  * 无法识别日期范围的文件按“始终显示”处理。
  */
 export function reportOverlapsRange(filename: string, start: string, end: string): boolean {
@@ -115,9 +115,7 @@ function readPreviewSettings(): ExcelSettings {
       'templatePath' in value &&
       typeof value.templatePath === 'string' &&
       'prompt' in value &&
-      typeof value.prompt === 'string' &&
-      'outputDirectory' in value &&
-      typeof value.outputDirectory === 'string'
+      typeof value.prompt === 'string'
     )
       return cloneExcelSettings(value as ExcelSettings)
   } catch {
@@ -133,6 +131,7 @@ export function useExcel() {
   const preparing = ref(false)
   const exporting = ref(false)
   const preview = ref<ExcelPreview | null>(null)
+  const previewPrompt = ref('')
   const result = ref<ExcelExportResult | null>(null)
   const exportError = ref('')
   const exports = ref<ExcelExportFile[]>([])
@@ -145,6 +144,8 @@ export function useExcel() {
   let scope = 0
   let requestId = ''
   let exportRevision = 0
+  let exportsRevision = 0
+  let exportsWorkspace = ''
   let previewWorkspace = ''
   let writingPreviewId = ''
 
@@ -160,6 +161,7 @@ export function useExcel() {
     requestId = ''
     preparing.value = false
     preview.value = null
+    previewPrompt.value = ''
     previewWorkspace = ''
     await Promise.all([
       id && isTauri() ? invoke<void>('cancel_ai', { requestId: id }).catch(() => {}) : Promise.resolve(),
@@ -177,23 +179,29 @@ export function useExcel() {
     previewOpenError.value = ''
   }
 
-  /** 列出输出目录中已导出的周报。 */
+  /** 列出输出目录中已导出的报告。 */
   async function loadExports(workspacePath: string): Promise<boolean> {
+    const revision = ++exportsRevision
+    const current = () => revision === exportsRevision
+    if (exportsWorkspace !== workspacePath) exports.value = []
+    exportsWorkspace = workspacePath
+    exportsError.value = ''
     if (!isTauri() || !workspacePath) {
       exports.value = []
+      exportsLoading.value = false
       return false
     }
     exportsLoading.value = true
-    exportsError.value = ''
     try {
       const value = await invoke<ExcelExportFile[]>('list_excel_exports', { workspacePath })
+      if (!current()) return false
       exports.value = Array.isArray(value) ? value : []
       return true
     } catch (cause) {
-      exportsError.value = `读取已导出周报失败：${String(cause)}`
+      if (current()) exportsError.value = `读取已导出报告失败：${String(cause)}`
       return false
     } finally {
-      exportsLoading.value = false
+      if (current()) exportsLoading.value = false
     }
   }
 
@@ -215,12 +223,21 @@ export function useExcel() {
     }
   }
 
-  function clearExport() {
+  /** Calendar selection changes invalidate the generated preview, while exported files remain available. */
+  function clearSelection() {
     void cancel()
     result.value = null
     exportError.value = ''
-    exports.value = []
     closeExportPreview()
+  }
+
+  function clearExport() {
+    clearSelection()
+    exportsRevision++
+    exportsWorkspace = ''
+    exports.value = []
+    exportsLoading.value = false
+    exportsError.value = ''
   }
 
   function load(): Promise<boolean> {
@@ -259,10 +276,11 @@ export function useExcel() {
   }
 
   /** Generate an AI-filled preview without writing an output file. */
-  async function prepareSelection(workspacePath: string, dates: string[]): Promise<boolean> {
+  async function prepareSelection(workspacePath: string, dates: string[], prompt?: string): Promise<boolean> {
     if (preparing.value || exporting.value) return false
     const previous = preview.value
     preview.value = null
+    previewPrompt.value = prompt ?? settings.value.prompt
     previewWorkspace = ''
     if (previous) void discardToken(previous.id)
     result.value = null
@@ -271,8 +289,12 @@ export function useExcel() {
       exportError.value = '请先打开工作空间。'
       return false
     }
-    if (!sameWeekRange(dates)) {
-      exportError.value = 'Excel 输出仅支持同一周（周一至周日）内的日期，请重新框选。'
+    if (!validExcelDates(dates)) {
+      exportError.value = '请选择有效的日期或日期范围。'
+      return false
+    }
+    if (prompt !== undefined && (!prompt.trim() || prompt.length > 6000)) {
+      exportError.value = '请填写本次提示词，长度不能超过 6000 字。'
       return false
     }
     if (!isTauri()) {
@@ -295,7 +317,13 @@ export function useExcel() {
         exportError.value = '请先在设置中启用 Excel 输出。'
         return false
       }
-      const value = await invoke<ExcelPreview>('prepare_excel', { workspacePath, dates: selection, requestId: id })
+      previewPrompt.value = prompt ?? settings.value.prompt
+      const value = await invoke<ExcelPreview>('prepare_excel', {
+        workspacePath,
+        dates: selection,
+        requestId: id,
+        ...(prompt === undefined ? {} : { prompt }),
+      })
       if (!current()) {
         await discardToken(value.id)
         return false
@@ -344,6 +372,7 @@ export function useExcel() {
       if (!current()) return false
       result.value = value
       preview.value = null
+      previewPrompt.value = ''
       previewWorkspace = ''
       return true
     } catch (cause) {
@@ -361,7 +390,7 @@ export function useExcel() {
 
   function acceptSaved(value: ExcelSettings) {
     scope++
-    clearExport()
+    clearSelection()
     loadTask = undefined
     settings.value = cloneExcelSettings(value)
     loading.value = false
@@ -379,8 +408,10 @@ export function useExcel() {
     discardPreview,
     cancel,
     clearExport,
+    clearSelection,
     preparing,
     preview,
+    previewPrompt,
     exporting,
     result,
     exportError,

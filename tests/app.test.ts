@@ -87,9 +87,9 @@ describe('journal history routing', () => {
         case 'load_appearance_settings':
           return { scale: 100 }
         case 'load_excel_settings':
-          return { enabled: false, templatePath: '', prompt: '', outputDirectory: '' }
+          return { enabled: false, templatePath: '', prompt: '' }
         case 'load_summary_settings':
-          return { outputDirectory: '总结' }
+          return { outputDirectory: 'summary' }
         case 'load_database_settings':
           return { ...DEFAULT_DATABASE_SETTINGS }
         case 'load_ui_preferences':
@@ -305,7 +305,7 @@ describe('function rail', () => {
       '日报编辑',
       '数据概览',
       '历史记录',
-      'Excel 周报',
+      'Excel报告',
       '总结',
       '工作空间目录',
       '布局',

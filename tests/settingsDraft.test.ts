@@ -28,8 +28,8 @@ function initialSettings(): WorkspaceSettings {
       generationPreference: '',
       summaryPrompt: '',
     },
-    excel: { enabled: false, templatePath: '', prompt: '', outputDirectory: '' },
-    summary: { outputDirectory: '总结' },
+    excel: { enabled: false, templatePath: '', prompt: '' },
+    summary: { outputDirectory: 'summary' },
   }
 }
 
@@ -75,7 +75,6 @@ describe('manual settings draft', () => {
       enabled: true,
       templatePath: '/templates/week.xlsx',
       prompt: '填入工作明细',
-      outputDirectory: '/exports',
     }
     await nextTick()
     expect(state.unchanged.value).toBe(false)
@@ -88,7 +87,7 @@ describe('manual settings draft', () => {
     state.draft.value.appearance.scale = 90
     state.draft.value.ai.summaryPrompt = '用简短段落总结'
     state.draft.value.summary.outputDirectory = '输出/总结'
-    state.draft.value.excel.outputDirectory = '/excel-output'
+    state.draft.value.excel.prompt = '整理工作记录'
     state.draft.value.database.enabled = true
     state.draft.value.database.sqlitePath = 'backup/reports.sqlite'
     const expected = cloneWorkspaceSettings(state.draft.value)
@@ -112,7 +111,7 @@ describe('manual settings draft', () => {
       state.draft.value.summary.outputDirectory = '新的总结目录'
       expect(await state.save()).toBe(false)
       expect(state.draft.value.summary.outputDirectory).toBe('新的总结目录')
-      expect(state.source.value.summary.outputDirectory).toBe('总结')
+      expect(state.source.value.summary.outputDirectory).toBe('summary')
       expect(state.unchanged.value).toBe(false)
       expect(state.saved.value).toBe(false)
       expect(state.saving.value).toBe(false)
@@ -165,7 +164,7 @@ describe('manual settings draft', () => {
     await nextTick()
     expect(state.draft.value.appearance.scale).toBe(90)
     expect(state.draft.value.ai.summaryPrompt).toBe('我的未保存提示词')
-    expect(state.draft.value.summary.outputDirectory).toBe('总结')
+    expect(state.draft.value.summary.outputDirectory).toBe('summary')
     expect(state.unchanged.value).toBe(false)
     expect(state.persist).not.toHaveBeenCalled()
     state.reset()

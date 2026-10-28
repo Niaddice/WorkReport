@@ -2,6 +2,7 @@
 import { nextTick, onBeforeUnmount, ref, useId, type CSSProperties } from 'vue'
 import { PhQuestion, PhX } from '@phosphor-icons/vue'
 import { selectMenuPosition } from '../lib/select'
+import { createSurfaceMotion } from '../lib/surfaceMotion'
 
 const props = defineProps<{ title: string; help: readonly string[]; anchor?: HTMLElement | null }>()
 const popup = ref<HTMLElement>()
@@ -10,6 +11,7 @@ const popupId = useId()
 const titleId = `${popupId}-title`
 const placement = ref('bottom')
 const style = ref<CSSProperties>({ position: 'fixed', visibility: 'hidden' })
+const motion = createSurfaceMotion({ openingRect: () => props.anchor?.getBoundingClientRect() })
 
 function close(restoreFocus = false) {
   if (!opened.value) return
@@ -79,19 +81,25 @@ async function open() {
     visibility: 'visible',
   }
   await nextTick()
-  if (opened.value) popup.value?.focus({ preventScroll: true })
+  if (opened.value && popup.value) {
+    motion.enter(popup.value, () => {})
+    popup.value.focus({ preventScroll: true })
+  }
 }
 function toggle() {
   if (opened.value) close()
   else void open()
 }
 defineExpose({ opened, id: popupId, open, close, toggle })
-onBeforeUnmount(() => listen(false))
+onBeforeUnmount(() => {
+  listen(false)
+  motion.dispose()
+})
 </script>
 
 <template>
   <Teleport to="body">
-    <Transition name="select-popover">
+    <Transition :css="false" @leave="motion.leave" @leave-cancelled="motion.cancel()">
       <section
         v-if="opened"
         :id="popupId"
@@ -107,7 +115,13 @@ onBeforeUnmount(() => listen(false))
         <header class="module-help-heading">
           <PhQuestion :size="17" aria-hidden="true" />
           <h2 :id="titleId">{{ title }} · 使用说明</h2>
-          <button type="button" class="module-help-close" :aria-label="`关闭「${title}」说明`" @click="close(true)">
+          <button
+            type="button"
+            data-window-close="default"
+            class="module-help-close"
+            :aria-label="`关闭「${title}」说明`"
+            @click="close(true)"
+          >
             <PhX :size="15" aria-hidden="true" />
           </button>
         </header>

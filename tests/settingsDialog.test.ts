@@ -105,7 +105,7 @@ describe('maximized settings dialog', () => {
   })
 
   it.each([
-    { target: 'settings' as const, transform: 'translate(1232px, 616px) scale(0.02666666666666667, 0.05)' },
+    { target: 'settings' as const, transform: 'translate(1152px, 8px) scale(0.023333333333333334, 0.04375)' },
     { target: 'close' as const, transform: 'translate(1152px, 8px) scale(0.023333333333333334, 0.04375)' },
   ])('expands from settings and waits for the shrink toward $target before hiding', async ({ target, transform }) => {
     const { wrapper, panel, animations } = animatedWindow()

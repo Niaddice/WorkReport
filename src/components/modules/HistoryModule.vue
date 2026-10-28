@@ -1,8 +1,11 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import dayjs from 'dayjs'
-import { PhArrowClockwise, PhCircleNotch } from '@phosphor-icons/vue'
+import { isTauri } from '@tauri-apps/api/core'
+import { PhArrowClockwise, PhCheck, PhCircleNotch, PhCopy } from '@phosphor-icons/vue'
 import { historyApi, type HistoryVersion } from '../../lib/history'
+import { pushMessage } from '../../lib/messages'
+import { api } from '../../lib/workspace'
 import { useModuleContext } from '../../modules/context'
 
 const context = useModuleContext()
@@ -14,7 +17,6 @@ const listLoading = ref(false)
 const listError = ref('')
 const refresher = ref(0)
 let listRevision = 0
-let workspaceRevision = ''
 
 /** 框选了日期范围时按日期分组；单击单个日期时只显示这一天。 */
 const rangeMode = computed(() => rangeDates.value.length > 0)
@@ -43,6 +45,11 @@ const rangeLabel = computed(() => {
   return `${first.format('YYYY 年 M 月 D 日')} – ${last.format(last.isSame(first, 'year') ? 'M 月 D 日' : 'YYYY 年 M 月 D 日')} · ${dates.length} 天`
 })
 const contentCache = new Map<string, string>()
+const contentReads = new Map<string, Promise<string>>()
+let contentRevision = 0
+const copyingKey = ref('')
+const copiedKey = ref('')
+let copiedTimer: ReturnType<typeof setTimeout> | undefined
 let hoverTask = 0
 
 interface TooltipState {
@@ -74,6 +81,69 @@ function badgeOf(version: HistoryVersion) {
 }
 function itemLabel(version: HistoryVersion) {
   return `预览 ${versionDate(version)} ${versionTime(version)} 保存的 ${badgeOf(version)} 版本`
+}
+function versionKey(version: HistoryVersion) {
+  return `${version.date}/${version.id}`
+}
+function copyLabel(version: HistoryVersion) {
+  return `复制 ${versionDate(version)} ${versionTime(version)} 保存的 ${badgeOf(version)} 版本`
+}
+
+function readContent(version: HistoryVersion): Promise<string> {
+  const key = versionKey(version)
+  const cached = contentCache.get(key)
+  if (cached !== undefined) return Promise.resolve(cached)
+  const pending = contentReads.get(key)
+  if (pending) return pending
+  const revision = contentRevision
+  const request = historyApi
+    .read(version.date, version.id)
+    .then((content) => {
+      if (revision === contentRevision) contentCache.set(key, content)
+      return content
+    })
+    .finally(() => {
+      if (contentReads.get(key) === request) contentReads.delete(key)
+    })
+  contentReads.set(key, request)
+  return request
+}
+
+function resetContent() {
+  contentRevision++
+  contentCache.clear()
+  contentReads.clear()
+  copyingKey.value = ''
+  copiedKey.value = ''
+  clearTimeout(copiedTimer)
+}
+
+async function copyVersion(version: HistoryVersion) {
+  if (copyingKey.value) return
+  hideTooltip()
+  const key = versionKey(version)
+  const revision = contentRevision
+  copyingKey.value = key
+  copiedKey.value = ''
+  clearTimeout(copiedTimer)
+  try {
+    const content = await readContent(version)
+    if (revision !== contentRevision) return
+    if (isTauri()) await api.copy(content)
+    else await navigator.clipboard.writeText(content)
+    if (revision !== contentRevision) return
+    copiedKey.value = key
+    pushMessage({ tone: 'success', text: '历史版本已复制到剪贴板' })
+    copiedTimer = setTimeout(() => {
+      copiedKey.value = ''
+    }, 1600)
+  } catch (cause) {
+    if (revision === contentRevision) {
+      pushMessage({ tone: 'error', text: `复制历史版本失败：${String(cause)}` })
+    }
+  } finally {
+    if (revision === contentRevision) copyingKey.value = ''
+  }
 }
 
 async function load() {
@@ -129,14 +199,10 @@ async function showTooltip(version: HistoryVersion, clientX: number, clientY: nu
   const task = ++hoverTask
   tooltip.value = { version, content: '', loading: true, error: '' }
   await nextTick()
+  if (task !== hoverTask) return
   schedulePosition()
-  const key = `${version.date}/${version.id}`
   try {
-    let content = contentCache.get(key)
-    if (content === undefined) {
-      content = await historyApi.read(version.date, version.id)
-      contentCache.set(key, content)
-    }
+    const content = await readContent(version)
     if (task !== hoverTask) return
     tooltip.value = { version, content, loading: false, error: '' }
     await nextTick()
@@ -171,7 +237,7 @@ function resetAndReload() {
   versions.value = []
   listError.value = ''
   hideTooltip()
-  contentCache.clear()
+  resetContent()
   void load()
 }
 
@@ -179,10 +245,6 @@ watch(
   [rangeMode, selectedDates, selectedDate, waitingForRange, () => journal.workspace.value?.path],
   () => {
     if (rangeMode.value && selectedDates.value.length === 0) return
-    if (journal.workspace.value?.path !== workspaceRevision) {
-      workspaceRevision = journal.workspace.value?.path ?? ''
-      contentCache.clear()
-    }
     // 框选会先保存当前草稿，等合并范围准备完成再读取最新历史版本。
     if (waitingForRange.value) {
       listRevision++
@@ -190,6 +252,7 @@ watch(
       listError.value = ''
       listLoading.value = true
       hideTooltip()
+      resetContent()
       return
     }
     resetAndReload()
@@ -200,6 +263,7 @@ watch(refresher, resetAndReload)
 onBeforeUnmount(() => {
   if (tooltipFrame) cancelAnimationFrame(tooltipFrame)
   hideTooltip()
+  resetContent()
 })
 </script>
 
@@ -242,24 +306,38 @@ onBeforeUnmount(() => {
           <span class="history-module-group-count">{{ group.versions.length }} 个版本</span>
         </h3>
         <p v-if="!group.versions.length" class="history-module-group-empty">暂无历史版本</p>
-        <button
-          v-for="version in group.versions"
-          :key="version.id"
-          type="button"
-          class="history-module-item"
-          :aria-label="itemLabel(version)"
-          :aria-describedby="tooltip?.version.id === version.id ? 'history-version-tooltip' : undefined"
-          @mouseenter="onVersionEnter(version, $event)"
-          @mousemove="onVersionMove"
-          @mouseleave="hideTooltip"
-          @focus="onVersionFocus(version, $event)"
-          @blur="hideTooltip"
-          @keydown="onKeydown"
-        >
-          <span class="history-module-time">{{ versionTime(version) }}</span>
-          <span class="history-module-format">{{ badgeOf(version) }}</span>
-          <span class="history-module-size">{{ formatBytes(version.bytes) }}</span>
-        </button>
+        <div v-for="version in group.versions" :key="versionKey(version)" class="history-module-row">
+          <button
+            type="button"
+            class="history-module-item"
+            :aria-label="itemLabel(version)"
+            :aria-describedby="tooltip?.version.id === version.id ? 'history-version-tooltip' : undefined"
+            @mouseenter="onVersionEnter(version, $event)"
+            @mousemove="onVersionMove"
+            @mouseleave="hideTooltip"
+            @focus="onVersionFocus(version, $event)"
+            @blur="hideTooltip"
+            @keydown="onKeydown"
+          >
+            <span class="history-module-time">{{ versionTime(version) }}</span>
+            <span class="history-module-format">{{ badgeOf(version) }}</span>
+            <span class="history-module-size">{{ formatBytes(version.bytes) }}</span>
+          </button>
+          <button
+            type="button"
+            class="history-copy-button"
+            :class="{ 'is-copied': copiedKey === versionKey(version) }"
+            :aria-label="copyLabel(version)"
+            :title="copiedKey === versionKey(version) ? '已复制' : '复制历史版本'"
+            :aria-busy="copyingKey === versionKey(version)"
+            :disabled="!!copyingKey"
+            @click="copyVersion(version)"
+          >
+            <PhCircleNotch v-if="copyingKey === versionKey(version)" class="spin" :size="14" aria-hidden="true" />
+            <PhCheck v-else-if="copiedKey === versionKey(version)" :size="14" aria-hidden="true" />
+            <PhCopy v-else :size="14" aria-hidden="true" />
+          </button>
+        </div>
       </section>
     </div>
 

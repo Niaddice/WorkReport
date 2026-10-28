@@ -13,6 +13,7 @@ import {
   PhCheck,
   PhSparkle,
   PhMicrosoftExcelLogo,
+  PhX,
 } from '@phosphor-icons/vue'
 import { api } from '../lib/workspace'
 import type { FileFormat } from '../lib/workspace'
@@ -74,10 +75,6 @@ const exportMenuOpen = computed(() => activeMenu.value === 'export')
 const exportControl = ref<HTMLElement>()
 const exportButton = ref<HTMLButtonElement>()
 const exportMenu = ref<HTMLElement>()
-/* 总结按钮的确认 popover：先询问，再决定是否调用 AI。 */
-const summaryConfirmOpen = ref(false)
-const summaryControl = ref<HTMLElement>()
-const summaryButton = ref<HTMLButtonElement>()
 const excelBusy = computed(() => props.excelPreparing || props.excelExporting)
 const summaryActionDisabled = computed(
   () => !props.prepared || props.preparing || props.generating || props.outputExporting || excelBusy.value,
@@ -182,33 +179,13 @@ function exportAs(format: FileFormat) {
   closeMenu(true)
   emit('export', format)
 }
-/* —— 总结确认 popover：先询问，再执行 AI 总结或引导配置 —— */
-function openSummaryConfirm() {
+function requestAiSummary() {
   if (summaryActionDisabled.value) return
-  activeMenu.value = null
-  summaryConfirmOpen.value = true
-}
-function closeSummaryConfirm(focus = false) {
-  const wasOpen = summaryConfirmOpen.value
-  summaryConfirmOpen.value = false
-  if (focus && wasOpen) summaryButton.value?.focus()
-}
-function confirmAiSummary() {
-  if (!props.aiAvailable) {
-    confirmConfigureAi()
-    return
-  }
-  if (summaryActionDisabled.value) return
-  summaryConfirmOpen.value = false
+  closeMenu()
   emit('ai')
-}
-function confirmConfigureAi() {
-  summaryConfirmOpen.value = false
-  emit('configureAi')
 }
 function onOutsidePointer(event: PointerEvent) {
   const target = event.target as Node
-  if (summaryConfirmOpen.value && !summaryControl.value?.contains(target)) closeSummaryConfirm()
   if (activeMenu.value && !exportControl.value?.contains(target)) closeMenu()
 }
 onMounted(() => document.addEventListener('pointerdown', onOutsidePointer))
@@ -316,47 +293,28 @@ async function copySummary() {
               </div></Transition
             >
           </div>
-          <div
-            ref="summaryControl"
-            class="summary-export summary-ai-control"
-            @keydown.esc.stop.prevent="closeSummaryConfirm(true)"
+          <button
+            type="button"
+            class="summary-run-button"
+            :disabled="summaryActionDisabled"
+            title="打开 AI 总结窗口"
+            aria-haspopup="dialog"
+            aria-controls="summary-generation-dialog"
+            @click="requestAiSummary"
           >
-            <button
-              ref="summaryButton"
-              type="button"
-              class="summary-run-button"
-              :disabled="summaryActionDisabled"
-              :title="aiAvailable ? '使用默认 AI 生成总结' : '尚未设置默认 AI，点击查看配置提示'"
-              aria-haspopup="dialog"
-              :aria-expanded="summaryConfirmOpen"
-              @click="summaryConfirmOpen ? closeSummaryConfirm() : openSummaryConfirm()"
-            >
-              <PhSparkle :size="14" aria-hidden="true" /><span>总结</span>
-            </button>
-            <Transition name="status-fade">
-              <div
-                v-if="summaryConfirmOpen"
-                class="summary-export-menu summary-confirm-menu"
-                role="dialog"
-                aria-label="确认执行 AI 总结"
-              >
-                <template v-if="aiAvailable">
-                  <p class="summary-confirm-copy">使用默认 AI「{{ provider }}」总结所选 {{ dates.length }} 天日报？</p>
-                  <div class="summary-confirm-actions">
-                    <button type="button" class="summary-confirm-cancel" @click="closeSummaryConfirm()">取消</button>
-                    <button type="button" class="summary-confirm-primary" @click="confirmAiSummary">开始总结</button>
-                  </div>
-                </template>
-                <template v-else>
-                  <p class="summary-confirm-copy">尚未配置 AI 设置，是否前往配置？</p>
-                  <div class="summary-confirm-actions">
-                    <button type="button" class="summary-confirm-cancel" @click="closeSummaryConfirm()">取消</button>
-                    <button type="button" class="summary-confirm-primary" @click="confirmConfigureAi">前往设置</button>
-                  </div>
-                </template>
-              </div>
-            </Transition>
-          </div>
+            <PhSparkle :size="14" aria-hidden="true" /><span>总结</span>
+          </button>
+          <button
+            v-if="!inline"
+            type="button"
+            class="summary-result-icon"
+            data-window-close="default"
+            aria-label="关闭总结"
+            :disabled="outputExporting || excelExporting"
+            @click="emit('close')"
+          >
+            <PhX :size="14" />
+          </button>
         </div>
       </header>
       <div class="summary-result" :aria-busy="generating">
@@ -447,9 +405,14 @@ async function copySummary() {
       </p>
       <p class="excel-confirmation-range">{{ rangeLabel }}</p>
       <div class="dialog-actions">
-        <md-text-button class="dialog-button dialog-button-secondary" @click="cancelExcelConfirmation"
+        <md-text-button
+          class="dialog-button dialog-button-secondary"
+          data-window-close="default"
+          @click="cancelExcelConfirmation"
           >取消</md-text-button
-        ><md-filled-button class="dialog-button dialog-button-primary" @click="confirmExcel">生成预览</md-filled-button>
+        ><md-filled-button class="dialog-button dialog-button-primary" data-window-close @click="confirmExcel"
+          >生成预览</md-filled-button
+        >
       </div>
     </dialog>
   </Teleport>

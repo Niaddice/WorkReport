@@ -585,10 +585,30 @@ describe('resizeLayoutLocally', () => {
     // 左侧日历不变，编辑器与数据概览之间重新分配。
     expect(widths(resized)).toEqual([500, 350, 150])
   })
+
+  it.each(['left', 'right'] as const)('keeps the far module fixed when resizing the %s side of a stack', (side) => {
+    const stack = split('column', 0.5, leaf('editor'), leaf('history'))
+    const layout =
+      side === 'left'
+        ? split('row', 0.3, leaf('calendar'), split('row', 0.6, stack, leaf('overview')))
+        : split('row', 0.7, split('row', 0.4, leaf('calendar'), stack), leaf('overview'))
+    const before = new Map(layoutGeometry(layout, 1000, 1000, 0).slots.map((slot) => [slot.id, slot]))
+    const after = new Map(
+      layoutGeometry(resizeLayoutLocally(layout, [], 0.6), 1000, 1000, 0).slots.map((slot) => [slot.id, slot]),
+    )
+    const far = side === 'left' ? 'overview' : 'calendar'
+    for (const key of ['left', 'top', 'width', 'height'] as const) {
+      expect(after.get(far)![key]).toBeCloseTo(before.get(far)![key], 9)
+    }
+    for (const id of ['editor', 'history'] as const) {
+      expect(after.get(id)!.width).not.toBeCloseTo(before.get(id)!.width)
+      expect(after.get(id)!.height).toBe(before.get(id)!.height)
+    }
+  })
 })
 
 describe('resizeLayoutLocally with a perpendicular ancestor', () => {
-  it('falls back to subtree scaling when the boundary path crosses another direction', () => {
+  it('keeps remote siblings fixed when a parent splits along the other axis', () => {
     const layout: LayoutNode = {
       type: 'split',
       direction: 'column',
@@ -598,12 +618,109 @@ describe('resizeLayoutLocally with a perpendicular ancestor', () => {
         direction: 'row',
         ratio: 0.5,
         first: leaf('calendar'),
-        second: leaf('editor'),
+        second: split('row', 0.5, leaf('editor'), leaf('overview')),
       },
       second: leaf('summary'),
     }
-    expect(resizeLayoutLocally(layout, [0], 0.7)).toEqual(setSplitRatio(layout, [0], 0.7))
+    const metrics = { width: 1000, height: 900, gap: 3.2 }
+    const resized = resizeLayoutLocally(layout, [0], 0.7, metrics)
+    const before = new Map(layoutGeometry(layout, 1000, 900, 3.2).slots.map((slot) => [slot.id, slot]))
+    const after = new Map(layoutGeometry(resized, 1000, 900, 3.2).slots.map((slot) => [slot.id, slot]))
+    for (const id of ['overview', 'summary'] as const) {
+      for (const key of ['left', 'top', 'width', 'height'] as const) {
+        expect(after.get(id)![key]).toBeCloseTo(before.get(id)![key], 9)
+      }
+    }
   })
+})
+
+describe('resizeLayoutLocally at pixel dimensions', () => {
+  const metrics = { width: 1000, height: 900, gap: 3.2 }
+  function rotated(node: LayoutNode): LayoutNode {
+    return node.type === 'leaf'
+      ? node
+      : {
+          ...node,
+          direction: node.direction === 'row' ? 'column' : 'row',
+          first: rotated(node.first),
+          second: rotated(node.second),
+        }
+  }
+  function slots(layout: LayoutNode) {
+    return new Map(
+      layoutGeometry(layout, metrics.width, metrics.height, metrics.gap).slots.map((slot) => [slot.id, slot]),
+    )
+  }
+
+  it.each([
+    ['left', 'row', 0.01],
+    ['left', 'row', 0.99],
+    ['right', 'row', 0.01],
+    ['right', 'row', 0.99],
+    ['left', 'column', 0.01],
+    ['left', 'column', 0.99],
+    ['right', 'column', 0.01],
+    ['right', 'column', 0.99],
+  ] as const)(
+    'keeps non-adjacent modules fixed at the %s edge of a %s stack, requesting %s',
+    (side, direction, ratio) => {
+      const stack = split('column', 0.4, leaf('editor'), leaf('history'))
+      const row =
+        side === 'left'
+          ? split('row', 0.3, leaf('calendar'), split('row', 0.6, stack, leaf('overview')))
+          : split('row', 0.7, split('row', 0.4, leaf('calendar'), stack), leaf('overview'))
+      const layout = direction === 'row' ? row : rotated(row)
+      const before = slots(layout)
+      const resized = resizeLayoutLocally(layout, [], ratio, metrics)
+      const after = slots(resized)
+      expect(after.size).toBe(4)
+      const far = side === 'left' ? 'overview' : 'calendar'
+      for (const key of ['left', 'top', 'width', 'height'] as const) {
+        expect(after.get(far)![key]).toBeCloseTo(before.get(far)![key], 9)
+      }
+      const axis = direction === 'row' ? 'width' : 'height'
+      const cross = direction === 'row' ? 'height' : 'width'
+      for (const id of ['editor', 'history'] as const) {
+        expect(after.get(id)![axis]).not.toBeCloseTo(before.get(id)![axis])
+        expect(after.get(id)![cross]).toBeCloseTo(before.get(id)![cross], 9)
+      }
+      for (const slot of after.values()) {
+        expect(slot[axis]).toBeGreaterThanOrEqual(metrics[axis] * 0.01 - 1e-8)
+        expect(slot.width).toBeGreaterThan(0)
+        expect(slot.height).toBeGreaterThan(0)
+      }
+      expect(normalizeUiPreferences({ layout: resized }).layout).toEqual(resized)
+    },
+  )
+
+  it.each(['row', 'column'] as const)(
+    'only adjusts the touching edges of both nested branches in a %s split',
+    (direction) => {
+      const row = split(
+        'row',
+        0.7,
+        split(
+          'column',
+          0.4,
+          split('row', 0.4, leaf('calendar'), leaf('editor')),
+          split('row', 0.3, leaf('overview'), leaf('history')),
+        ),
+        leaf('summary'),
+      )
+      const layout = direction === 'row' ? row : rotated(row)
+      const before = slots(layout)
+      const after = slots(resizeLayoutLocally(layout, [], 0.6, metrics))
+      for (const id of ['calendar', 'overview'] as const) {
+        for (const key of ['left', 'top', 'width', 'height'] as const) {
+          expect(after.get(id)![key]).toBeCloseTo(before.get(id)![key], 9)
+        }
+      }
+      const axis = direction === 'row' ? 'width' : 'height'
+      for (const id of ['editor', 'history', 'summary'] as const) {
+        expect(after.get(id)![axis]).not.toBeCloseTo(before.get(id)![axis])
+      }
+    },
+  )
 })
 
 describe('resizeLayoutLocally on the real workspace tree', () => {
@@ -635,7 +752,7 @@ describe('resizeLayoutLocally on the real workspace tree', () => {
       },
     }
     const before = layoutGeometry(layout, 1448, 805, 8).slots
-    const resized = resizeLayoutLocally(layout, [], 0.62)
+    const resized = resizeLayoutLocally(layout, [], 0.62, { width: 1448, height: 805, gap: 8 })
     const after = layoutGeometry(resized, 1448, 805, 8).slots
     const byId = (slots: LayoutSlot[]) => new Map(slots.map((slot) => [slot.id, slot]))
     const beforeMap = byId(before)
@@ -643,11 +760,11 @@ describe('resizeLayoutLocally on the real workspace tree', () => {
     // 间隙左右相邻的 Summary/History 变化。
     expect(afterMap.get('summary')!.width).not.toBeCloseTo(beforeMap.get('summary')!.width, 1)
     expect(afterMap.get('history')!.width).not.toBeCloseTo(beforeMap.get('history')!.width, 1)
-    // 其余模块尺寸保持不变，只发生平移。
+    // 其余模块位置和尺寸均保持不变。
     for (const id of ['calendar', 'editor', 'excel'] as const) {
-      // 间隙与像素取整会带来不到 1px 的误差，视觉尺寸保持不变。
-      expect(Math.abs(afterMap.get(id)!.width - beforeMap.get(id)!.width)).toBeLessThan(1.5)
-      expect(Math.abs(afterMap.get(id)!.height - beforeMap.get(id)!.height)).toBeLessThan(1.5)
+      for (const key of ['left', 'top', 'width', 'height'] as const) {
+        expect(afterMap.get(id)![key]).toBeCloseTo(beforeMap.get(id)![key], 9)
+      }
     }
   })
 })

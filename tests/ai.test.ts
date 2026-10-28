@@ -123,6 +123,58 @@ describe('AI preview lifecycle', () => {
     expect(ai.summaryGenerating.value).toBe(false)
     expect(summarize).not.toHaveBeenCalled()
   })
+  it('uses a temporary summary prompt only for the current generation', async () => {
+    const ai = useAi()
+    ai.settings.value.summaryPrompt = '设置中的规则'
+    const summarize = vi.spyOn(aiApi, 'summarize').mockResolvedValue('项目成果')
+    ai.openSummary({ ai: 'reports', direct: 'plain' }, ['20261019'])
+    await ai.generateSummary('本次按项目分类')
+    expect(summarize).toHaveBeenLastCalledWith('reports', expect.any(String), '本次按项目分类')
+    expect(ai.settings.value.summaryPrompt).toBe('设置中的规则')
+    expect(ai.summaryPromptUsed.value).toBe('本次按项目分类')
+    await ai.generateSummary()
+    expect(summarize).toHaveBeenLastCalledWith('reports', expect.any(String))
+    expect(ai.summaryPromptUsed.value).toBe('设置中的规则')
+  })
+  it.each([' ', '字'.repeat(2001)])('rejects an invalid temporary summary prompt before calling AI', async (prompt) => {
+    const ai = useAi()
+    const summarize = vi.spyOn(aiApi, 'summarize')
+    ai.openSummary({ ai: 'reports', direct: 'plain' }, ['20261019'])
+    await ai.generateSummary(prompt)
+    expect(summarize).not.toHaveBeenCalled()
+    expect(ai.summaryError.value).toContain('本次总结提示词')
+  })
+  it('can cancel and retry in the same summary scope while ignoring a late response', async () => {
+    const ai = useAi()
+    let finishOld!: (value: string) => void
+    let finishNew!: (value: string) => void
+    vi.spyOn(aiApi, 'summarize')
+      .mockReturnValueOnce(
+        new Promise((resolve) => {
+          finishOld = resolve
+        }),
+      )
+      .mockReturnValueOnce(
+        new Promise((resolve) => {
+          finishNew = resolve
+        }),
+      )
+    vi.spyOn(aiApi, 'cancel').mockResolvedValue()
+    ai.openSummary({ ai: 'reports', direct: 'plain' }, ['20261019'])
+    const old = ai.generateSummary('原请求')
+    ai.cancelSummary()
+    expect(ai.summaryVisible.value).toBe(true)
+    expect(ai.summaryGenerating.value).toBe(false)
+    const current = ai.generateSummary('重试请求')
+    finishOld('迟到的内容')
+    await old
+    expect(ai.summaryGenerating.value).toBe(true)
+    expect(ai.summaryResult.value).toBe('')
+    finishNew('最新成果')
+    await current
+    expect(ai.summaryResult.value).toBe('最新成果')
+    expect(ai.summaryGenerating.value).toBe(false)
+  })
   it('ignores a late summary after it is cancelled', async () => {
     const ai = useAi()
     let resolve!: (text: string) => void

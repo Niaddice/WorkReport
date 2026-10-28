@@ -44,15 +44,27 @@ onBeforeUnmount(() => motion.dispose())
     <p id="settings-leave-description">设置中有未保存的修改。保存后再{{ target }}，或放弃本次修改。</p>
     <p v-if="error" class="error-text dialog-error" role="alert">{{ error }}</p>
     <div class="dialog-actions">
-      <md-text-button class="dialog-button dialog-button-secondary" :disabled="busy || saving" @click="emit('cancel')"
+      <md-text-button
+        class="dialog-button dialog-button-secondary"
+        data-window-close="default"
+        :disabled="busy || saving"
+        @click="emit('cancel')"
         >继续编辑</md-text-button
       >
-      <md-text-button class="dialog-button dialog-button-secondary" :disabled="busy || saving" @click="emit('discard')"
+      <md-text-button
+        class="dialog-button dialog-button-secondary"
+        data-window-close
+        :disabled="busy || saving"
+        @click="emit('discard')"
         >不保存</md-text-button
       >
-      <md-filled-button class="dialog-button dialog-button-primary" :disabled="busy || saving" @click="emit('save')">{{
-        busy || saving ? '正在保存…' : '保存并继续'
-      }}</md-filled-button>
+      <md-filled-button
+        class="dialog-button dialog-button-primary"
+        data-window-close
+        :disabled="busy || saving"
+        @click="emit('save')"
+        >{{ busy || saving ? '正在保存…' : '保存并继续' }}</md-filled-button
+      >
     </div>
   </dialog>
 </template>

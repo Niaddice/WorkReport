@@ -40,7 +40,7 @@ const moduleButtons = [
   { id: 'editor', label: '日报编辑', icon: PhNotePencil },
   { id: 'overview', label: '数据概览', icon: PhChartLine },
   { id: 'history', label: '历史记录', icon: PhClockCounterClockwise },
-  { id: 'excel', label: 'Excel 周报', icon: PhFileXls },
+  { id: 'excel', label: 'Excel报告', icon: PhFileXls },
   { id: 'summary', label: '总结', icon: PhSparkle },
   { id: 'directory', label: '工作空间目录', icon: PhFolderOpen },
 ] as const

@@ -1,15 +1,14 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import dayjs from 'dayjs'
 import { PhArrowClockwise, PhCircleNotch, PhFileXls, PhFolderOpen, PhMicrosoftExcelLogo } from '@phosphor-icons/vue'
 import ExcelPreviewDialog from '../ExcelPreviewDialog.vue'
 import ExcelExportPreviewDialog from '../ExcelExportPreviewDialog.vue'
-import { reportOverlapsRange, sameWeekRange, type ExcelExportFile } from '../../lib/useExcel'
-import { pushMessage } from '../../lib/messages'
+import { reportOverlapsRange, validExcelDates, type ExcelExportFile } from '../../lib/useExcel'
 import { useModuleContext } from '../../modules/context'
 
 const context = useModuleContext()
-const { journal, ai, excel, actions, summarySelectionDates, excelBlockedReason, disabled } = context
+const { journal, ai, excel, actions, summarySelectionDates, disabled } = context
 const { selectedDate, workspace } = journal
 const { defaultProvider } = ai
 const {
@@ -35,48 +34,48 @@ const {
 const actionError = ref('')
 const directoryOpening = ref(false)
 const previewFilename = ref('')
+const generationOpen = ref(preparing.value)
+const generationDates = ref<string[]>([...summarySelectionDates.value])
+const generationStarting = ref(false)
+const generationEditing = ref(!preparing.value && !preview.value)
+const generationPrompt = ref(excel.previewPrompt.value || settings.value.prompt)
+const generationTemplate = computed(() => settings.value.templatePath.split(/[\\/]/).pop() ?? '')
+const generationDirectory = computed(() => `${(workspace.value?.path ?? '').replace(/[\\/]+$/, '')}/excel`)
+const elapsedSeconds = ref(0)
+let generationRevision = 0
+let progressTimer: ReturnType<typeof setInterval> | undefined
+const generationBusy = computed(() => generationStarting.value || preparing.value)
+watch(
+  generationBusy,
+  (busy) => {
+    clearInterval(progressTimer)
+    if (!busy) return
+    elapsedSeconds.value = 0
+    const started = Date.now()
+    progressTimer = setInterval(() => {
+      elapsedSeconds.value = Math.floor((Date.now() - started) / 1000)
+    }, 1000)
+  },
+  { immediate: true },
+)
 
-/** 有框选范围时输出整个范围，否则输出选中日期所在自然周（周一起）7 天。 */
-const dates = computed(() => {
-  if (context.rangeDates.value.length) return [...context.rangeDates.value].sort()
-  const base = dayjs(selectedDate.value)
-  const start = base.subtract((base.day() + 6) % 7, 'day')
-  return Array.from({ length: 7 }, (_, index) => start.add(index, 'day').format('YYYYMMDD'))
-})
+/** 生成与筛选均使用日历的实际选择，单日不再扩展为整周。 */
+const dates = computed(() =>
+  context.rangeDates.value.length ? [...new Set(context.rangeDates.value)].sort() : [selectedDate.value],
+)
 const scopeLabel = computed(() => rangeLabel(dates.value))
-
-/** 自动筛选出与当前日期范围（自然周或框选）有交集的周报；无法识别日期范围的文件仍保留显示。 */
 const visibleExports = computed(() => {
   const current = dates.value
-  if (!current.length) return exports.value
-  const start = current[0]!
-  const end = current[current.length - 1]!
-  return exports.value.filter((file) => reportOverlapsRange(file.filename, start, end))
+  return exports.value.filter((file) => reportOverlapsRange(file.filename, current[0]!, current[current.length - 1]!))
 })
 const localBlockedReason = computed(() => {
-  if (!sameWeekRange(dates.value)) return '仅支持同一周内的日期范围（周一至周日），包括没有日报的所选日期。'
+  if (!validExcelDates(dates.value)) return '请选择有效的日期或日期范围。'
   if (!defaultProvider.value) return '请先在设置中配置并选择默认 AI。'
   if (!settings.value.enabled) return '请先在设置中启用 Excel 输出。'
-  if (!settings.value.templatePath || !settings.value.prompt.trim() || !settings.value.outputDirectory)
-    return '请先完成 Excel 输出设置。'
+  if (!settings.value.templatePath) return '请先在设置中选择 Excel 模板。'
   return ''
 })
-/** 页面级校验优先，但只有在它针对当前日期范围时才采用，避免显示上一次准备留下的旧结论。 */
-const blockedReason = computed(() => {
-  const selection = summarySelectionDates.value
-  const current = dates.value
-  const sameSelection = selection.length === current.length && selection.every((date, index) => date === current[index])
-  return (sameSelection ? excelBlockedReason.value : '') || localBlockedReason.value
-})
-/** 是否只是配置缺失（可引导去设置），而不是日期范围不合规。 */
-const setupMissing = computed(
-  () =>
-    !defaultProvider.value ||
-    !settings.value.enabled ||
-    !settings.value.templatePath ||
-    !settings.value.prompt.trim() ||
-    !settings.value.outputDirectory,
-)
+const blockedReason = localBlockedReason
 
 function rangeLabel(values: string[]) {
   if (!values.length) return '未选择日期'
@@ -90,30 +89,76 @@ function refreshExports() {
   void loadExports(workspace.value?.path ?? '')
 }
 
-onMounted(refreshExports)
+onBeforeUnmount(() => clearInterval(progressTimer))
 watch(
-  () => [workspace.value?.path ?? '', settings.value.outputDirectory, settings.value.enabled] as const,
-  () => refreshExports(),
+  () => workspace.value?.path,
+  () => {
+    generationOpen.value = false
+  },
 )
+watch([() => workspace.value?.path ?? '', () => settings.value.enabled, dates], () => refreshExports(), {
+  immediate: true,
+})
 watch(result, (value) => {
-  if (value) refreshExports()
+  if (value) {
+    generationOpen.value = false
+    refreshExports()
+  }
 })
 
-function prepare() {
-  if (blockedReason.value) {
-    pushMessage({
-      tone: 'info',
-      text: blockedReason.value,
-      duration: 6000,
-      actions: setupMissing.value ? [{ label: '前往 Excel 设置', run: () => actions.openExcelSettings() }] : [],
-    })
-    return
-  }
-  if (preparing.value || exporting.value) return
+function requestGeneration() {
+  if (generationBusy.value || exporting.value || disabled.value) return
+  if (preview.value) actions.discardExcelPreview()
   actionError.value = ''
-  void Promise.resolve(actions.prepareExcel([...dates.value])).catch((cause: unknown) => {
-    actionError.value = `生成 Excel 预览失败：${String(cause)}`
-  })
+  exportError.value = ''
+  generationDates.value = [...dates.value]
+  generationPrompt.value = settings.value.prompt
+  generationEditing.value = true
+  generationOpen.value = true
+}
+function editGeneration() {
+  if (generationBusy.value || exporting.value) return
+  actions.discardExcelPreview()
+  actionError.value = ''
+  exportError.value = ''
+  generationEditing.value = true
+}
+function configureExcel() {
+  closeGeneration()
+  actions.openExcelSettings()
+}
+async function prepare() {
+  if (
+    generationBusy.value ||
+    exporting.value ||
+    disabled.value ||
+    blockedReason.value ||
+    !generationPrompt.value.trim() ||
+    generationPrompt.value.length > 6000
+  )
+    return
+  const revision = ++generationRevision
+  actionError.value = ''
+  generationOpen.value = true
+  generationStarting.value = true
+  generationEditing.value = false
+  try {
+    await actions.prepareExcel([...generationDates.value], generationPrompt.value)
+  } catch (cause) {
+    if (revision === generationRevision) actionError.value = `生成 Excel 预览失败：${String(cause)}`
+  } finally {
+    if (revision === generationRevision) {
+      generationStarting.value = false
+      if (!preview.value) generationEditing.value = true
+    }
+  }
+}
+function closeGeneration() {
+  if (exporting.value) return
+  generationRevision++
+  generationStarting.value = false
+  generationOpen.value = false
+  actions.discardExcelPreview()
 }
 
 async function openDirectory() {
@@ -145,84 +190,95 @@ function formatSize(value: number) {
 </script>
 
 <template>
-  <div class="excel-module" :aria-busy="preparing || exporting || settingsLoading">
-    <div v-if="preview" class="excel-module-panel">
-      <ExcelPreviewDialog
-        inline
-        :visible="true"
-        :preview="preview"
-        :exporting="exporting"
-        :error="exportError"
-        @close="actions.discardExcelPreview"
-        @confirm="actions.confirmExcel"
-        @regenerate="prepare"
-      />
-    </div>
-    <div v-else class="excel-module-main">
-      <div class="excel-module-header">
-        <p class="excel-module-range">
-          <strong>{{ scopeLabel }}</strong>
-          <span class="excel-module-range-days">{{ dates.length }} 天</span>
-        </p>
-        <div class="excel-module-actions" role="group" aria-label="Excel 周报操作">
-          <button
-            type="button"
-            class="excel-generate-button"
-            :disabled="preparing || exporting || settingsLoading || disabled"
-            :title="blockedReason || '调用默认 AI 生成填充预览'"
-            aria-label="生成 Excel 周报"
-            @click="prepare"
-          >
-            <PhCircleNotch v-if="preparing" class="spin" :size="15" aria-hidden="true" />
-            <PhFileXls v-else :size="15" aria-hidden="true" />
-          </button>
-          <button
-            type="button"
-            class="excel-text-button"
-            :disabled="directoryOpening"
-            aria-label="打开输出目录"
-            title="打开输出目录"
-            @click="openDirectory"
-          >
-            <PhCircleNotch v-if="directoryOpening" class="spin" :size="14" aria-hidden="true" />
-            <PhFolderOpen v-else :size="14" aria-hidden="true" />
-          </button>
-          <button
-            type="button"
-            class="excel-text-button"
-            :disabled="exportsLoading"
-            aria-label="刷新已导出周报"
-            title="刷新已导出周报"
-            @click="refreshExports"
-          >
-            <PhArrowClockwise :size="14" aria-hidden="true" />
-          </button>
-        </div>
-      </div>
-      <p v-if="blockedReason" class="excel-module-hint">{{ blockedReason }}</p>
-      <p v-else-if="preparing" class="excel-module-hint">
-        <PhCircleNotch class="spin" :size="14" aria-hidden="true" />正在调用默认 AI，生成 Excel 填充预览…
+  <div class="excel-module" :aria-busy="generationBusy || exporting || settingsLoading">
+    <div class="excel-module-main">
+      <p class="excel-module-range">
+        <strong>{{ scopeLabel }}</strong>
+        <span class="excel-module-range-days">{{ dates.length }} 天</span>
       </p>
+      <p v-if="blockedReason" class="excel-module-hint">{{ blockedReason }}</p>
       <p v-else-if="exportError || actionError || settingsError" class="excel-module-hint error-text" role="alert">
         {{ exportError || actionError || settingsError }}
       </p>
       <hr class="excel-module-divider" />
-      <section class="excel-exports" aria-label="已导出的周报">
-        <p v-if="exportsLoading" class="excel-exports-state">正在读取已导出周报…</p>
-        <p v-else-if="exportsError" class="excel-exports-state error-text" role="alert">{{ exportsError }}</p>
-        <p v-else-if="!exports.length" class="excel-exports-state">暂无已导出的周报</p>
-        <p v-else-if="!visibleExports.length" class="excel-exports-state">当前选择日期没有对应的周报</p>
-        <ul v-else class="excel-export-list">
-          <li v-for="file in visibleExports" :key="file.path">
-            <button type="button" class="excel-export-item" :title="file.path" @click="previewExport(file)">
-              <PhMicrosoftExcelLogo :size="16" aria-hidden="true" />
-              <span class="excel-export-name">{{ file.filename }}</span>
-              <span class="excel-export-meta">{{ formatModified(file.modified) }} · {{ formatSize(file.size) }}</span>
+      <section class="excel-exports" aria-label="已导出的报告">
+        <div class="excel-exports-header">
+          <h3>已导出</h3>
+          <div class="excel-module-actions" role="group" aria-label="Excel报告操作">
+            <button
+              type="button"
+              class="excel-generate-button"
+              :disabled="generationBusy || exporting || settingsLoading || disabled"
+              :title="blockedReason || '生成 Excel报告'"
+              aria-label="生成 Excel报告"
+              aria-haspopup="dialog"
+              :aria-expanded="generationOpen || !!preview"
+              aria-controls="excel-generation-dialog"
+              @click="requestGeneration"
+            >
+              <PhCircleNotch v-if="generationBusy" class="spin" :size="16" aria-hidden="true" />
+              <PhFileXls v-else :size="16" aria-hidden="true" />
             </button>
-          </li>
-        </ul>
+            <button
+              type="button"
+              class="excel-text-button"
+              :disabled="directoryOpening"
+              aria-label="打开输出目录"
+              title="打开输出目录"
+              @click="openDirectory"
+            >
+              <PhCircleNotch v-if="directoryOpening" class="spin" :size="16" aria-hidden="true" />
+              <PhFolderOpen v-else :size="16" aria-hidden="true" />
+            </button>
+            <button
+              type="button"
+              class="excel-text-button"
+              :disabled="exportsLoading"
+              aria-label="刷新已导出报告"
+              title="刷新已导出报告"
+              @click="refreshExports"
+            >
+              <PhArrowClockwise :size="16" aria-hidden="true" />
+            </button>
+          </div>
+        </div>
+        <div class="excel-exports-content">
+          <p v-if="exportsLoading" class="excel-exports-state">正在读取已导出报告…</p>
+          <p v-else-if="exportsError" class="excel-exports-state error-text" role="alert">{{ exportsError }}</p>
+          <p v-else-if="!exports.length" class="excel-exports-state">暂无已导出的报告</p>
+          <p v-else-if="!visibleExports.length" class="excel-exports-state">当前选择日期没有对应的报告</p>
+          <ul v-else class="excel-export-list">
+            <li v-for="file in visibleExports" :key="file.path">
+              <button type="button" class="excel-export-item" :title="file.path" @click="previewExport(file)">
+                <PhMicrosoftExcelLogo :size="16" aria-hidden="true" />
+                <span class="excel-export-name">{{ file.filename }}</span>
+                <span class="excel-export-meta">{{ formatModified(file.modified) }} · {{ formatSize(file.size) }}</span>
+              </button>
+            </li>
+          </ul>
+        </div>
       </section>
     </div>
+    <ExcelPreviewDialog
+      v-model:prompt="generationPrompt"
+      :configuring="generationEditing"
+      :provider="defaultProvider?.name ?? ''"
+      :template-name="generationTemplate"
+      :output-directory="generationDirectory"
+      :blocked-reason="blockedReason"
+      :visible="generationOpen || !!preview"
+      :preview="preview"
+      :preparing="generationBusy"
+      :elapsed-seconds="elapsedSeconds"
+      :scope-label="rangeLabel(generationDates)"
+      :exporting="exporting"
+      :error="exportError || actionError"
+      @close="closeGeneration"
+      @confirm="actions.confirmExcel"
+      @generate="prepare"
+      @regenerate="editGeneration"
+      @configure="configureExcel"
+    />
     <ExcelExportPreviewDialog
       :visible="!!exportPreview || previewOpening || !!previewOpenError"
       :filename="exportPreview?.filename ?? previewFilename"
