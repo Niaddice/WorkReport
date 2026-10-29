@@ -91,7 +91,7 @@ defineExpose({ validate })
       </button>
     </div>
     <p v-if="!modelValue.repositories.length" class="git-hint">
-      添加项目仓库后，即可在 Git 日报模块中获取当天的工作记录。
+      添加项目仓库后，即可在 Git 日报模块中整理工作记录，或打开 Git 工作台管理变更、分支与远程同步。
     </p>
     <article v-for="(repository, index) in modelValue.repositories" :key="repository.id" class="git-repository-form">
       <div class="git-repositories-heading">
@@ -133,7 +133,7 @@ defineExpose({ validate })
       ></label>
       <div class="git-fields-row">
         <label class="git-field"
-          ><span>作者筛选</span
+          ><span>日报作者筛选</span
           ><input
             :value="repository.author"
             :disabled="formBusy"
@@ -141,7 +141,7 @@ defineExpose({ validate })
             @input="updateRepository(repository.id, { author: ($event.target as HTMLInputElement).value })"
         /></label>
         <label class="git-field"
-          ><span>分支</span
+          ><span>日报分支筛选</span
           ><input
             :value="repository.branch"
             :disabled="formBusy"
@@ -150,7 +150,10 @@ defineExpose({ validate })
         /></label>
       </div>
     </article>
-    <p class="git-hint">按本机时区和提交时间筛选日期。作者按姓名或邮箱包含匹配，不区分大小写。只读取本地已有提交。</p>
+    <p class="git-hint">
+      日报按本机时区和提交时间筛选日期，作者按姓名或邮箱包含匹配，不区分大小写。以上筛选仅用于日报；Git
+      工作台操作仓库当前检出的分支。
+    </p>
     <p class="git-hint">
       保存时会检查仓库实际目录和主要远程地址，相同仓库只能添加一次。支持识别同一远程仓库常见的 SSH / HTTPS 地址写法。
     </p>

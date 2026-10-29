@@ -64,6 +64,8 @@ pub struct RepositoryLog {
 #[serde(rename_all = "camelCase")]
 pub struct DailyLog {
     pub date: String,
+    pub start_date: String,
+    pub end_date: String,
     pub repositories: Vec<RepositoryLog>,
 }
 
@@ -124,6 +126,17 @@ fn day_bounds(date: &str) -> Result<(i64, i64), String> {
     Ok((start.timestamp(), end.timestamp()))
 }
 
+/// The end date is inclusive. Resolve each midnight in local time so ranges
+/// spanning daylight-saving changes do not assume every day has 24 hours.
+fn range_bounds(start_date: &str, end_date: &str) -> Result<(i64, i64), String> {
+    let (start, _) = day_bounds(start_date)?;
+    let (_, end) = day_bounds(end_date)?;
+    if start_date > end_date {
+        return Err("开始日期不能晚于结束日期".into());
+    }
+    Ok((start, end))
+}
+
 async fn read_limited(stream: impl tokio::io::AsyncRead + Unpin) -> Result<Vec<u8>, String> {
     let mut bytes = Vec::new();
     stream
@@ -132,12 +145,12 @@ async fn read_limited(stream: impl tokio::io::AsyncRead + Unpin) -> Result<Vec<u
         .await
         .map_err(|error| format!("读取 Git 输出失败：{error}"))?;
     if bytes.len() as u64 > MAX_OUTPUT {
-        return Err("Git 输出超过 4 MB，请缩小作者或分支范围后重试".into());
+        return Err("Git 输出超过 4 MB，请缩小日期、作者或分支范围后重试".into());
     }
     Ok(bytes)
 }
 
-async fn run(
+pub(super) async fn run(
     settings: &Settings,
     path: &Path,
     args: &[String],
@@ -437,8 +450,16 @@ async fn repository_log(
 }
 
 pub async fn daily_log(settings: Settings, date: String) -> Result<DailyLog, String> {
+    range_log(settings, date.clone(), date).await
+}
+
+pub async fn range_log(
+    settings: Settings,
+    start_date: String,
+    end_date: String,
+) -> Result<DailyLog, String> {
     validate(&settings)?;
-    let (start, end) = day_bounds(&date)?;
+    let (start, end) = range_bounds(&start_date, &end_date)?;
     if settings.repositories.is_empty() {
         return Err("请先在设置 → Git 配置中添加本地仓库".into());
     }
@@ -479,7 +500,12 @@ pub async fn daily_log(settings: Settings, date: String) -> Result<DailyLog, Str
         }
         repositories.push(log);
     }
-    Ok(DailyLog { date, repositories })
+    Ok(DailyLog {
+        date: start_date.clone(),
+        start_date,
+        end_date,
+        repositories,
+    })
 }
 
 #[cfg(test)]
@@ -539,6 +565,74 @@ mod tests {
             "{}",
             String::from_utf8_lossy(&output.stderr)
         );
+    }
+
+    #[tokio::test]
+    async fn ranges_include_both_boundary_days_and_preserve_author_filter_across_year_and_leap_day() {
+        for (first, middle, last) in [
+            ("20261231", "20270101", "20270102"),
+            ("20240228", "20240229", "20240301"),
+        ] {
+            let root = tempfile::tempdir().unwrap();
+            let mut settings = setup(root.path());
+            let (start, end) = range_bounds(first, last).unwrap();
+            commit(root.path(), start - 1, "范围之前", "author@example.test");
+            commit(root.path(), start, "开始日零点", "author@example.test");
+            commit(
+                root.path(),
+                day_bounds(middle).unwrap().0,
+                "中间日期",
+                "author@example.test",
+            );
+            commit(root.path(), end - 1, "结束日最后一秒", "author@example.test");
+            commit(root.path(), end, "范围之后", "author@example.test");
+            // Out-of-order commit times and other authors must retain the same
+            // filtering semantics as the existing single-day report.
+            commit(root.path(), start + 100, "其他作者", "other@example.test");
+            settings.repositories[0].author = "AUTHOR@EXAMPLE.TEST".into();
+            let log = range_log(settings, first.into(), last.into()).await.unwrap();
+            assert_eq!(log.date, first);
+            assert_eq!(log.start_date, first);
+            assert_eq!(log.end_date, last);
+            let repository = &log.repositories[0];
+            assert!(repository.error.is_none(), "{:?}", repository.error);
+            let messages: HashSet<_> = repository.commits.iter()
+                .map(|commit| commit.message.as_str())
+                .collect();
+            assert_eq!(messages, HashSet::from(["开始日零点", "中间日期", "结束日最后一秒"]));
+            let serialized = serde_json::to_value(&log).unwrap();
+            assert_eq!(serialized["startDate"], first);
+            assert_eq!(serialized["endDate"], last);
+        }
+    }
+
+    #[tokio::test]
+    async fn range_with_identical_dates_matches_the_existing_single_day_query() {
+        let root = tempfile::tempdir().unwrap();
+        let settings = setup(root.path());
+        let (start, end) = day_bounds("20261028").unwrap();
+        commit(root.path(), start - 1, "之前", "author@example.test");
+        commit(root.path(), start, "当天工作", "author@example.test");
+        commit(root.path(), end, "之后", "author@example.test");
+        let single = daily_log(settings.clone(), "20261028".into()).await.unwrap();
+        let range = range_log(settings, "20261028".into(), "20261028".into()).await.unwrap();
+        assert_eq!(serde_json::to_value(single).unwrap(), serde_json::to_value(range).unwrap());
+    }
+
+    #[tokio::test]
+    async fn rejects_reversed_and_invalid_ranges_before_reading_repositories() {
+        for (start, end) in [
+            ("20261029", "20261028"),
+            ("20260230", "20260301"),
+            ("20261028", "20261301"),
+            ("2026-10-28", "20261029"),
+            ("20261028", ""),
+            ("20261028", "100000101"),
+        ] {
+            assert!(range_log(Settings::default(), start.into(), end.into()).await.is_err());
+        }
+        assert!(range_bounds("20261029", "20261028").unwrap_err().contains("开始日期"));
+        assert_eq!(range_bounds("20261028", "20261028").unwrap(), day_bounds("20261028").unwrap());
     }
 
     #[tokio::test]

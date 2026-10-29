@@ -65,6 +65,25 @@ pub struct Document {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub backup_warning: Option<String>,
 }
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GitReportAppend {
+    pub date: String,
+    pub content: String,
+}
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitReportAppendFailure {
+    pub date: String,
+    pub error: String,
+}
+#[derive(Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitReportAppendResult {
+    pub documents: Vec<Document>,
+    pub skipped_dates: Vec<String>,
+    pub failed: Vec<GitReportAppendFailure>,
+}
 #[derive(Clone)]
 struct CachedEntry {
     path: PathBuf,
@@ -649,6 +668,77 @@ impl Workspace {
         Ok(self.backup_document(document, was_pending))
     }
 
+    /// Append each day's Git report independently. A failed date is reported
+    /// alongside successful writes, so retrying never duplicates completed days.
+    pub fn append_git_reports(&mut self, reports: Vec<GitReportAppend>) -> Result<GitReportAppendResult, String> {
+        const MAX_REPORT_BYTES: usize = 4 * 1024 * 1024;
+        const MAX_TOTAL_BYTES: usize = 20 * 1024 * 1024;
+        if reports.is_empty() || reports.len() > 370 {
+            return Err("请选择 1 至 370 天的 Git 工作记录".into());
+        }
+        let mut dates = std::collections::HashSet::new();
+        let mut total_bytes = 0usize;
+        // Validate the complete request before opening or modifying any journal.
+        for report in &reports {
+            valid_date(&report.date)?;
+            if !dates.insert(report.date.as_str()) {
+                return Err("追加的 Git 工作记录包含重复日期".into());
+            }
+            if report.content.trim().is_empty() {
+                return Err(format!("{} 的 Git 工作记录为空", report.date));
+            }
+            if report.content.len() > MAX_REPORT_BYTES {
+                return Err(format!("{} 的 Git 工作记录超过 4 MB，请缩小提交范围", report.date));
+            }
+            total_bytes += report.content.len();
+            if total_bytes > MAX_TOTAL_BYTES {
+                return Err("Git 工作记录合计超过 20 MB，请缩小提交范围".into());
+            }
+        }
+        // Listing distinguishes an absent date from an unreadable existing file
+        // and resolves the canonical format before deciding to create anything.
+        let formats: HashMap<_, _> = self.list()?.into_iter()
+            .map(|entry| (entry.date, entry.format))
+            .collect();
+        let mut result = GitReportAppendResult::default();
+        for report in reports {
+            let content = report.content.trim();
+            let saved = (|| {
+                let current = if let Some(format) = formats.get(&report.date) {
+                    self.read(&report.date, *format)?
+                } else {
+                    let created = self.create_with_content(
+                        &report.date, self.database_settings.default_format, content,
+                    )?;
+                    // create_with_content may return an existing journal when
+                    // another editor creates the date after our initial listing.
+                    if created.content.contains(content) {
+                        return Ok(Some(created));
+                    }
+                    created
+                };
+                if current.content.contains(content) {
+                    return Ok(None);
+                }
+                let separator = if current.content.is_empty() || current.content.ends_with("\n\n") {
+                    ""
+                } else if current.content.ends_with('\n') {
+                    "\n"
+                } else {
+                    "\n\n"
+                };
+                let combined = format!("{}{separator}{content}", current.content);
+                self.save(&report.date, current.format, &combined, &current.revision).map(Some)
+            })();
+            match saved {
+                Ok(Some(document)) => result.documents.push(document),
+                Ok(None) => result.skipped_dates.push(report.date),
+                Err(error) => result.failed.push(GitReportAppendFailure { date: report.date, error }),
+            }
+        }
+        Ok(result)
+    }
+
     pub fn switch_format(&mut self, date: &str, from: Format, to: Format, expected_revision: &str) -> Result<Document, String> {
         if self.database_only() {
             let current = self.read(date, from)?;
@@ -1051,6 +1141,99 @@ mod tests {
             .map(|preview| preview.preview)
             .collect()
     }
+    fn git_reports(values: &[(&str, &str)]) -> Vec<GitReportAppend> {
+        values.iter().map(|(date, content)| GitReportAppend {
+            date: (*date).into(), content: (*content).into(),
+        }).collect()
+    }
+
+    #[test]
+    fn git_append_preserves_each_dates_content_format_and_skips_completed_retries() {
+        let (dir, mut workspace) = setup();
+        workspace.create_with_content("20261027", Format::Md, "# 已有会议记录\n").unwrap();
+        workspace.create_with_content("20261028", Format::Txt, "原有工作\n\n").unwrap();
+        let reports = [
+            ("20261027", " 项目一\n1、完成前端 "),
+            ("20261028", "项目二\n1、完成后端"),
+            ("20261029", "项目三\n1、完成测试"),
+        ];
+        let result = workspace.append_git_reports(git_reports(&reports)).unwrap();
+        assert!(result.failed.is_empty());
+        assert!(result.skipped_dates.is_empty());
+        assert_eq!(result.documents.len(), 3);
+        assert_eq!(workspace.read("20261027", Format::Md).unwrap().content,
+            "# 已有会议记录\n\n项目一\n1、完成前端");
+        assert_eq!(workspace.read("20261028", Format::Txt).unwrap().content,
+            "原有工作\n\n项目二\n1、完成后端");
+        assert_eq!(workspace.read("20261029", Format::Txt).unwrap().content,
+            "项目三\n1、完成测试");
+        assert!(!entry_file(&dir, "20261027", Format::Txt).exists());
+        assert!(!entry_file(&dir, "20261029", Format::Md).exists());
+        // Days without commits are never sent and remain absent.
+        assert!(!entry_file(&dir, "20261030", Format::Txt).exists());
+        let retry = workspace.append_git_reports(git_reports(&reports)).unwrap();
+        assert!(retry.documents.is_empty());
+        assert!(retry.failed.is_empty());
+        assert_eq!(retry.skipped_dates, ["20261027", "20261028", "20261029"]);
+        assert_eq!(crate::history::list(dir.path(), Some("20261027")).unwrap().len(), 2);
+    }
+
+    #[test]
+    fn git_append_validates_all_reports_before_any_write() {
+        let (dir, mut workspace) = setup();
+        for invalid in [
+            git_reports(&[("20261027", "有效正文"), ("20260230", "非法日期")]),
+            git_reports(&[("20261027", "有效正文"), ("20261027", "重复日期")]),
+            git_reports(&[("20261027", "有效正文"), ("20261028", "  \n ")]),
+            git_reports(&[("20261027", "有效正文"), ("../outside", "非法路径")]),
+            vec![GitReportAppend { date: "20261027".into(), content: "x".repeat(4 * 1024 * 1024 + 1) }],
+            Vec::new(),
+        ] {
+            assert!(workspace.append_git_reports(invalid).is_err());
+            assert!(workspace.list().unwrap().is_empty());
+            assert!(!dir.path().join("2026").exists());
+        }
+    }
+
+    #[test]
+    fn git_append_reports_unreadable_dates_without_overwriting_or_duplicating_successes() {
+        let (dir, mut workspace) = setup();
+        fs::create_dir(dir.path().join("2026")).unwrap();
+        let broken = entry_file(&dir, "20261027", Format::Md);
+        fs::write(&broken, [0xff, 0xfe]).unwrap();
+        workspace.create_with_content("20261028", Format::Txt, "保留正文").unwrap();
+        let reports = [("20261027", "不能覆盖"), ("20261028", "当天提交")];
+        let result = workspace.append_git_reports(git_reports(&reports)).unwrap();
+        assert_eq!(result.documents.len(), 1);
+        assert_eq!(result.documents[0].date, "20261028");
+        assert_eq!(result.failed.len(), 1);
+        assert_eq!(result.failed[0].date, "20261027");
+        assert!(result.failed[0].error.contains("UTF-8"));
+        assert_eq!(fs::read(&broken).unwrap(), [0xff, 0xfe]);
+        assert_eq!(workspace.read("20261028", Format::Txt).unwrap().content, "保留正文\n\n当天提交");
+        let retry = workspace.append_git_reports(git_reports(&reports)).unwrap();
+        assert!(retry.documents.is_empty());
+        assert_eq!(retry.skipped_dates, ["20261028"]);
+        assert_eq!(retry.failed[0].date, "20261027");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn git_append_rejects_symlink_dates_and_preserves_other_days() {
+        let (dir, mut workspace) = setup();
+        let outside = TempDir::new().unwrap();
+        let target = outside.path().join("private.txt");
+        fs::write(&target, "私人文件").unwrap();
+        fs::create_dir(dir.path().join("2026")).unwrap();
+        std::os::unix::fs::symlink(&target, entry_file(&dir, "20261027", Format::Md)).unwrap();
+        let result = workspace.append_git_reports(git_reports(&[
+            ("20261027", "禁止写入"), ("20261028", "允许写入"),
+        ])).unwrap();
+        assert_eq!(result.failed.len(), 1);
+        assert_eq!(result.failed[0].date, "20261027");
+        assert_eq!(result.documents[0].date, "20261028");
+        assert_eq!(fs::read_to_string(target).unwrap(), "私人文件");
+    }
     #[test]
     fn create_edit_reopen_and_index_both_formats() {
         let (dir, mut workspace) = setup();
@@ -1283,6 +1466,35 @@ mod tests {
         let (settings, connection) = workspace.prepare_database_settings(&proposed).unwrap();
         persist_database_settings(workspace, settings.clone(), connection);
         settings
+    }
+
+    #[test]
+    fn git_append_uses_database_only_and_dual_storage_without_losing_date_formats() {
+        for mode in [Mode::Database, Mode::Dual] {
+            let (dir, mut workspace) = setup();
+            enable_database(&mut workspace, mode);
+            workspace.database_settings.default_format = Format::Md;
+            workspace.create_with_content("20261027", Format::Txt, "原有正文").unwrap();
+            let result = workspace.append_git_reports(git_reports(&[
+                ("20261027", "第一天提交"), ("20261028", "第二天提交"),
+            ])).unwrap();
+            assert!(result.failed.is_empty());
+            assert_eq!(result.documents.len(), 2);
+            assert!(result.documents.iter().all(|document| document.backup_warning.is_none()));
+            assert_eq!(workspace.read("20261027", Format::Txt).unwrap().content, "原有正文\n\n第一天提交");
+            assert_eq!(workspace.read("20261028", Format::Md).unwrap().content, "第二天提交");
+            let database = workspace.connected_database().unwrap();
+            let records = database::run_blocking(|| database.list()).unwrap();
+            assert_eq!(records.len(), 2);
+            assert_eq!(records[0].format, Format::Txt);
+            assert_eq!(records[1].format, Format::Md);
+            if mode == Mode::Database {
+                assert!(!dir.path().join("2026").exists());
+            } else {
+                assert_eq!(fs::read_to_string(entry_file(&dir, "20261027", Format::Txt)).unwrap(), records[0].content);
+                assert_eq!(fs::read_to_string(entry_file(&dir, "20261028", Format::Md)).unwrap(), records[1].content);
+            }
+        }
     }
 
     fn persist_database_settings(workspace: &mut Workspace, settings: DatabaseSettings, connection: Option<Database>) {

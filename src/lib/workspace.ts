@@ -29,6 +29,15 @@ export interface Document {
   revision: string
   backupWarning?: string
 }
+export interface GitReportEntry {
+  date: string
+  content: string
+}
+export interface GitAppendResult {
+  documents: Document[]
+  skippedDates: string[]
+  failed: { date: string; error: string }[]
+}
 export const api = {
   recent: () => invoke<string | null>('recent_workspace'),
   open: (path: string, syncSettingsFrom?: string) =>
@@ -44,6 +53,8 @@ export const api = {
     invoke<Document>('create_entry', { date, format, content }),
   save: (date: string, content: string, expectedRevision: string, format: FileFormat = 'md') =>
     invoke<Document>('save_entry', { date, content, expectedRevision, format }),
+  appendGitReports: (workspacePath: string, reports: GitReportEntry[]) =>
+    invoke<GitAppendResult>('append_git_reports', { workspacePath, reports }),
   switchFormat: (date: string, from: FileFormat, to: FileFormat, expectedRevision: string) =>
     invoke<Document>('switch_entry_format', { date, from, to, expectedRevision }),
   copy: (content: string) => invoke<void>('copy_content', { content }),

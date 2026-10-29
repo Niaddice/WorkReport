@@ -3,49 +3,117 @@ import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import dayjs from 'dayjs'
 import { PhArrowClockwise, PhCopy, PhGearSix, PhGitCommit, PhNotePencil } from '@phosphor-icons/vue'
 import { useModuleContext } from '../../modules/context'
-import { gitDailyReport } from '../../lib/useGit'
+import { gitDailyReport, gitDailyReports, validateGitDateRange } from '../../lib/useGit'
 import { api } from '../../lib/workspace'
+import type { GitReportEntry } from '../../lib/workspace'
 import { pushMessage } from '../../lib/messages'
+import GitWorkbench from '../GitWorkbench.vue'
 
 const { git, journal, actions, disabled, today, rangeDates } = useModuleContext()
 const { settings, reading, readError, result } = git
 const report = ref('')
+const dailyReports = ref<GitReportEntry[]>([])
+const appliedContents = ref<Record<string, string>>({})
 const applying = ref(false)
 const localError = ref('')
-const scope = computed(() => `${journal.workspace.value?.path ?? ''}/${journal.selectedDate.value}`)
-const dateLabel = computed(() => dayjs(journal.selectedDate.value).format('YYYY年M月D日'))
+const view = ref<'daily' | 'workbench'>('daily')
+const workbenchOpened = ref(false)
+const calendarDates = computed(() =>
+  rangeDates.value.length ? [...rangeDates.value].sort() : [journal.selectedDate.value],
+)
+const startDate = computed(() => calendarDates.value[0] ?? '')
+const endDate = computed(() => calendarDates.value.at(-1) ?? '')
+const rangeError = computed(() => validateGitDateRange(startDate.value, endDate.value))
+const singleDay = computed(() => startDate.value === endDate.value)
+const batchMode = computed(() => rangeDates.value.length > 0)
+const selectedDateLabel = computed(() => dayjs(journal.selectedDate.value).format('YYYY年M月D日'))
+const dateLabel = computed(() =>
+  rangeError.value
+    ? '选择日期范围'
+    : singleDay.value
+      ? dayjs(startDate.value).format('YYYY年M月D日')
+      : `${dayjs(startDate.value).format('YYYY年M月D日')} ~ ${dayjs(endDate.value).format('YYYY年M月D日')}`,
+)
+const scope = computed(() =>
+  JSON.stringify([journal.workspace.value?.path, journal.selectedDate.value, calendarDates.value]),
+)
 const total = computed(
   () => result.value?.repositories.reduce((count, repository) => count + repository.commits.length, 0) ?? 0,
 )
 const failed = computed(() => result.value?.repositories.filter((repository) => repository.error).length ?? 0)
 const unavailable = computed(() => disabled.value || git.loading.value || applying.value)
-const singleDay = computed(() => rangeDates.value.length === 0)
-const ready = computed(() => result.value?.date === journal.selectedDate.value && !!report.value.trim())
-const alreadyIncluded = computed(() => !!report.value.trim() && journal.draft.value.includes(report.value.trim()))
+const copyContent = computed(() =>
+  batchMode.value
+    ? dailyReports.value
+        .filter((entry) => entry.content.trim())
+        .map((entry) => `${dayjs(entry.date).format('YYYY-MM-DD')}\n${entry.content.trim()}`)
+        .join('\n\n')
+    : report.value,
+)
+const ready = computed(
+  () =>
+    !rangeError.value &&
+    (result.value?.startDate ?? result.value?.date) === startDate.value &&
+    (result.value?.endDate ?? result.value?.date) === endDate.value &&
+    !!copyContent.value.trim(),
+)
+const canAppend = computed(
+  () => ready.value && (batchMode.value || (singleDay.value && startDate.value === journal.selectedDate.value)),
+)
+const pendingReports = computed(() =>
+  dailyReports.value
+    .map((entry) => ({ date: entry.date, content: entry.content.trim() }))
+    .filter((entry) => entry.content && appliedContents.value[entry.date] !== entry.content),
+)
+const atToday = computed(
+  () =>
+    !rangeDates.value.length &&
+    journal.selectedDate.value === today.value &&
+    startDate.value === today.value &&
+    endDate.value === today.value,
+)
+const alreadyIncluded = computed(() =>
+  batchMode.value
+    ? ready.value && !pendingReports.value.length
+    : !!report.value.trim() && journal.draft.value.includes(report.value.trim()),
+)
 watch(
   scope,
   () => {
     git.clear()
     report.value = ''
+    dailyReports.value = []
+    appliedContents.value = {}
     localError.value = ''
   },
   { flush: 'sync' },
 )
 watch(result, (value) => {
   report.value = value ? gitDailyReport(value) : ''
+  dailyReports.value = value ? gitDailyReports(value, calendarDates.value) : []
+  appliedContents.value = {}
   localError.value = ''
 })
 onBeforeUnmount(() => git.clear())
 
+function openView(value: 'daily' | 'workbench') {
+  view.value = value
+  if (value === 'workbench') workbenchOpened.value = true
+}
+
+async function selectToday() {
+  await actions.selectReport(today.value)
+}
+
 async function read() {
   const path = journal.workspace.value?.path
-  if (!path || unavailable.value || reading.value || !singleDay.value) return
+  if (!path || unavailable.value || reading.value || rangeError.value) return
   localError.value = ''
-  await git.read(path, journal.selectedDate.value)
+  await git.read(path, startDate.value, endDate.value)
 }
 async function copy() {
   try {
-    await api.copy(report.value)
+    await api.copy(copyContent.value)
     pushMessage({ tone: 'success', text: 'Git 日报已复制' })
   } catch (cause) {
     localError.value = `复制失败：${String(cause)}`
@@ -53,12 +121,32 @@ async function copy() {
 }
 async function append() {
   const path = journal.workspace.value?.path
-  if (!path || !ready.value || unavailable.value || !singleDay.value || reading.value) return
+  if (!path || !canAppend.value || unavailable.value || reading.value) return
   const key = scope.value
   const content = report.value
+  const reports = pendingReports.value.map((entry) => ({ ...entry }))
   applying.value = true
   localError.value = ''
   try {
+    if (batchMode.value) {
+      if (!reports.length) return
+      const outcome = await actions.appendGitReports(path, reports)
+      if (scope.value !== key) return
+      if (!outcome) {
+        localError.value = journal.error.value || '追加未完成，请检查日报保存状态后重试。'
+        return
+      }
+      const savedDates = new Set([...outcome.documents.map((document) => document.date), ...outcome.skippedDates])
+      for (const entry of reports) {
+        if (savedDates.has(entry.date)) appliedContents.value[entry.date] = entry.content
+      }
+      if (outcome.failed.length) {
+        localError.value = outcome.failed
+          .map((failure) => `${dayjs(failure.date).format('YYYY-MM-DD')}：${failure.error}`)
+          .join('\n')
+      }
+      return
+    }
     if (
       !(await actions.appendGitReport(path, journal.selectedDate.value, content)) &&
       scope.value === key &&
@@ -78,15 +166,19 @@ async function append() {
   <div class="git-module" :aria-busy="reading">
     <div class="git-toolbar">
       <div class="git-date">
-        <strong>{{ dateLabel }}</strong
-        ><span>本地提交 · {{ settings.repositories.length }} 个仓库</span>
+        <strong>{{ view === 'daily' ? dateLabel : 'Git 工作台' }}</strong
+        ><span
+          >{{ view === 'daily' ? '本地提交' : '变更 · 历史 · 分支 · Stash' }} ·
+          {{ settings.repositories.length }} 个仓库</span
+        >
       </div>
       <div class="git-toolbar-actions">
         <button
+          v-if="view === 'daily'"
           type="button"
           class="text-action"
-          :disabled="unavailable || (journal.selectedDate.value === today && singleDay)"
-          @click="actions.selectReport(today)"
+          :disabled="unavailable || atToday"
+          @click="selectToday"
         >
           今天
         </button>
@@ -101,26 +193,41 @@ async function append() {
           <PhGearSix :size="18" />
         </button>
         <button
+          v-if="view === 'daily'"
           type="button"
           class="git-fetch"
-          :disabled="unavailable || reading || !settings.repositories.length || !singleDay"
+          :disabled="unavailable || reading || !settings.repositories.length || !!rangeError"
           @click="read"
         >
           <PhArrowClockwise :size="16" />{{ reading ? '正在读取…' : '获取提交' }}
         </button>
       </div>
     </div>
-    <div class="git-content">
+    <nav class="git-views" aria-label="Git 功能">
+      <button type="button" :aria-pressed="view === 'daily'" @click="openView('daily')">提交日报</button>
+      <button type="button" :aria-pressed="view === 'workbench'" @click="openView('workbench')">Git 工作台</button>
+    </nav>
+    <GitWorkbench
+      v-if="workbenchOpened"
+      v-show="view === 'workbench'"
+      :workspace-path="journal.workspace.value?.path ?? ''"
+      :repositories="settings.repositories"
+      :disabled="unavailable"
+      :active="view === 'workbench'"
+      @changed="git.clear()"
+    />
+    <div v-show="view === 'daily'" class="git-content">
       <div v-if="!settings.repositories.length" class="git-empty">
         <PhGitCommit :size="36" weight="light" aria-hidden="true" />
         <strong>从提交记录开始今天的日报</strong>
-        <p>关联本地项目仓库，按项目整理当天的工作记录。</p>
+        <p>关联本地项目仓库，按项目整理日历所选日期范围内的工作记录。</p>
         <button type="button" class="text-action" :disabled="unavailable" @click="actions.openGitSettings">
           添加 Git 仓库
         </button>
       </div>
       <template v-else>
-        <p v-if="!singleDay" class="git-notice">Git 日报每次读取一天。请在日历中选择单日，或点击“今天”。</p>
+        <p v-if="rangeError" class="field-error" role="alert">{{ rangeError }}</p>
+        <p class="git-hint">跟随日历选择的日期范围，包含起止两天；未框选时读取当前选中的一天。</p>
         <p v-if="readError || localError || git.error.value" class="field-error" role="alert">
           {{ readError || localError || git.error.value }}
         </p>
@@ -137,13 +244,13 @@ async function append() {
             </div>
             <p v-if="repository.error" class="field-error" role="alert">{{ repository.error }}</p>
             <p v-else-if="!repository.commits.length && !repository.duplicateCommits" class="git-hint">
-              当天没有符合作者和分支筛选条件的提交。
+              所选日期范围内没有符合作者和分支筛选条件的提交。
             </p>
             <p v-if="repository.duplicateCommits" class="git-hint" role="status">
               已跳过 {{ repository.duplicateCommits }} 条与其他来源重复的提交。
             </p>
             <p v-if="repository.truncated" class="git-notice">
-              仅显示前 1000 条提交，请在设置中缩小作者或分支范围后重新获取。
+              仅显示前 1000 条提交，请缩小日期范围，或在设置中缩小作者或分支范围后重新获取。
             </p>
             <ol v-if="repository.commits.length" class="git-commits">
               <li v-for="commit in repository.commits" :key="commit.hash">
@@ -153,7 +260,8 @@ async function append() {
                     ><code>{{ commit.hash.slice(0, 7) }}</code>
                   </summary>
                   <div class="git-commit-meta">
-                    {{ commit.author }} · {{ dayjs(commit.committedAt).format('HH:mm:ss')
+                    {{ commit.author }} ·
+                    {{ dayjs(commit.committedAt).format(singleDay ? 'HH:mm:ss' : 'YYYY-MM-DD HH:mm:ss')
                     }}<span>{{ commit.email }}</span>
                   </div>
                   <pre>{{ commit.message }}</pre>
@@ -162,14 +270,33 @@ async function append() {
             </ol>
           </section>
           <section v-if="total" class="git-report-preview">
-            <label for="git-report-content">日报预览<span>可在追加前修改</span></label>
-            <textarea
-              id="git-report-content"
-              v-model="report"
-              :disabled="applying || reading"
-              aria-label="Git 日报预览"
-              spellcheck="false"
-            />
+            <template v-if="batchMode">
+              <div class="git-preview-heading">分日预览<span>每份内容追加到对应日期的日报</span></div>
+              <div v-for="entry in dailyReports" :key="entry.date" class="git-day-preview">
+                <label :for="`git-report-${entry.date}`">
+                  {{ dayjs(entry.date).format('YYYY年M月D日')
+                  }}<span v-if="appliedContents[entry.date] === entry.content.trim()">已追加</span>
+                </label>
+                <textarea
+                  :id="`git-report-${entry.date}`"
+                  v-model="entry.content"
+                  :disabled="applying || reading || appliedContents[entry.date] === entry.content.trim()"
+                  :aria-label="`Git 日报预览 ${entry.date}`"
+                  spellcheck="false"
+                />
+              </div>
+              <p v-if="!dailyReports.length" class="git-hint">所选日期没有可追加的提交。</p>
+            </template>
+            <template v-else>
+              <label for="git-report-content">日报预览<span>可在追加前修改</span></label>
+              <textarea
+                id="git-report-content"
+                v-model="report"
+                :disabled="applying || reading"
+                aria-label="Git 日报预览"
+                spellcheck="false"
+              />
+            </template>
             <div class="git-report-actions">
               <button type="button" class="text-action" :disabled="!ready || applying || reading" @click="copy">
                 <PhCopy :size="16" />复制
@@ -177,15 +304,28 @@ async function append() {
               <button
                 type="button"
                 class="git-fetch"
-                :disabled="!ready || unavailable || reading || !singleDay || alreadyIncluded || journal.saving.value"
+                :disabled="!canAppend || unavailable || reading || alreadyIncluded || journal.saving.value"
                 @click="append"
               >
                 <PhNotePencil :size="16" />{{
-                  applying ? '正在保存…' : alreadyIncluded ? '已在日报中' : '追加到当日日报'
+                  applying
+                    ? '正在保存…'
+                    : alreadyIncluded
+                      ? batchMode
+                        ? '已追加到对应日报'
+                        : '已在日报中'
+                      : batchMode
+                        ? '追加到对应日报'
+                        : '追加到当日日报'
                 }}
               </button>
             </div>
-            <p class="git-hint">追加到 {{ dateLabel }} 的编辑区，保留已有内容并自动保存，可在编辑区撤销。</p>
+            <p v-if="batchMode" class="git-hint">
+              按提交日期分别追加，保留各日日报已有内容；尚无日报时自动创建，没有提交的日期保持不变。部分失败时可重试未完成日期。
+            </p>
+            <p v-else-if="canAppend" class="git-hint">
+              追加到 {{ selectedDateLabel }} 的编辑区，保留已有内容并自动保存，可在编辑区撤销。
+            </p>
           </section>
         </template>
       </template>
@@ -276,9 +416,33 @@ textarea:focus-visible {
   outline-offset: 2px;
 }
 .git-content {
+  flex: 1;
   min-height: 0;
   overflow: auto;
   padding: 18px 20px;
+}
+.git-views {
+  display: flex;
+  flex-shrink: 0;
+  gap: 4px;
+  padding: 8px 20px;
+  border-bottom: 1px solid #eef2f7;
+}
+.git-views button {
+  padding: 8px 12px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: #667a94;
+  font-size: var(--text-body);
+}
+.git-views button[aria-pressed='true'] {
+  background: #e7f0fe;
+  color: var(--skin-accent);
+  font-weight: 600;
+}
+.git-views button:hover {
+  background: var(--skin-subtle);
 }
 .git-empty {
   display: grid;
@@ -387,14 +551,16 @@ textarea:focus-visible {
   padding-top: 18px;
   border-top: 1px solid #eef2f7;
 }
-.git-report-preview label {
+.git-report-preview label,
+.git-preview-heading {
   display: flex;
   flex-wrap: wrap;
   justify-content: space-between;
   gap: 6px;
   font-size: var(--text-body);
 }
-.git-report-preview label span {
+.git-report-preview label span,
+.git-preview-heading span {
   color: #8190a5;
   font-size: var(--text-small);
 }
@@ -412,6 +578,13 @@ textarea:focus-visible {
   line-height: 1.8;
   resize: vertical;
 }
+.git-day-preview {
+  display: grid;
+  gap: 8px;
+}
+.git-day-preview textarea {
+  min-height: 120px;
+}
 .git-report-actions {
   flex-wrap: wrap;
   justify-content: flex-end;
@@ -421,5 +594,6 @@ textarea:focus-visible {
 }
 .field-error {
   overflow-wrap: anywhere;
+  white-space: pre-line;
 }
 </style>

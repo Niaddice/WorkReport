@@ -19,6 +19,7 @@ import AiSummaryDialog from '../src/components/AiSummaryDialog.vue'
 import { flattenLayout } from '../src/modules/layout'
 import { DEFAULT_DATABASE_SETTINGS } from '../src/lib/database'
 import type { WorkspaceSettings } from '../src/lib/settingsDraft'
+import type { Document } from '../src/lib/workspace'
 
 const DEMO_WORKSPACE = '/tmp/workreport-module-demo'
 
@@ -105,6 +106,119 @@ async function openDemoWorkspace() {
 }
 
 describe('Git journal integration', () => {
+  it('appends each range preview to its own date and refreshes the merged journals without clearing the calendar range', async () => {
+    const first = dayjs().startOf('month').date(10)
+    const middle = first.add(1, 'day')
+    const last = first.add(2, 'day')
+    const firstDate = first.format('YYYYMMDD')
+    const lastDate = last.format('YYYYMMDD')
+    const stored = new Map<string, Document>([
+      [
+        firstDate,
+        {
+          date: firstDate,
+          filename: `${firstDate}.md`,
+          format: 'md',
+          content: '第一天原有会议记录',
+          revision: 'first-v1',
+        },
+      ],
+    ])
+    invoke.mockImplementation(async (command: string, args?: Record<string, unknown>) => {
+      if (command === 'load_git_settings')
+        return {
+          executable: 'git',
+          includeMerges: false,
+          repositories: [{ id: 'repo', name: '日报项目', path: '/tmp/project', author: '', branch: '' }],
+        }
+      if (command === 'list_entries') return [...stored.values()]
+      if (command === 'read_entry') return stored.get(args!.date as string)
+      if (command === 'read_git_daily_log')
+        return {
+          date: firstDate,
+          startDate: firstDate,
+          endDate: lastDate,
+          repositories: [
+            {
+              id: 'repo',
+              name: '日报项目',
+              error: null,
+              truncated: false,
+              commits: [
+                {
+                  hash: 'first-commit',
+                  author: '作者',
+                  email: 'me@example.test',
+                  committedAt: first.hour(12).toISOString(),
+                  message: '第一天完成实现',
+                },
+                {
+                  hash: 'last-commit',
+                  author: '作者',
+                  email: 'me@example.test',
+                  committedAt: last.hour(12).toISOString(),
+                  message: '第三天完成测试',
+                },
+              ],
+            },
+          ],
+        }
+      if (command === 'append_git_reports') {
+        const documents = (args!.reports as { date: string; content: string }[]).map(({ date, content }) => {
+          const existing = stored.get(date)
+          const document: Document = {
+            date,
+            format: existing?.format ?? 'txt',
+            filename: existing?.filename ?? `${date}.txt`,
+            content: existing ? `${existing.content}\n\n${content}` : content,
+            revision: `appended-${date}`,
+          }
+          stored.set(date, document)
+          return document
+        })
+        return { documents, skippedDates: [], failed: [] }
+      }
+      return commandResult(command)
+    })
+    const wrapper = await openDemoWorkspace()
+    try {
+      await wrapper.get('.app-rail [aria-label="Git 日报"]').trigger('click')
+      await flushPromises()
+      const day = (value: ReturnType<typeof dayjs>) =>
+        wrapper.get(`.calendar-panel .day-cell[aria-label^="${value.format('YYYY年M月D日 ')}"]`)
+      await day(first).trigger('pointerdown', { button: 0 })
+      await day(last).trigger('pointerenter')
+      window.dispatchEvent(new Event('pointerup'))
+      await flushPromises()
+      await wrapper.get('.git-toolbar .git-fetch').trigger('click')
+      await flushPromises()
+      await wrapper.get(`[aria-label="Git 日报预览 ${firstDate}"]`).setValue('第一天确认后的工作记录')
+      await wrapper.get(`[aria-label="Git 日报预览 ${lastDate}"]`).setValue('第三天确认后的工作记录')
+      await wrapper.get('.git-report-actions .git-fetch').trigger('click')
+      await flushPromises()
+      expect(invoke).toHaveBeenCalledWith('append_git_reports', {
+        workspacePath: DEMO_WORKSPACE,
+        reports: [
+          { date: firstDate, content: '第一天确认后的工作记录' },
+          { date: lastDate, content: '第三天确认后的工作记录' },
+        ],
+      })
+      expect(stored.get(firstDate)?.content).toBe('第一天原有会议记录\n\n第一天确认后的工作记录')
+      expect(stored.get(firstDate)?.format).toBe('md')
+      expect(stored.get(lastDate)?.content).toBe('第三天确认后的工作记录')
+      expect(stored.has(middle.format('YYYYMMDD'))).toBe(false)
+      const range = wrapper.get('.range-overview')
+      expect(range.get('.range-heading').text()).toBe(`${first.format('M 月 D 日')} – ${last.format('D 日')}`)
+      expect(range.text()).toContain('已选择 3 天 · 2 篇日报')
+      expect(range.text()).toContain('第一天确认后的工作记录')
+      expect(range.text()).toContain('第三天确认后的工作记录')
+      expect(wrapper.get('.git-report-actions .git-fetch').attributes('disabled')).toBeDefined()
+      expect(invoke.mock.calls.filter(([command]) => command === 'append_git_reports')).toHaveLength(1)
+    } finally {
+      wrapper.unmount()
+    }
+  })
+
   it('shows the conflicting repository names and keeps the draft when duplicate identity validation rejects a save', async () => {
     invoke.mockImplementation(async (command: string) => {
       if (command === 'save_workspace_settings')

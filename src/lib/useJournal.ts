@@ -1,5 +1,13 @@
 import { computed, ref } from 'vue'
-import { api, type Document, type Entry, type Workspace, type FileFormat } from './workspace'
+import {
+  api,
+  type Document,
+  type Entry,
+  type Workspace,
+  type FileFormat,
+  type GitAppendResult,
+  type GitReportEntry,
+} from './workspace'
 import { dateKey } from './calendar'
 import { DEFAULT_DATABASE_SETTINGS } from './database'
 
@@ -17,6 +25,7 @@ export function useJournal() {
   const draft = ref('')
   const busy = ref(false)
   const saving = ref(false)
+  const appendingGit = ref(false)
   const error = ref('')
   const backupWarning = ref('')
   const backupRetrying = ref(false)
@@ -202,7 +211,7 @@ export function useJournal() {
   }
 
   function edit(content: string, forceHistory = false) {
-    if (!document.value || content === draft.value) return
+    if (appendingGit.value || !document.value || content === draft.value) return
     const now = Date.now()
     if (forceHistory || now - lastHistoryAt > 800) {
       pushUndo(draft.value)
@@ -213,7 +222,7 @@ export function useJournal() {
   }
 
   function undo(): boolean {
-    if (!document.value || !undoStack.length) return false
+    if (appendingGit.value || !document.value || !undoStack.length) return false
     clearTimeout(timer)
     redoStack.push(draft.value)
     draft.value = undoStack.pop()!
@@ -224,7 +233,7 @@ export function useJournal() {
   }
 
   function redo(): boolean {
-    if (!document.value || !redoStack.length) return false
+    if (appendingGit.value || !document.value || !redoStack.length) return false
     clearTimeout(timer)
     undoStack.push(draft.value)
     if (undoStack.length > HISTORY_LIMIT) undoStack.shift()
@@ -326,6 +335,96 @@ export function useJournal() {
     if (await flush()) await reload(true)
   }
 
+  /** Save the visible draft before appending other dates, keeping navigation locked until views are current. */
+  async function appendGitReports(
+    workspacePath: string,
+    reports: GitReportEntry[],
+    options: { isCurrent?: () => boolean; afterSave?: () => Promise<void> } = {},
+  ): Promise<GitAppendResult | null> {
+    if (busy.value || saving.value || workspace.value?.path !== workspacePath || !reports.length) return null
+    const date = selectedDate.value
+    const current = () =>
+      workspace.value?.path === workspacePath && selectedDate.value === date && (options.isCurrent?.() ?? true)
+    const requested = reports.map((report) => ({ ...report }))
+    busy.value = true
+    appendingGit.value = true
+    try {
+      if (!(await flush()) || !current()) return null
+      const result = await api.appendGitReports(workspacePath, requested)
+      if (!current()) return null
+
+      const acceptDocument = (value: Document) => {
+        if (value.date !== date) return
+        if (draft.value !== value.content) pushUndo(draft.value)
+        applyDocument(value, true)
+        savedAt.value = new Date()
+      }
+      const changedDates = result.documents.map((value) => value.date)
+      for (const value of result.documents) {
+        upsertEntry(value)
+        invalidatePreview(value.date)
+        acceptDocument(value)
+      }
+      const backupWarnings = result.documents.flatMap((value) => (value.backupWarning ? [value.backupWarning] : []))
+      let refreshError = ''
+      try {
+        const nextEntries = await api.list()
+        if (!current()) return null
+        clearPreviews()
+        entries.value = nextEntries
+        // A skipped date may have changed outside the app before the batch.
+        if (result.skippedDates.includes(date)) {
+          const entry = nextEntries.find((entry) => entry.date === date)
+          if (entry) {
+            const value = await api.read(date, entry.format)
+            if (!current()) return null
+            acceptDocument(value)
+          }
+        }
+        const previewDates = [...new Set([...changedDates, ...result.skippedDates])]
+        if (previewDates.length) {
+          try {
+            const nextPreviews = await api.previews(previewDates)
+            if (!current()) return null
+            for (const preview of nextPreviews) previews.value[preview.date] = preview.preview
+          } catch {
+            // Calendar snippets are optional; still refresh the selected journals.
+          }
+        }
+        try {
+          const warning = await api.backupWarning()
+          if (!current()) return null
+          backupWarning.value = warning ?? ''
+        } catch {
+          // Reading backup status cannot change the result of persisted writes.
+        }
+      } catch (cause) {
+        refreshError = `Git 工作记录已处理，但刷新日报失败：${String(cause)}`
+      }
+      if (!current()) return null
+      try {
+        if (options.afterSave) await options.afterSave()
+      } catch (cause) {
+        refreshError = [refreshError, `Git 工作记录已处理，但刷新所选日报失败：${String(cause)}`]
+          .filter(Boolean)
+          .join('\n')
+      }
+      if (!current()) return null
+      if (backupWarnings.length) backupWarning.value = [...new Set(backupWarnings)].join('\n')
+      error.value = [...result.failed.map((failure) => `${failure.date}：${failure.error}`), refreshError]
+        .filter(Boolean)
+        .join('\n')
+      // Refresh errors do not turn successful writes into failed appends.
+      return result
+    } catch (cause) {
+      if (current()) reportError(cause)
+      return null
+    } finally {
+      appendingGit.value = false
+      busy.value = false
+    }
+  }
+
   async function switchFormat(format: FileFormat) {
     if (busy.value || !document.value) return false
     busy.value = true
@@ -386,6 +485,7 @@ export function useJournal() {
     canRedo,
     busy,
     saving,
+    appendingGit,
     error,
     backupWarning,
     backupRetrying,
@@ -401,6 +501,7 @@ export function useJournal() {
     switchFormat,
     reload,
     refresh,
+    appendGitReports,
     loadPreviews,
     reportError,
     dispose,

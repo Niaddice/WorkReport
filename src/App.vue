@@ -16,7 +16,7 @@ import ConfirmDialog from './components/ConfirmDialog.vue'
 import SettingsLeaveDialog from './components/SettingsLeaveDialog.vue'
 import WorkspaceSwitchDialog from './components/WorkspaceSwitchDialog.vue'
 import MessageHost from './components/MessageHost.vue'
-import { api, type Document, type FileFormat } from './lib/workspace'
+import { api, type Document, type FileFormat, type GitAppendResult, type GitReportEntry } from './lib/workspace'
 import { historyShortcut } from './lib/shortcuts'
 import { installContextMenuGuard } from './lib/contextMenus'
 import { useJournal } from './lib/useJournal'
@@ -251,6 +251,7 @@ function closeSkinDialog() {
 }
 /** 目录模块里点单篇表示聚焦这一天：先解除框选，避免总结 / Excel 仍按旧范围统计。 */
 async function selectReport(date: string) {
+  if (journal.appendingGit.value) return
   if (date === selectedDate.value) return
   if (rangeDates.value.length) {
     calendarHandle.value?.clearRange()
@@ -522,7 +523,7 @@ async function finishSettingsExit(save: boolean) {
   }
 }
 async function closeWindow() {
-  if (excelExporting.value) return
+  if (excelExporting.value || journal.appendingGit.value) return
   rangeRevision++
   ai.closeSummary()
   await excel.cancel()
@@ -657,8 +658,8 @@ function clearRange() {
   rangeLoading.value = false
   rangeError.value = ''
 }
-async function loadRange(dates: string[]) {
-  if (excelBusy.value) return
+async function loadRange(dates: string[], duringGitAppend = false) {
+  if (excelBusy.value || (journal.appendingGit.value && !duringGitAppend)) return
   if (!dates.length) {
     clearRange()
     return
@@ -892,6 +893,59 @@ async function appendGitReport(workspacePath: string, date: string, content: str
   if (saved) pushMessage({ tone: 'success', text: 'Git 工作记录已追加到日报并保存' })
   return saved
 }
+async function appendGitReports(workspacePath: string, reports: GitReportEntry[]): Promise<GitAppendResult | null> {
+  if (
+    !reports.length ||
+    busy.value ||
+    saving.value ||
+    settingsLoading.value ||
+    settingsSaving.value ||
+    page.value !== 'home' ||
+    workspace.value?.path !== workspacePath
+  )
+    return null
+  const selectedDates = [...new Set(rangeDates.value.length ? rangeDates.value : [selectedDate.value])].sort()
+  const permittedDates = new Set(selectedDates)
+  if (new Set(reports.map((report) => report.date)).size !== reports.length) return null
+  if (reports.some((report) => !permittedDates.has(report.date) || !report.content.trim())) return null
+  const sourceDate = selectedDate.value
+  const selectionKey = JSON.stringify(selectedDates)
+  const current = () =>
+    workspace.value?.path === workspacePath &&
+    page.value === 'home' &&
+    selectedDate.value === sourceDate &&
+    JSON.stringify([...new Set(rangeDates.value.length ? rangeDates.value : [selectedDate.value])].sort()) ===
+      selectionKey
+  const result = await journal.appendGitReports(workspacePath, reports, {
+    isCurrent: current,
+    afterSave: async () => {
+      if (!current()) return
+      refreshRevision.value++
+      if (rangeDates.value.length) {
+        await loadRange([...selectedDates], true)
+        if (rangeError.value) throw new Error(rangeError.value)
+      }
+    },
+  })
+  if (!result || !current()) return null
+  const saved = result.documents.length
+  const skipped = result.skippedDates.length
+  const failed = result.failed.length
+  if (failed) {
+    pushMessage({
+      tone: 'warning',
+      text: `Git 工作记录已追加 ${saved} 天，跳过 ${skipped} 天，${failed} 天保存失败，可检查对应日期后重试。`,
+    })
+  } else if (saved) {
+    pushMessage({
+      tone: journal.error.value ? 'warning' : 'success',
+      text: `Git 工作记录已分别追加到 ${saved} 天的日报并保存${skipped ? `，跳过 ${skipped} 天已有内容` : ''}。`,
+    })
+  } else {
+    pushMessage({ tone: 'info', text: '所选日报已包含这些 Git 工作记录，已跳过重复追加。' })
+  }
+  return result
+}
 const moduleDisabled = computed(() => page.value !== 'home' || busy.value || requestingAi.value)
 const moduleActions: ModuleActions = {
   selectDate,
@@ -923,6 +977,7 @@ const moduleActions: ModuleActions = {
     void openGitSettings()
   },
   appendGitReport,
+  appendGitReports,
   syncHolidays: (year: number) => {
     void syncHolidays(year)
   },
@@ -1049,6 +1104,7 @@ watch(
 )
 function beforeUnload(event: BeforeUnloadEvent) {
   if (
+    journal.appendingGit.value ||
     dirty.value ||
     saving.value ||
     settingsSaving.value ||
@@ -1099,6 +1155,7 @@ onMounted(async () => {
           return
         }
         if (
+          journal.appendingGit.value ||
           busy.value ||
           picking.value ||
           settingsSaving.value ||

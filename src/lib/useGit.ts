@@ -1,5 +1,7 @@
 import { invoke, isTauri } from '@tauri-apps/api/core'
 import { ref } from 'vue'
+import dayjs from 'dayjs'
+import type { GitReportEntry } from './workspace'
 
 export interface GitRepository {
   id: string
@@ -25,6 +27,8 @@ export interface GitCommit {
 
 export interface GitDailyLog {
   date: string
+  startDate?: string
+  endDate?: string
   repositories: {
     id: string
     name: string
@@ -33,6 +37,13 @@ export interface GitDailyLog {
     error: string | null
     duplicateCommits?: number
   }[]
+}
+
+export function validateGitDateRange(startDate: string, endDate: string): string {
+  const valid = (date: string) => /^\d{8}$/.test(date) && dayjs(date).format('YYYYMMDD') === date
+  if (!valid(startDate) || !valid(endDate)) return '请选择有效的开始日期和结束日期。'
+  if (startDate > endDate) return '开始日期不能晚于结束日期。'
+  return ''
 }
 
 export const DEFAULT_GIT_SETTINGS: GitSettings = { executable: 'git', repositories: [], includeMerges: false }
@@ -75,7 +86,7 @@ export function validateGitSettings(settings: GitSettings): string {
 
 /** Keep the original commit wording in a numbered report suitable for either journal format. */
 export function gitDailyReport(log: GitDailyLog): string {
-  return log.repositories
+  const content = log.repositories
     .filter((repository) => repository.commits.length)
     .map((repository) => {
       const items = repository.commits.map((commit, index) => {
@@ -90,6 +101,38 @@ export function gitDailyReport(log: GitDailyLog): string {
       return `${repository.name}\n${items.join('\n')}`
     })
     .join('\n\n')
+  const startDate = log.startDate ?? log.date
+  const endDate = log.endDate ?? log.date
+  return content && startDate !== endDate
+    ? `Git 工作记录（${dayjs(startDate).format('YYYY-MM-DD')} ~ ${dayjs(endDate).format('YYYY-MM-DD')}）\n\n${content}`
+    : content
+}
+
+/** Split by the same local commit date used when fetching the range. */
+export function gitDailyReports(log: GitDailyLog, dates?: string[]): GitReportEntry[] {
+  const startDate = log.startDate ?? log.date
+  const endDate = log.endDate ?? log.date
+  const allowed = dates ? new Set(dates) : null
+  const days = new Map<string, GitDailyLog['repositories']>()
+  for (const repository of log.repositories) {
+    const commitsByDay = new Map<string, GitCommit[]>()
+    for (const commit of repository.commits) {
+      const date = dayjs(commit.committedAt).format('YYYYMMDD')
+      if (validateGitDateRange(date, date) || date < startDate || date > endDate || (allowed && !allowed.has(date)))
+        continue
+      const commits = commitsByDay.get(date) ?? []
+      commits.push(commit)
+      commitsByDay.set(date, commits)
+    }
+    for (const [date, commits] of commitsByDay) {
+      const repositories = days.get(date) ?? []
+      repositories.push({ ...repository, commits })
+      days.set(date, repositories)
+    }
+  }
+  return [...days]
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([date, repositories]) => ({ date, content: gitDailyReport({ date, repositories }) }))
 }
 
 export function useGit() {
@@ -136,13 +179,19 @@ export function useGit() {
     }
   }
 
-  async function read(workspacePath: string, date: string): Promise<boolean> {
+  async function read(workspacePath: string, date: string, endDate = date): Promise<boolean> {
     clear()
     const revision = readRevision
     reading.value = true
     try {
+      const validationError = validateGitDateRange(date, endDate)
+      if (validationError) throw new Error(validationError)
       if (!isTauri()) throw new Error('请在桌面应用中读取本地 Git 提交。')
-      const value = await invoke<GitDailyLog>('read_git_daily_log', { workspacePath, date })
+      const value = await invoke<GitDailyLog>('read_git_daily_log', {
+        workspacePath,
+        date,
+        ...(endDate !== date ? { endDate } : {}),
+      })
       if (revision !== readRevision) return false
       result.value = value
       return true

@@ -1,6 +1,6 @@
 import { inject, type ComputedRef, type InjectionKey, type Ref } from 'vue'
 import type { Dayjs } from 'dayjs'
-import type { Document, FileFormat } from '../lib/workspace'
+import type { Document, FileFormat, GitAppendResult, GitReportEntry } from '../lib/workspace'
 import type { useJournal } from '../lib/useJournal'
 import type { useAi } from '../lib/ai'
 import type { useHolidays } from '../lib/holidays'
@@ -50,6 +50,7 @@ export interface ModuleActions {
   openHolidaySettings(): void
   openGitSettings(): void
   appendGitReport(workspacePath: string, date: string, content: string): Promise<boolean>
+  appendGitReports(workspacePath: string, reports: GitReportEntry[]): Promise<GitAppendResult | null>
   syncHolidays(year: number): void
 }
 

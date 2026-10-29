@@ -3,6 +3,7 @@ mod appearance;
 mod database;
 mod excel;
 mod git;
+mod git_client;
 mod history;
 mod holidays;
 mod report_export;
@@ -220,6 +221,26 @@ async fn create_entry(
 ) -> Result<Document, String> {
     run_workspace(state.0.clone(), move |workspace| {
         workspace.create_with_content(&date, format, &content)
+    }).await
+}
+
+fn append_git_reports_at(
+    workspace: &mut Workspace,
+    workspace_path: &str,
+    reports: Vec<workspace::GitReportAppend>,
+) -> Result<workspace::GitReportAppendResult, String> {
+    summary::validate_workspace(workspace.root(), workspace_path)?;
+    workspace.append_git_reports(reports)
+}
+
+#[tauri::command]
+async fn append_git_reports(
+    state: State<'_, AppState>,
+    workspace_path: String,
+    reports: Vec<workspace::GitReportAppend>,
+) -> Result<workspace::GitReportAppendResult, String> {
+    run_workspace(state.0.clone(), move |workspace| {
+        append_git_reports_at(workspace, &workspace_path, reports)
     }).await
 }
 
@@ -463,7 +484,7 @@ async fn load_git_settings(state: State<'_, AppState>) -> Result<git::Settings, 
 }
 
 #[tauri::command]
-async fn read_git_daily_log(state: State<'_, AppState>, workspace_path: String, date: String) -> Result<git::DailyLog, String> {
+async fn read_git_daily_log(state: State<'_, AppState>, workspace_path: String, date: String, end_date: Option<String>) -> Result<git::DailyLog, String> {
     let source_path = workspace_path.clone();
     let configuration = run_optional_workspace(state.0.clone(), move |workspace| {
         let workspace = workspace.ok_or("请先选择工作空间")?;
@@ -471,7 +492,11 @@ async fn read_git_daily_log(state: State<'_, AppState>, workspace_path: String, 
         Ok(settings::load(&workspace.root().join(settings::FILE_NAME))?.unwrap_or_default().git)
     }).await?;
     // Release the workspace lock before spawning Git, so editing and switching stay responsive.
-    let result = git::daily_log(configuration.clone(), date).await?;
+    let result = if let Some(end_date) = end_date {
+        git::range_log(configuration.clone(), date, end_date).await?
+    } else {
+        git::daily_log(configuration.clone(), date).await?
+    };
     run_optional_workspace(state.0.clone(), move |workspace| {
         let workspace = workspace.ok_or("请先选择工作空间")?;
         summary::validate_workspace(workspace.root(), &workspace_path)?;
@@ -479,6 +504,54 @@ async fn read_git_daily_log(state: State<'_, AppState>, workspace_path: String, 
         if current != configuration { return Err("Git 配置已修改，请重新获取提交".into()); }
         Ok(result)
     }).await
+}
+
+async fn git_configuration(state: Arc<Mutex<Option<Workspace>>>, workspace_path: String) -> Result<git::Settings, String> {
+    run_optional_workspace(state, move |workspace| {
+        let workspace = workspace.ok_or("请先选择工作空间")?;
+        summary::validate_workspace(workspace.root(), &workspace_path)?;
+        Ok(settings::load(&workspace.root().join(settings::FILE_NAME))?.unwrap_or_default().git)
+    }).await
+}
+
+async fn validate_git_configuration(state: Arc<Mutex<Option<Workspace>>>, workspace_path: String, configuration: git::Settings) -> Result<(), String> {
+    if git_configuration(state, workspace_path).await? != configuration {
+        return Err("Git 配置已修改，请刷新后重试".into());
+    }
+    Ok(())
+}
+
+#[tauri::command]
+async fn read_git_repository(state: State<'_, AppState>, workspace_path: String, repository_id: String) -> Result<git_client::Repository, String> {
+    let configuration = git_configuration(state.0.clone(), workspace_path.clone()).await?;
+    let result = git_client::repository(&configuration, &repository_id).await?;
+    validate_git_configuration(state.0.clone(), workspace_path, configuration).await?;
+    Ok(result)
+}
+
+#[tauri::command]
+async fn read_git_history(state: State<'_, AppState>, workspace_path: String, repository_id: String, query: String, reference: String, skip: usize) -> Result<git_client::History, String> {
+    let configuration = git_configuration(state.0.clone(), workspace_path.clone()).await?;
+    let result = git_client::history(&configuration, &repository_id, &query, &reference, skip).await?;
+    validate_git_configuration(state.0.clone(), workspace_path, configuration).await?;
+    Ok(result)
+}
+
+#[tauri::command]
+async fn read_git_diff(state: State<'_, AppState>, workspace_path: String, repository_id: String, path: String, staged: bool, commit: String) -> Result<git_client::Diff, String> {
+    let configuration = git_configuration(state.0.clone(), workspace_path.clone()).await?;
+    let result = git_client::diff(&configuration, &repository_id, &path, staged, &commit).await?;
+    validate_git_configuration(state.0.clone(), workspace_path, configuration).await?;
+    Ok(result)
+}
+
+#[tauri::command]
+async fn git_repository_action(state: State<'_, AppState>, workspace_path: String, repository_id: String, request: git_client::Action) -> Result<String, String> {
+    let configuration = git_configuration(state.0.clone(), workspace_path.clone()).await?;
+    let _guard = git_client::repository_lock(&configuration, &repository_id).await?;
+    // Revalidate after waiting for another operation: never act on a stale workspace.
+    validate_git_configuration(state.0.clone(), workspace_path, configuration.clone()).await?;
+    git_client::action(&configuration, &repository_id, request).await
 }
 
 #[tauri::command]
@@ -977,6 +1050,7 @@ pub fn run() {
             list_previews,
             read_entry,
             create_entry,
+            append_git_reports,
             save_entry,
             list_entry_history,
             read_entry_history,
@@ -990,6 +1064,10 @@ pub fn run() {
             load_excel_settings,
             load_git_settings,
             read_git_daily_log,
+            read_git_repository,
+            read_git_history,
+            read_git_diff,
+            git_repository_action,
             load_ui_preferences,
             save_ui_preferences,
             save_workspace_settings,
@@ -1014,6 +1092,26 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("无法启动 WorkReport");
+}
+
+#[cfg(test)]
+mod git_append_command_tests {
+    use super::*;
+
+    #[test]
+    fn git_append_rejects_a_switched_workspace_before_writing_any_date() {
+        let original = tempfile::tempdir().unwrap();
+        let target = tempfile::tempdir().unwrap();
+        let mut workspace = Workspace::open(target.path().to_str().unwrap()).unwrap();
+        let reports = vec![workspace::GitReportAppend {
+            date: "20261028".into(), content: "不能追加到另一个工作空间".into(),
+        }];
+        assert!(append_git_reports_at(
+            &mut workspace, original.path().to_str().unwrap(), reports,
+        ).is_err());
+        assert!(workspace.list().unwrap().is_empty());
+        assert!(!target.path().join("2026").exists());
+    }
 }
 
 #[cfg(test)]
