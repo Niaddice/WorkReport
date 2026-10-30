@@ -42,12 +42,20 @@ elif tool == 'npm':
             app.mkdir(parents=True, exist_ok=True)
             (app / 'Info.plist').write_bytes(plistlib.dumps({'CFBundleShortVersionString': version}))
             (app / 'fake-binary').write_text('local build fixture')
+            archive = bundle / 'macos/WorkReport.app.tar.gz'
+            archive.write_text('local signed update fixture')
+            archive.with_name(archive.name + '.sig').write_text('fixture-update-signature')
         else:
             files = ['deb/WorkReport_' + version + '_arm64.deb', 'appimage/WorkReport_' + version + '_arm64.AppImage'] if platform == 'Linux' else ['msi/WorkReport_' + version + '_x64.msi', 'nsis/WorkReport_' + version + '_setup.exe']
             for file in files:
                 path = bundle / file
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_text('local build fixture')
+                if path.suffix in ('.AppImage', '.msi', '.exe'):
+                    path.with_name(path.name + '.sig').write_text('fixture-update-signature')
+        if os.environ.get('RELEASE_TEST_MISSING_SIGNATURE'):
+            for signature in bundle.rglob('*.sig'):
+                signature.unlink()
 elif tool in ('cargo', 'rustc'):
     pass
 elif tool == 'codesign':
@@ -106,11 +114,13 @@ class ReleaseTest(unittest.TestCase):
         self.base = Path(self.temp.name)
         self.project = self.base / 'project with spaces'
         self.project.mkdir()
-        for file in ('release.sh', '.gitignore', 'package.json', 'package-lock.json', 'src-tauri/tauri.conf.json', 'src-tauri/Cargo.toml', 'src-tauri/Cargo.lock'):
+        for file in ('release.sh', '.gitignore', 'package.json', 'package-lock.json', 'src-tauri/tauri.conf.json', 'src-tauri/Cargo.toml', 'src-tauri/Cargo.lock', 'scripts/updater-manifest.mjs'):
             dest = self.project / file
             dest.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(ROOT / file, dest)
         (self.project / 'README.md').write_text('local project readme\n')
+        (self.project / '.updater').mkdir()
+        (self.project / '.updater/workreport.key').write_text('fixture-private-key-not-for-real-signing')
         self.remote = self.base / 'remote.git'
         self.real_git('init', '--bare', '--initial-branch=main', str(self.remote))
         seed = self.base / 'seed'
@@ -275,6 +285,39 @@ class ReleaseTest(unittest.TestCase):
         assets = self.state()['v0.11.0']['assets']
         self.assertTrue(any(a.endswith('.exe') for a in assets))
         self.assertTrue(any(a.endswith('.msi') for a in assets))
+
+    def test_update_manifest_matches_signed_artifact_and_custom_notes(self):
+        notes = self.base / 'notes.md'
+        notes.write_text('更新说明\n\n- 修复日报保存\n')
+        self.run_release('0.14.0', '--notes-file', str(notes))
+        assets = self.state()['v0.14.0']['assets']
+        manifest_file = next(Path(a) for a in assets if a.endswith('/latest.json'))
+        manifest = json.loads(manifest_file.read_text())
+        self.assertEqual(manifest['version'], '0.14.0')
+        self.assertEqual(manifest['notes'], notes.read_text())
+        target = manifest['platforms']['linux-aarch64']
+        self.assertEqual(target['signature'], 'fixture-update-signature')
+        artifact = next(Path(a) for a in assets if a.endswith('.AppImage'))
+        self.assertTrue(target['url'].endswith('/v0.14.0/' + artifact.name))
+        checksums = (manifest_file.parent / 'SHA256SUMS').read_text()
+        self.assertIn('latest.json', checksums)
+        self.assertIn('.AppImage.sig', checksums)
+        tracked = self.real_git('-C', str(self.project), 'ls-files')
+        self.assertNotIn('.updater/', tracked)
+
+    def test_missing_update_signature_never_pushes_or_publishes(self):
+        output = self.run_release('0.15.0', success=False, RELEASE_TEST_MISSING_SIGNATURE='1')
+        self.assertIn('缺少更新签名', output)
+        self.assertEqual(self.state(), {})
+        self.assertFalse(any(call[0] == 'git' and 'push' in call for call in self.calls()))
+
+    def test_missing_signing_key_fails_before_version_changes(self):
+        (self.project / '.updater/workreport.key').unlink()
+        before = (self.project / 'package.json').read_text()
+        output = self.run_release('0.16.0', success=False, TAURI_SIGNING_PRIVATE_KEY='')
+        self.assertIn('缺少更新签名私钥', output)
+        self.assertEqual((self.project / 'package.json').read_text(), before)
+        self.assertEqual(self.calls(), [['uname', '-s']])
 
 
 if __name__ == '__main__':

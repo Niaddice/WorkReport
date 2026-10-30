@@ -10,6 +10,7 @@ mod report_export;
 mod settings;
 mod summary;
 mod ui;
+mod updates;
 mod workspace;
 
 use std::{fs, io::Write, sync::{Arc, Mutex}};
@@ -19,6 +20,8 @@ use workspace::{Document, Entry, FileNode, Format, Preview, Workspace, Workspace
 
 #[derive(Default)]
 struct AppState(Arc<Mutex<Option<Workspace>>>);
+#[derive(Default)]
+struct GitCommitRuntime(ai::Runtime);
 
 fn with_workspace<T>(
     state: &State<'_, AppState>,
@@ -294,6 +297,11 @@ fn copy_content(app: tauri::AppHandle, content: String) -> Result<(), String> {
         .map_err(|_| "无法写入剪贴板".into())
 }
 #[tauri::command]
+fn read_clipboard_text(app: tauri::AppHandle) -> Result<String, String> {
+    use tauri_plugin_clipboard_manager::ClipboardExt;
+    app.clipboard().read_text().map_err(|_| "无法读取剪贴板中的文本".into())
+}
+#[tauri::command]
 async fn load_ai_settings(app: tauri::AppHandle, state: State<'_, AppState>) -> Result<ai::Settings, String> {
     run_optional_workspace(state.0.clone(), move |workspace| {
         if let Some(workspace) = workspace {
@@ -467,7 +475,7 @@ async fn save_workspace_settings(
         let workspace = workspace.ok_or("请先选择工作空间")?;
         summary::validate_workspace(workspace.root(), &expected_path)?;
         let current = settings::load(&workspace.root().join(settings::FILE_NAME))?.unwrap_or_default();
-        Ok(current.git != git_settings)
+        Ok(current.git.executable != git_settings.executable || current.git.repositories != git_settings.repositories)
     }).await?;
     if changed_git { git::validate_repositories(&settings.git).await?; }
     run_workspace(state.0.clone(), move |workspace| {
@@ -552,6 +560,39 @@ async fn git_repository_action(state: State<'_, AppState>, workspace_path: Strin
     // Revalidate after waiting for another operation: never act on a stale workspace.
     validate_git_configuration(state.0.clone(), workspace_path, configuration.clone()).await?;
     git_client::action(&configuration, &repository_id, request).await
+}
+
+#[tauri::command]
+fn cancel_git_commit_message(runtime: State<'_, GitCommitRuntime>, request_id: String) {
+    runtime.0.cancel(&request_id);
+}
+
+#[tauri::command]
+async fn generate_git_commit_message(
+    state: State<'_, AppState>, runtime: State<'_, GitCommitRuntime>,
+    workspace_path: String, repository_id: String, request_id: String,
+) -> Result<String, String> {
+    let token = runtime.0.begin(request_id.clone())?;
+    let result = async {
+        let path = workspace_path.clone();
+        let (configuration, provider) = run_optional_workspace(state.0.clone(), move |workspace| {
+            let workspace = workspace.ok_or("请先选择工作空间")?;
+            summary::validate_workspace(workspace.root(), &path)?;
+            let stored = settings::load(&workspace.root().join(settings::FILE_NAME))?.unwrap_or_default();
+            let provider = ai::default_provider(&stored.ai)?;
+            Ok((stored.git, provider))
+        }).await?;
+        let source = git_client::commit_source(&configuration, &repository_id).await?;
+        validate_git_configuration(state.0.clone(), workspace_path.clone(), configuration.clone()).await?;
+        let message = ai::git_commit_message(&provider, &source.content, &configuration.commit_prompt, token.clone()).await?;
+        if token.is_cancelled() { return Err("已取消生成 Git 提交说明".into()); }
+        validate_git_configuration(state.0.clone(), workspace_path, configuration.clone()).await?;
+        let current = git_client::commit_source(&configuration, &repository_id).await?;
+        if source.revision != current.revision { return Err("暂存区或分支已变化，请重新生成提交说明".into()); }
+        Ok(message)
+    }.await;
+    runtime.0.finish(&request_id);
+    result
 }
 
 #[tauri::command]
@@ -1033,13 +1074,18 @@ pub fn run() {
             let _ = app.emit("history-action", action);
         })
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_clipboard_manager::init())
         .manage(ai::Runtime::default())
+        .manage(GitCommitRuntime::default())
         .manage(excel::Runtime::default())
         .manage(holidays::Runtime::default())
         .manage(AppState::default())
         .invoke_handler(tauri::generate_handler![
+            updates::has_published_update,
+            updates::open_update_download,
             recent_workspace,
             load_holiday_data,
             sync_holiday_year,
@@ -1056,6 +1102,7 @@ pub fn run() {
             read_entry_history,
             switch_entry_format,
             copy_content,
+            read_clipboard_text,
             load_ai_settings,
             load_appearance_settings,
             load_summary_settings,
@@ -1068,6 +1115,8 @@ pub fn run() {
             read_git_history,
             read_git_diff,
             git_repository_action,
+            generate_git_commit_message,
+            cancel_git_commit_message,
             load_ui_preferences,
             save_ui_preferences,
             save_workspace_settings,

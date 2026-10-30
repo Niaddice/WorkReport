@@ -101,6 +101,8 @@ export function useGitWorkbench(scope: () => GitWorkbenchScope) {
   const busy = ref(false)
   const error = ref('')
   const notice = ref('')
+  const generatingMessage = ref(false)
+  let messageRequestId = ''
   let scopeRevision = 0
   let repositoryRevision = 0
   let historyRevision = 0
@@ -125,6 +127,7 @@ export function useGitWorkbench(scope: () => GitWorkbenchScope) {
   }
 
   function clear() {
+    cancelCommitMessage()
     scopeRevision++
     repositoryRevision++
     historyRevision++
@@ -139,6 +142,38 @@ export function useGitWorkbench(scope: () => GitWorkbenchScope) {
     busy.value = false
     error.value = ''
     notice.value = ''
+  }
+
+  function cancelCommitMessage() {
+    const id = messageRequestId
+    messageRequestId = ''
+    generatingMessage.value = false
+    if (id && isTauri()) void invoke('cancel_git_commit_message', { requestId: id }).catch(() => {})
+  }
+
+  async function generateCommitMessage(): Promise<string | null> {
+    if (generatingMessage.value || busy.value || loading.value) return null
+    const target = context()
+    const id = crypto.randomUUID()
+    messageRequestId = id
+    generatingMessage.value = true
+    error.value = ''
+    notice.value = ''
+    try {
+      assertDesktop(target.value)
+      const message = await invoke<string>('generate_git_commit_message', { ...target.value, requestId: id })
+      if (!target.valid() || messageRequestId !== id) return null
+      if (!message?.trim()) throw new Error('AI 未返回提交说明，请重试。')
+      return message.trim()
+    } catch (cause) {
+      if (target.valid() && messageRequestId === id) error.value = `生成提交说明失败：${String(cause)}`
+      return null
+    } finally {
+      if (messageRequestId === id) {
+        messageRequestId = ''
+        generatingMessage.value = false
+      }
+    }
   }
 
   async function refresh(): Promise<boolean> {
@@ -209,7 +244,7 @@ export function useGitWorkbench(scope: () => GitWorkbenchScope) {
   }
 
   async function runAction(request: Partial<GitActionRequest> & { operation: GitOperation }): Promise<boolean> {
-    if (busy.value || loading.value) return false
+    if (busy.value || loading.value || generatingMessage.value) return false
     const target = context()
     const revision = ++actionRevision
     const valid = () => target.valid() && revision === actionRevision
@@ -254,6 +289,9 @@ export function useGitWorkbench(scope: () => GitWorkbenchScope) {
     busy,
     error,
     notice,
+    generatingMessage,
+    generateCommitMessage,
+    cancelCommitMessage,
     refresh,
     loadHistory,
     showDiff,

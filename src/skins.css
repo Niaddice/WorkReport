@@ -1,0 +1,180 @@
+/* 每套皮肤共享语义色，组件只引用变量；未识别的皮肤沿用默认配色。 */
+:root {
+  color-scheme: light;
+  --skin-canvas: #f8fafd;
+  --skin-surface: #ffffff;
+  --skin-subtle: #f0f4fa;
+  --skin-subtle-strong: #e3eaf4;
+  --skin-text: #2b3a52;
+  --skin-text-body: #49566a;
+  --skin-text-secondary: #6b7f99;
+  --skin-text-muted: #5e6e83;
+  --skin-text-faint: #9aa6b7;
+  --skin-accent: #0b57d0;
+  --skin-accent-strong: #0842a0;
+  --skin-accent-fill: var(--skin-accent);
+  --skin-accent-fill-hover: var(--skin-accent-strong);
+  --skin-on-accent: #ffffff;
+  --skin-accent-soft: #eaf2fe;
+  --skin-accent-container: #d3e3fd;
+  --skin-accent-border: #bfd0e7;
+  --skin-border: #e3e9f1;
+  --skin-outline: #c4c7c5;
+  --skin-success: #397453;
+  --skin-success-soft: #edf5f0;
+  --skin-success-solid: #247750;
+  --skin-success-solid-hover: #1a6040;
+  --skin-on-solid: #ffffff;
+  --skin-danger: #b34232;
+  --skin-danger-soft: #fbece9;
+  --skin-danger-border: #e9b7ae;
+  --skin-warning: #997023;
+  --skin-warning-soft: #fff8e9;
+  --skin-warning-border: #f0dfb8;
+  --skin-scrollbar: #b8c5d7;
+  --skin-scrollbar-hover: #8fa4c1;
+}
+
+:root[data-skin='jade'],
+:root[data-skin='apricot'],
+:root[data-skin='wisteria'],
+:root[data-skin='midnight'],
+:root[data-skin='graphite'] {
+  --skin-text-body: color-mix(in srgb, var(--skin-text) 88%, var(--skin-surface));
+  --skin-text-secondary: color-mix(in srgb, var(--skin-text) 76%, var(--skin-surface));
+  --skin-text-muted: color-mix(in srgb, var(--skin-text) 74%, var(--skin-surface));
+  --skin-text-faint: color-mix(in srgb, var(--skin-text) 52%, var(--skin-surface));
+  --skin-subtle-strong: color-mix(in srgb, var(--skin-text) 10%, var(--skin-subtle));
+  --skin-accent-strong: color-mix(in srgb, var(--skin-accent) 82%, var(--skin-text));
+  --skin-accent-soft: color-mix(in srgb, var(--skin-accent) 8%, var(--skin-surface));
+  --skin-accent-container: color-mix(in srgb, var(--skin-accent) 16%, var(--skin-surface));
+  --skin-accent-border: color-mix(in srgb, var(--skin-accent) 32%, var(--skin-surface));
+  --skin-border: color-mix(in srgb, var(--skin-text) 13%, var(--skin-surface));
+  --skin-outline: color-mix(in srgb, var(--skin-text) 34%, var(--skin-surface));
+  --skin-scrollbar: color-mix(in srgb, var(--skin-text) 28%, var(--skin-surface));
+  --skin-scrollbar-hover: color-mix(in srgb, var(--skin-text) 44%, var(--skin-surface));
+}
+
+:root[data-skin='jade'] {
+  --skin-canvas: #f2f8f5;
+  --skin-surface: #fcfffd;
+  --skin-subtle: #eaf2ed;
+  --skin-text: #273f35;
+  --skin-accent: #21745b;
+}
+
+:root[data-skin='apricot'] {
+  --skin-canvas: #fbf6ee;
+  --skin-surface: #fffdf8;
+  --skin-subtle: #f5ecdf;
+  --skin-text: #4a3b2b;
+  --skin-accent: #956019;
+}
+
+:root[data-skin='wisteria'] {
+  --skin-canvas: #f6f4fb;
+  --skin-surface: #fefcff;
+  --skin-subtle: #eeeaf6;
+  --skin-text: #3e3450;
+  --skin-accent: #7353a6;
+}
+
+:root[data-skin='midnight'],
+:root[data-skin='graphite'] {
+  color-scheme: dark;
+  --skin-success: #9cceaf;
+  --skin-success-soft: #253c33;
+  --skin-danger: #f0aaa0;
+  --skin-danger-soft: #432e32;
+  --skin-danger-border: #78504f;
+  --skin-warning: #e7c18a;
+  --skin-warning-soft: #3e3527;
+  --skin-warning-border: #786346;
+}
+
+:root[data-skin='midnight'] {
+  --skin-canvas: #111827;
+  --skin-surface: #1b2536;
+  --skin-subtle: #222f43;
+  --skin-text: #e3ecfa;
+  --skin-accent: #a6c8ff;
+  --skin-on-accent: #152c4b;
+}
+
+:root[data-skin='graphite'] {
+  --skin-canvas: #191d20;
+  --skin-surface: #242a2e;
+  --skin-subtle: #2c3438;
+  --skin-text: #e3ebe8;
+  --skin-accent: #92d4bd;
+  --skin-on-accent: #163a2e;
+}
+
+/* VS Code 1.139.1 内置 Dark 2026 / Light 2026 的工作台配色。
+   来源：https://github.com/microsoft/vscode/tree/main/extensions/theme-defaults/themes
+   链接色与实心按钮色分开，保留深色界面的文字对比度。 */
+:root[data-skin='vscode-dark-2026'] {
+  color-scheme: dark;
+  --skin-canvas: #191a1b;
+  --skin-surface: #121314;
+  --skin-subtle: #202122;
+  --skin-subtle-strong: #242526;
+  --skin-text: #bfbfbf;
+  --skin-text-body: #bbbebf;
+  --skin-text-secondary: #8c8c8c;
+  --skin-text-muted: #8c8c8c;
+  --skin-text-faint: #555555;
+  --skin-accent: #48a0c7;
+  --skin-accent-strong: #53a5ca;
+  --skin-accent-fill: #297aa0;
+  --skin-accent-fill-hover: #2b7da3;
+  --skin-on-accent: #ffffff;
+  --skin-accent-soft: #ffffff14;
+  --skin-accent-container: #2c2d2e;
+  --skin-accent-border: #3994bc;
+  --skin-border: #2a2b2c;
+  --skin-outline: #707070;
+  --skin-success: #73c991;
+  --skin-success-soft: #347d3926;
+  --skin-danger: #f48771;
+  --skin-danger-soft: #3a1d1d;
+  --skin-danger-border: #be1100;
+  --skin-warning: #e5ba7d;
+  --skin-warning-soft: #352a05;
+  --skin-warning-border: #b89500;
+  --skin-scrollbar: #a8a9aa85;
+  --skin-scrollbar-hover: #a8a9aa90;
+}
+
+:root[data-skin='vscode-light-2026'] {
+  color-scheme: light;
+  --skin-canvas: #fafafd;
+  --skin-surface: #ffffff;
+  --skin-subtle: #eaeaea;
+  --skin-subtle-strong: #ececec;
+  --skin-text: #202020;
+  --skin-text-body: #202020;
+  --skin-text-secondary: #606060;
+  --skin-text-muted: #606060;
+  --skin-text-faint: #bbbbbb;
+  --skin-accent: #0069cc;
+  --skin-accent-strong: #0069cc;
+  --skin-accent-fill: #0069cc;
+  --skin-accent-fill-hover: #0063c1;
+  --skin-on-accent: #ffffff;
+  --skin-accent-soft: #00000014;
+  --skin-accent-container: #0069cc1a;
+  --skin-accent-border: #0069cc;
+  --skin-border: #e2e2e5;
+  --skin-outline: #868686;
+  --skin-success: #587c0c;
+  --skin-success-soft: #e8f0dd;
+  --skin-danger: #ad0707;
+  --skin-danger-soft: #fdeded;
+  --skin-danger-border: #ad0707;
+  --skin-warning: #667309;
+  --skin-warning-soft: #fdf6e3;
+  --skin-warning-border: #b69500;
+  --skin-scrollbar: #646464c0;
+  --skin-scrollbar-hover: #646464d0;
+}

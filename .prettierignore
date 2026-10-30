@@ -3,5 +3,6 @@ node_modules/
 src-tauri/target/
 src-tauri/gen/
 .release/
+.updater/
 package-lock.json
 TEST_REPORT.md

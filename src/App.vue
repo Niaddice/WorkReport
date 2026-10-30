@@ -19,6 +19,7 @@ import MessageHost from './components/MessageHost.vue'
 import { api, type Document, type FileFormat, type GitAppendResult, type GitReportEntry } from './lib/workspace'
 import { historyShortcut } from './lib/shortcuts'
 import { installContextMenuGuard } from './lib/contextMenus'
+import TextContextMenu from './components/TextContextMenu.vue'
 import { useJournal } from './lib/useJournal'
 import { aiSummarySource, plainTextSummary } from './lib/summary'
 import { useAi } from './lib/ai'
@@ -46,8 +47,11 @@ import { useJournalPreview } from './lib/useJournalPreview'
 import JournalPreviewWindow from './components/JournalPreviewWindow.vue'
 import JournalPreviewContent from './components/JournalPreviewContent.vue'
 import { useGit } from './lib/useGit'
+import { useUpdater } from './lib/useUpdater'
+import UpdateDialog from './components/UpdateDialog.vue'
 
 const nativeApp = isTauri()
+const updater = useUpdater({ beforeInstall: prepareForUpdate })
 const journal = useJournal()
 const {
   workspace,
@@ -309,7 +313,31 @@ let unlistenHistory: (() => void) | undefined
 let removeContextMenuGuard: (() => void) | undefined
 let historyMenuAvailable = false
 let clockTimer: ReturnType<typeof setInterval> | undefined
+let updateTimer: ReturnType<typeof setTimeout> | undefined
 let appDisposed = false
+
+async function prepareForUpdate(): Promise<boolean> {
+  if (
+    journal.appendingGit.value ||
+    busy.value ||
+    picking.value ||
+    settingsLoading.value ||
+    settingsSaving.value ||
+    settingsLeaveBusy.value ||
+    databaseBusy.value ||
+    requestingAi.value ||
+    ai.summaryGenerating.value ||
+    summaryOutput.exporting.value ||
+    excelBusy.value ||
+    pendingWorkspaceSwitch.value
+  )
+    return false
+  if (!(await journal.flush())) throw new Error(error.value || '日报保存失败，请检查后重试。')
+  if (page.value === 'settings' && settingsView.value && !settingsView.value.unchanged) {
+    if (!(await settingsView.value.save())) throw new Error(settingsError.value || '设置保存失败，请检查设置后重试。')
+  }
+  return true
+}
 
 async function restoreRecentWorkspace() {
   try {
@@ -1105,6 +1133,7 @@ watch(
 function beforeUnload(event: BeforeUnloadEvent) {
   if (
     journal.appendingGit.value ||
+    updater.busy.value ||
     dirty.value ||
     saving.value ||
     settingsSaving.value ||
@@ -1121,6 +1150,7 @@ function onFocus() {
   now.value = dayjs()
   if (
     !dirty.value &&
+    !updater.busy.value &&
     !saving.value &&
     !error.value &&
     !confirmDialog.value?.isOpen() &&
@@ -1145,6 +1175,7 @@ onMounted(async () => {
     holidayReady.value = true
   })
   if (nativeApp) {
+    if (import.meta.env.PROD) updateTimer = setTimeout(() => void updater.checkForUpdates(false), 3000)
     void ai.load()
     void restoreRecentWorkspace()
     try {
@@ -1156,6 +1187,7 @@ onMounted(async () => {
         }
         if (
           journal.appendingGit.value ||
+          updater.busy.value ||
           busy.value ||
           picking.value ||
           settingsSaving.value ||
@@ -1186,6 +1218,8 @@ onBeforeUnmount(() => {
   window.removeEventListener('keydown', onHistoryKeydown)
   removeContextMenuGuard?.()
   clearInterval(clockTimer)
+  clearTimeout(updateTimer)
+  updater.dispose()
   unlistenClose?.()
   unlistenHistory?.()
   ai.closeSummary()
@@ -1279,6 +1313,7 @@ onBeforeUnmount(() => {
             :holiday-syncing="holidaySyncing"
             :holiday-error="holidayError"
             :current-year="now.year()"
+            :updater="updater"
             @database-busy="databaseActivity = $event"
             @database-transferred="onDatabaseTransferred"
             @sync-holidays="syncHolidays"
@@ -1326,6 +1361,7 @@ onBeforeUnmount(() => {
         @reset="resetLayout"
         @save="saveCurrentLayout"
         @apply="applySavedLayout"
+        @preset="moduleLayout.applyPreset"
         @remove="removeSavedLayout"
         @close="closeLayoutDialog"
       />
@@ -1351,6 +1387,8 @@ onBeforeUnmount(() => {
       @settings="toggleSettings"
       @skin="openSkinDialog"
     />
+    <UpdateDialog :updater="updater" />
     <MessageHost />
+    <TextContextMenu :scope="`${documentKey}/${page}`" />
   </div>
 </template>

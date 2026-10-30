@@ -36,6 +36,7 @@ import { installHolidayData } from '../src/lib/chinaHolidays'
 import { emptyHolidayState } from '../src/lib/holidays'
 import { DEFAULT_UI_PREFERENCES, normalizeUiPreferences } from '../src/lib/uiPreferences'
 import SkinDialog from '../src/components/SkinDialog.vue'
+import { SKINS } from '../src/lib/skins'
 import { DEFAULT_DATABASE_SETTINGS } from '../src/lib/database'
 
 beforeAll(() => {
@@ -308,7 +309,7 @@ describe('function rail', () => {
       'Excel报告',
       '总结',
       '工作空间目录',
-      'Git 日报',
+      'Git',
       '布局',
       '切换皮肤',
       '刷新',
@@ -373,13 +374,23 @@ describe('skin dialog', () => {
       attachTo: document.body,
     })
 
-    const cards = wrapper.findAll('.skin-card:not(.skin-card-muted)')
-    expect(cards).toHaveLength(1)
+    const cards = wrapper.findAll('.skin-card')
+    expect(cards).toHaveLength(SKINS.length)
     expect(cards[0]!.text()).toContain('默认')
     expect(cards[0]!.classes()).toContain('active')
 
-    await cards[0]!.trigger('click')
-    expect(wrapper.emitted('select')).toEqual([['default']])
+    for (const skin of SKINS) {
+      const card = wrapper.get(`[data-skin-id="${skin.id}"]`)
+      expect(card.text()).toContain(skin.name)
+      expect(card.get('.skin-mode').text()).toBe(skin.mode === 'dark' ? '深色' : '浅色')
+      await card.trigger('click')
+    }
+    expect(wrapper.emitted('select')).toEqual(SKINS.map((skin) => [skin.id]))
+
+    await wrapper.setProps({ active: 'midnight' })
+    expect(wrapper.findAll('[aria-pressed="true"]')).toHaveLength(1)
+    expect(wrapper.get('[data-skin-id="midnight"]').attributes('aria-pressed')).toBe('true')
+    expect(wrapper.get('[data-skin-id="default"]').attributes('aria-pressed')).toBe('false')
 
     wrapper.unmount()
   })

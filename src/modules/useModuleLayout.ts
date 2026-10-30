@@ -15,6 +15,7 @@ import {
 } from './layout'
 import type { SkinId } from '../lib/skins'
 import type { DropSide, LayoutMetrics, ModuleId, UiPreferences } from './types'
+import { LAYOUT_PRESETS } from './layoutPresets'
 
 export interface ModuleLayoutOptions {
   /** 读取或保存布局失败时通知页面编排层显示错误。 */
@@ -184,6 +185,13 @@ export function useModuleLayout(options: ModuleLayoutOptions = {}) {
     update({ ...preferences.value, skin: value })
   }
 
+  function applyPreset(id: string): boolean {
+    const preset = LAYOUT_PRESETS.find((item) => item.id === id)
+    if (!preset) return false
+    update({ ...preferences.value, layout: preset.layout })
+    return true
+  }
+
   function reset() {
     update(normalizeUiPreferences(DEFAULT_UI_PREFERENCES))
   }
@@ -202,6 +210,7 @@ export function useModuleLayout(options: ModuleLayoutOptions = {}) {
     moveToEdge,
     saveLayout,
     applySavedLayout,
+    applyPreset,
     removeSavedLayout,
     resize,
     setSkin,

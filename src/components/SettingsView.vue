@@ -14,6 +14,7 @@ import {
   PhDatabase,
   PhCalendarCheck,
   PhGitBranch,
+  PhArrowCircleDown,
 } from '@phosphor-icons/vue'
 import { aiApi, type AiProvider, type DetectedCli } from '../lib/ai'
 import type { Workspace } from '../lib/workspace'
@@ -35,6 +36,8 @@ import {
 import HolidaySettings from './HolidaySettings.vue'
 import type { HolidayState } from '../lib/holidays'
 import GitSettings from './GitSettings.vue'
+import UpdateSettings from './UpdateSettings.vue'
+import type { AppUpdater } from '../lib/useUpdater'
 
 const props = defineProps<{
   workspace: Workspace | null
@@ -51,6 +54,7 @@ const props = defineProps<{
   holidaySyncing: boolean
   holidayError: string
   currentYear: number
+  updater?: AppUpdater
 }>()
 const emit = defineEmits<{
   back: []
@@ -144,7 +148,8 @@ async function saveAll(): Promise<boolean> {
   if (!validateAi()) return false
   if (gitForm.value && !gitForm.value.validate()) {
     validationError.value = '请检查 Git 配置。'
-    void navigate('git')
+    await navigate('git')
+    gitForm.value?.focusInvalid()
     return false
   }
   if (summaryForm.value && !summaryForm.value.validate()) {
@@ -190,7 +195,7 @@ const presetOptions = [
 const pageRoot = ref<HTMLElement>()
 const contentHeading = ref<HTMLElement>()
 type SettingsSection =
-  'workspace' | 'appearance' | 'holidays' | 'ai' | 'prompts' | 'summary' | 'excel' | 'database' | 'git'
+  'workspace' | 'appearance' | 'holidays' | 'ai' | 'prompts' | 'summary' | 'excel' | 'database' | 'git' | 'updates'
 const navigation = [
   {
     label: '基础设置',
@@ -199,7 +204,8 @@ const navigation = [
       { id: 'appearance', title: '外观与字体', description: '调整阅读时的字体大小', icon: PhMonitor },
       { id: 'holidays', title: '放假信息', description: '手动同步放假与调休安排', icon: PhCalendarCheck },
       { id: 'database', title: '数据存储', description: '数据库备份、复制与迁移', icon: PhDatabase },
-      { id: 'git', title: 'Git 配置', description: '项目仓库、作者与分支筛选', icon: PhGitBranch },
+      { id: 'git', title: 'Git 配置', description: '项目仓库、提交说明与日报筛选', icon: PhGitBranch },
+      { id: 'updates', title: '应用更新', description: '查看版本与检查更新', icon: PhArrowCircleDown },
     ],
   },
   {
@@ -232,6 +238,7 @@ const sectionChanges = computed<Record<SettingsSection, boolean>>(() => {
   return {
     workspace: false,
     holidays: false,
+    updates: false,
     database: differs(current.database, stored.database),
     git: differs(current.git, stored.git),
     appearance: differs(current.appearance, stored.appearance),
@@ -401,6 +408,18 @@ function remove(id: string) {
           <p>{{ activeItem.description }}</p>
         </header>
         <div class="settings-panels">
+          <Transition name="settings-panel">
+            <section
+              v-show="activeSection === 'updates'"
+              id="settings-panel-updates"
+              tabindex="0"
+              class="settings-section settings-panel"
+              :inert="activeSection !== 'updates'"
+              aria-label="应用更新"
+            >
+              <UpdateSettings v-if="updater" :updater="updater" />
+            </section>
+          </Transition>
           <Transition name="settings-panel">
             <section
               v-show="activeSection === 'workspace'"
@@ -644,8 +663,8 @@ function remove(id: string) {
             >
               <div class="settings-section-heading">
                 <div>
-                  <h3 id="git-settings-title">Git 配置</h3>
-                  <p>关联本地项目，从每天的提交记录中整理日报。修改后点击底部保存设置。</p>
+                  <h3 id="git-settings-title" class="sr-only">项目仓库与提交说明</h3>
+                  <p>关联项目仓库，管理提交与日报；修改后点击底部保存设置。</p>
                 </div>
               </div>
               <GitSettings ref="gitForm" v-model="draft.git" :busy="busy" :workspace-path="workspace?.path ?? ''" />
@@ -663,7 +682,7 @@ function remove(id: string) {
               <div class="settings-section-heading">
                 <div>
                   <h3 id="ai-settings-title">可用模型</h3>
-                  <p>选择一个默认 AI，用于润色、总结和 Excel 填充。</p>
+                  <p>选择一个默认 AI，用于润色、总结、Excel 填充和 Git 提交说明。</p>
                 </div>
                 <button class="text-action" :disabled="detecting || busy" @click="detect">
                   <Transition name="button-label" mode="out-in"
@@ -861,7 +880,7 @@ function remove(id: string) {
               <div class="ai-settings-footer">
                 <span
                   >AI 润色与 AI 总结会向默认 AI 发送相关日报；Excel 输出经确认后，会发送所选日报、模板信息和 Excel
-                  输出提示词。</span
+                  输出提示词；Git 提交说明生成会发送已暂存的文件差异和提交说明提示词。</span
                 >
               </div>
               <Transition name="status-fade"

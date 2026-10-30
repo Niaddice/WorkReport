@@ -58,4 +58,5 @@ export const api = {
   switchFormat: (date: string, from: FileFormat, to: FileFormat, expectedRevision: string) =>
     invoke<Document>('switch_entry_format', { date, from, to, expectedRevision }),
   copy: (content: string) => invoke<void>('copy_content', { content }),
+  clipboardText: () => invoke<string>('read_clipboard_text'),
 }

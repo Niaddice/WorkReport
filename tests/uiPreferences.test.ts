@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { invoke, isTauri } from '@tauri-apps/api/core'
 import { UI_PREFERENCES_STORAGE_KEY, normalizeUiPreferences, uiPreferencesApi } from '../src/lib/uiPreferences'
 import { flattenLayout } from '../src/modules/layout'
+import { SKINS } from '../src/lib/skins'
 
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn(), isTauri: vi.fn() }))
 
@@ -20,6 +21,26 @@ afterEach(() => {
 })
 
 describe('ui preferences persistence', () => {
+  it.each(SKINS)('restores the $id skin after a browser-preview save', async ({ id }) => {
+    vi.mocked(isTauri).mockReturnValue(false)
+    const preferences = normalizeUiPreferences({ skin: id })
+    await uiPreferencesApi.save(preferences, '/tmp/preview-workspace')
+    expect((await uiPreferencesApi.load()).skin).toBe(id)
+    expect(invoke).not.toHaveBeenCalled()
+  })
+
+  it.each(SKINS)('preserves the $id skin through desktop persistence', async ({ id }) => {
+    vi.mocked(isTauri).mockReturnValue(true)
+    const preferences = normalizeUiPreferences({ skin: id })
+    await uiPreferencesApi.save(preferences, '/tmp/demo-workspace')
+    expect(invoke).toHaveBeenLastCalledWith('save_ui_preferences', {
+      workspacePath: '/tmp/demo-workspace',
+      preferences,
+    })
+    vi.mocked(invoke).mockResolvedValueOnce(preferences)
+    expect((await uiPreferencesApi.load()).skin).toBe(id)
+  })
+
   it('reads browser-preview preferences without IPC', async () => {
     vi.mocked(isTauri).mockReturnValue(false)
     storage.set(

@@ -457,6 +457,40 @@ fn valid_stash(reference: &str) -> bool {
         .is_some_and(|value| !value.is_empty() && value.bytes().all(|byte| byte.is_ascii_digit()))
 }
 
+pub struct CommitSource {
+    pub content: String,
+    pub revision: String,
+}
+
+async fn staged_revision(settings: &Settings, root: &Path) -> Result<String, String> {
+    use sha2::{Digest, Sha256};
+    let head = command(settings, root, &args(&["rev-parse", "--verify", "HEAD"])).await?;
+    let branch = command(settings, root, &args(&["symbolic-ref", "--quiet", "HEAD"])).await?;
+    let index = read(settings, root, &["diff", "--cached", "--raw", "--full-index", "--no-abbrev", "--no-renames", "--no-ext-diff", "--no-textconv", "-z", "--"]).await?;
+    let mut digest = Sha256::new();
+    for bytes in [&head.stdout, &branch.stdout, &index] { digest.update(bytes); digest.update([0]); }
+    Ok(format!("{:x}", digest.finalize()))
+}
+
+/// Capture only staged content. Neither worktree changes nor untracked file contents reach AI.
+pub async fn commit_source(settings: &Settings, id: &str) -> Result<CommitSource, String> {
+    let root = root(settings, id).await?;
+    let before = staged_revision(settings, &root).await?;
+    let state = repository(settings, id).await?;
+    if state.files.iter().any(|file| file.conflicted) { return Err("请先解决冲突，再生成提交说明".into()); }
+    let staged: Vec<_> = state.files.iter().filter(|file| ![" ", "?", "!"].contains(&file.index_status.as_str())).map(|file| {
+        serde_json::json!({ "path": file.path, "originalPath": file.original_path, "status": file.index_status })
+    }).collect();
+    if staged.is_empty() { return Err("请先暂存需要提交的文件，再生成提交说明".into()); }
+    let patch = diff(settings, id, "", true, "").await?;
+    if patch.truncated { return Err("暂存区差异过大，请分批暂存后再生成提交说明".into()); }
+    let content = serde_json::json!({ "branch": state.branch, "files": staged, "diff": patch.text }).to_string();
+    if content.len() > 200_000 { return Err("暂存区内容超过 200 KB，请分批暂存后再生成提交说明".into()); }
+    let after = staged_revision(settings, &root).await?;
+    if before != after { return Err("暂存区或分支已变化，请重新生成提交说明".into()); }
+    Ok(CommitSource { content, revision: before })
+}
+
 async fn local_branch(settings: &Settings, root: &Path, reference: &str) -> Result<(), String> {
     validate_reference(reference)?;
     read(settings, root, &[
@@ -729,6 +763,40 @@ mod tests {
         assert!(log.commits[0].parents.is_empty());
         assert!(diff(&settings, "repo", "", false,
         &log.commits[0].hash).await.unwrap().text.contains("+more"));
+    }
+
+    #[tokio::test]
+    async fn ai_commit_source_uses_only_the_index_and_detects_staged_or_branch_changes() {
+        let (dir, settings) = setup();
+        assert!(commit_source(&settings, "repo").await.err().unwrap().contains("先暂存"));
+        std::fs::write(dir.path().join("file.txt"), "STAGED_CONTENT\n").unwrap();
+        git(dir.path(), &["add", "file.txt"]);
+        std::fs::write(dir.path().join("file.txt"), "UNSTAGED_SECRET\n").unwrap();
+        std::fs::write(dir.path().join("private.txt"), "UNTRACKED_SECRET\n").unwrap();
+        let before = commit_source(&settings, "repo").await.unwrap();
+        assert!(before.content.contains("STAGED_CONTENT"));
+        assert!(!before.content.contains("UNSTAGED_SECRET"));
+        assert!(!before.content.contains("UNTRACKED_SECRET"));
+        assert!(!before.content.contains("private.txt"));
+        assert!(!before.content.contains(dir.path().to_str().unwrap()));
+        let stable = commit_source(&settings, "repo").await.unwrap();
+        assert_eq!(stable.revision, before.revision);
+        git(dir.path(), &["add", "file.txt"]);
+        let changed = commit_source(&settings, "repo").await.unwrap();
+        assert_ne!(changed.revision, before.revision);
+        assert_eq!(git(dir.path(), &["show", ":file.txt"]), "UNSTAGED_SECRET");
+        git(dir.path(), &["symbolic-ref", "HEAD", "refs/heads/other"]);
+        assert_ne!(commit_source(&settings, "repo").await.unwrap().revision, changed.revision);
+    }
+
+    #[tokio::test]
+    async fn ai_commit_source_rejects_oversized_changes_without_modifying_the_index() {
+        let (dir, settings) = setup();
+        std::fs::write(dir.path().join("large.txt"), "x".repeat(210_000)).unwrap();
+        git(dir.path(), &["add", "large.txt"]);
+        let status = git(dir.path(), &["status", "--porcelain"]);
+        assert!(commit_source(&settings, "repo").await.err().unwrap().contains("分批暂存"));
+        assert_eq!(git(dir.path(), &["status", "--porcelain"]), status);
     }
     #[tokio::test]
     async fn partial_staging_discard_and_rename_preserve_index_and_working_files() {

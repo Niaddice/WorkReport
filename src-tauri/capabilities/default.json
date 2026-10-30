@@ -3,5 +3,12 @@
   "identifier": "main-capability",
   "description": "Main window: directory picker and close protection. Files are managed exclusively by Rust workspace commands.",
   "windows": ["main"],
-  "permissions": ["core:default", "core:window:allow-destroy", "core:window:allow-start-dragging", "dialog:allow-open"]
+  "permissions": [
+    "core:default",
+    "core:window:allow-destroy",
+    "core:window:allow-start-dragging",
+    "dialog:allow-open",
+    "updater:default",
+    "process:allow-restart"
+  ]
 }

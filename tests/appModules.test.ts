@@ -182,7 +182,7 @@ describe('Git journal integration', () => {
     })
     const wrapper = await openDemoWorkspace()
     try {
-      await wrapper.get('.app-rail [aria-label="Git 日报"]').trigger('click')
+      await wrapper.get('.app-rail [aria-label="Git"]').trigger('click')
       await flushPromises()
       const day = (value: ReturnType<typeof dayjs>) =>
         wrapper.get(`.calendar-panel .day-cell[aria-label^="${value.format('YYYY年M月D日 ')}"]`)
@@ -194,7 +194,7 @@ describe('Git journal integration', () => {
       await flushPromises()
       await wrapper.get(`[aria-label="Git 日报预览 ${firstDate}"]`).setValue('第一天确认后的工作记录')
       await wrapper.get(`[aria-label="Git 日报预览 ${lastDate}"]`).setValue('第三天确认后的工作记录')
-      await wrapper.get('.git-report-actions .git-fetch').trigger('click')
+      await wrapper.get('.git-toolbar .git-append').trigger('click')
       await flushPromises()
       expect(invoke).toHaveBeenCalledWith('append_git_reports', {
         workspacePath: DEMO_WORKSPACE,
@@ -212,7 +212,7 @@ describe('Git journal integration', () => {
       expect(range.text()).toContain('已选择 3 天 · 2 篇日报')
       expect(range.text()).toContain('第一天确认后的工作记录')
       expect(range.text()).toContain('第三天确认后的工作记录')
-      expect(wrapper.get('.git-report-actions .git-fetch').attributes('disabled')).toBeDefined()
+      expect(wrapper.get('.git-toolbar .git-append').attributes('disabled')).toBeDefined()
       expect(invoke.mock.calls.filter(([command]) => command === 'append_git_reports')).toHaveLength(1)
     } finally {
       wrapper.unmount()
@@ -288,12 +288,12 @@ describe('Git journal integration', () => {
     })
     const wrapper = await openDemoWorkspace()
     try {
-      await wrapper.get('.app-rail [aria-label="Git 日报"]').trigger('click')
+      await wrapper.get('.app-rail [aria-label="Git"]').trigger('click')
       await flushPromises()
       expect(savedIds()).toContain('git')
       await wrapper.get('.git-toolbar .git-fetch').trigger('click')
       await flushPromises()
-      await wrapper.get('.git-report-actions .git-fetch').trigger('click')
+      await wrapper.get('.git-toolbar .git-append').trigger('click')
       await flushPromises()
       const editor = wrapper.get<HTMLTextAreaElement>('.markdown-editor')
       expect(editor.element.value).toBe('已有的会议记录\n\n日报项目\n1、完成 Git 日报')
@@ -309,7 +309,7 @@ describe('Git journal integration', () => {
       await editor.trigger('keydown', { key: 'z', ctrlKey: true })
       await flushPromises()
       expect(editor.element.value).toBe(entry.content)
-      expect(wrapper.get('.git-report-actions .git-fetch').attributes('disabled')).toBeUndefined()
+      expect(wrapper.get('.git-toolbar .git-append').attributes('disabled')).toBeUndefined()
     } finally {
       wrapper.unmount()
     }
@@ -345,7 +345,7 @@ describe('Git journal integration', () => {
           },
         },
       })
-      await wrapper.get('.app-rail [aria-label="Git 日报"]').trigger('click')
+      await wrapper.get('.app-rail [aria-label="Git"]').trigger('click')
       await flushPromises()
       expect(wrapper.get('.git-module').text()).toContain('1 个仓库')
       expect(wrapper.get('.git-toolbar .git-fetch').attributes('disabled')).toBeUndefined()

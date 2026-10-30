@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
+import { DOMWrapper, flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 
 const { invoke, desktop } = vi.hoisted(() => ({ invoke: vi.fn(), desktop: { value: true } }))
 vi.mock('@tauri-apps/api/core', () => ({ invoke, isTauri: () => desktop.value }))
@@ -65,6 +65,7 @@ function mockBackend(repository = state()) {
     if (command === 'read_git_history') return { commits: [commit('abc1234')], hasMore: false }
     if (command === 'read_git_diff') return { text: '+changed line', truncated: false }
     if (command === 'git_repository_action') return '操作完成'
+    if (command === 'generate_git_commit_message') return 'feat: 完成暂存区改动'
     return undefined
   })
 }
@@ -82,6 +83,7 @@ function button(wrapper: VueWrapper, text: string) {
 async function mountReady(repository = state()) {
   mockBackend(repository)
   const wrapper = mount(GitWorkbench, {
+    attachTo: document.body,
     props: { workspacePath: '/tmp/workspace', repositories, disabled: false },
   })
   await flushPromises()
@@ -91,6 +93,408 @@ async function mountReady(repository = state()) {
 beforeEach(() => {
   invoke.mockReset()
   desktop.value = true
+})
+
+describe('AI commit messages', () => {
+  it('explains missing models and staging requirements, and opens model configuration', async () => {
+    const wrapper = await mountReady()
+    try {
+      await wrapper.setProps({ aiProviderName: null })
+      expect(wrapper.get('[aria-label="AI 生成提交说明"]').attributes('disabled')).toBeDefined()
+      await wrapper.get('.configure-ai').trigger('click')
+      expect(wrapper.emitted('configureAi')).toHaveLength(1)
+      await wrapper.setProps({ aiProviderName: '团队模型' })
+      expect(wrapper.get('[aria-label="AI 生成提交说明"]').attributes('title')).toContain('团队模型')
+      expect(wrapper.get('[aria-label="AI 生成提交说明"]').attributes('title')).toContain('1 个已暂存文件')
+    } finally {
+      wrapper.unmount()
+    }
+  })
+
+  it('keeps the commit form outside the scrollable list and supports keyboard resizing and compact back navigation', async () => {
+    const wrapper = await mountReady()
+    try {
+      expect(wrapper.get('.change-pane').find('.commit-form').exists()).toBe(false)
+      const gutter = wrapper.get('[role="separator"]')
+      await gutter.trigger('keydown', { key: 'ArrowRight' })
+      expect(gutter.attributes('aria-valuenow')).toBe('34')
+      await gutter.trigger('keydown', { key: 'End' })
+      expect(gutter.attributes('aria-valuenow')).toBe('60')
+      await gutter.trigger('keydown', { key: 'Home' })
+      expect(gutter.attributes('aria-valuenow')).toBe('24')
+      await wrapper.get('[aria-label="查看暂存差异 partially staged.txt"]').trigger('click')
+      await flushPromises()
+      expect(wrapper.get('.changes-view').classes()).toContain('show-diff')
+      expect(wrapper.get('.diff-stats').attributes('aria-label')).toBe('新增 1 行，删除 0 行')
+      await wrapper.get('.compact-back').trigger('click')
+      expect(wrapper.get('.changes-view').classes()).not.toContain('show-diff')
+    } finally {
+      wrapper.unmount()
+    }
+  })
+  it('generates into the editable message without committing and sends only the configured repository scope', async () => {
+    const wrapper = await mountReady()
+    try {
+      await wrapper.get('[aria-label="AI 生成提交说明"]').trigger('click')
+      await flushPromises()
+      expect(wrapper.get<HTMLTextAreaElement>('[aria-label="提交说明"]').element.value).toBe('feat: 完成暂存区改动')
+      expect(actionCalls()).toHaveLength(0)
+      expect(invoke).toHaveBeenCalledWith('generate_git_commit_message', {
+        workspacePath: '/tmp/workspace',
+        repositoryId: 'one',
+        requestId: expect.any(String),
+      })
+      expect(button(wrapper, '提交').attributes('disabled')).toBeUndefined()
+    } finally {
+      wrapper.unmount()
+    }
+  })
+
+  it('preserves manual edits made while generation is pending', async () => {
+    const wrapper = await mountReady()
+    const pending = deferred<string>()
+    invoke.mockImplementation(async (command) =>
+      command === 'generate_git_commit_message' ? pending.promise : state(),
+    )
+    try {
+      await wrapper.get('[aria-label="AI 生成提交说明"]').trigger('click')
+      expect(wrapper.get('[aria-label="提交说明"]').attributes('disabled')).toBeUndefined()
+      expect(button(wrapper, '提交').attributes('disabled')).toBeDefined()
+      await wrapper.get('[aria-label="提交说明"]').setValue('手动修改后的提交说明')
+      pending.resolve('AI 返回的旧说明')
+      await flushPromises()
+      expect(wrapper.get<HTMLTextAreaElement>('[aria-label="提交说明"]').element.value).toBe('手动修改后的提交说明')
+      expect(wrapper.text()).toContain('已保留你的修改')
+    } finally {
+      wrapper.unmount()
+    }
+  })
+
+  it('cancels its own request and ignores a late response', async () => {
+    const wrapper = await mountReady()
+    const pending = deferred<string>()
+    invoke.mockImplementation(async (command) =>
+      command === 'generate_git_commit_message' ? pending.promise : undefined,
+    )
+    try {
+      await wrapper.get('[aria-label="提交说明"]').setValue('保留原说明')
+      await wrapper.get('[aria-label="AI 生成提交说明"]').trigger('click')
+      const requestId = invoke.mock.calls.find(([command]) => command === 'generate_git_commit_message')![1].requestId
+      await wrapper.get('[aria-label="取消生成提交说明"]').trigger('click')
+      expect(invoke).toHaveBeenCalledWith('cancel_git_commit_message', { requestId })
+      pending.resolve('已取消请求的旧说明')
+      await flushPromises()
+      expect(wrapper.get<HTMLTextAreaElement>('[aria-label="提交说明"]').element.value).toBe('保留原说明')
+      expect(wrapper.find('[aria-label="AI 生成提交说明"]').exists()).toBe(true)
+    } finally {
+      wrapper.unmount()
+    }
+  })
+
+  it('keeps the draft on an AI error and clears a stale request after workspace switching', async () => {
+    const wrapper = await mountReady()
+    try {
+      await wrapper.get('[aria-label="提交说明"]').setValue('原有说明')
+      invoke.mockRejectedValueOnce(new Error('请先在设置中选择默认 AI'))
+      await wrapper.get('[aria-label="AI 生成提交说明"]').trigger('click')
+      await flushPromises()
+      expect(wrapper.text()).toContain('请先在设置中选择默认 AI')
+      expect(wrapper.get<HTMLTextAreaElement>('[aria-label="提交说明"]').element.value).toBe('原有说明')
+      const pending = deferred<string>()
+      invoke.mockImplementation(async (command) =>
+        command === 'generate_git_commit_message' ? pending.promise : state(),
+      )
+      await wrapper.get('[aria-label="AI 生成提交说明"]').trigger('click')
+      await wrapper.setProps({ workspacePath: '/tmp/next-workspace' })
+      await flushPromises()
+      pending.resolve('上一个工作空间的说明')
+      await flushPromises()
+      expect(wrapper.get<HTMLTextAreaElement>('[aria-label="提交说明"]').element.value).toBe('')
+      expect(actionCalls()).toHaveLength(0)
+    } finally {
+      wrapper.unmount()
+    }
+  })
+
+  it.each([
+    ['empty index', state({ files: [] })],
+    [
+      'conflicts',
+      state({
+        files: [{ path: 'conflict.txt', originalPath: null, indexStatus: 'U', worktreeStatus: 'U', conflicted: true }],
+      }),
+    ],
+  ])('disables AI generation with %s', async (_reason, repository) => {
+    const wrapper = await mountReady(repository)
+    try {
+      expect(wrapper.get('[aria-label="AI 生成提交说明"]').attributes('disabled')).toBeDefined()
+      await wrapper.get('[aria-label="AI 生成提交说明"]').trigger('click')
+      expect(invoke.mock.calls.filter(([command]) => command === 'generate_git_commit_message')).toHaveLength(0)
+    } finally {
+      wrapper.unmount()
+    }
+  })
+})
+
+function menuItem(label: string) {
+  const element = [...document.querySelectorAll<HTMLButtonElement>('.git-context-menu [role="menuitem"]')].find(
+    (item) => item.textContent?.trim() === label,
+  )
+  if (!element) throw new Error(`找不到菜单项：${label}`)
+  return new DOMWrapper(element)
+}
+
+describe('history and action guidance', () => {
+  it('preserves readable history and the failure reason when a repository action is rejected', async () => {
+    invoke.mockImplementation(async (command) => {
+      if (command === 'read_git_history') return { commits: [commit('previous')], hasMore: false }
+      if (command === 'git_repository_action') throw new Error('分支切换被拒绝')
+      if (command === 'read_git_repository') return state()
+    })
+    const git = useGitWorkbench(() => ({ workspacePath: '/tmp/workspace', repositoryId: 'one' }))
+    await git.loadHistory({ query: '', reference: '', skip: 0 })
+    expect(await git.runAction({ operation: 'switchBranch', reference: 'feature' })).toBe(false)
+    expect(git.history.value?.commits[0]?.hash).toBe('previous')
+    expect(git.error.value).toContain('分支切换被拒绝')
+  })
+  it('opens history diffs in the compact preview and returns to the selected commit', async () => {
+    const wrapper = await mountReady()
+    try {
+      await button(wrapper, '提交历史').trigger('click')
+      await flushPromises()
+      await wrapper.get('.history-entry').trigger('click')
+      await flushPromises()
+      expect(wrapper.get('.history-split').classes()).toContain('show-diff')
+      expect(wrapper.get('.diff-stats').attributes('aria-label')).toBe('新增 1 行，删除 0 行')
+      await wrapper.get('[aria-label="返回提交列表"]').trigger('click')
+      expect(wrapper.get('.history-split').classes()).not.toContain('show-diff')
+      expect(document.activeElement).toBe(wrapper.get('.history-entry.selected').element)
+      await wrapper.get('[aria-label="调整提交列表与差异宽度"]').trigger('keydown', { key: 'ArrowRight' })
+      expect(wrapper.get('[aria-label="调整提交列表与差异宽度"]').attributes('aria-valuenow')).toBe('34')
+    } finally {
+      wrapper.unmount()
+    }
+  })
+
+  it('clears an empty search and reloads the current branch without changing Git data', async () => {
+    const wrapper = await mountReady()
+    invoke.mockImplementation(async (command, args) => {
+      if (command === 'read_git_repository') return state()
+      if (command === 'read_git_history') return { commits: args.query ? [] : [commit('found')], hasMore: false }
+    })
+    try {
+      await button(wrapper, '提交历史').trigger('click')
+      await flushPromises()
+      await wrapper.get('[aria-label="搜索提交说明"]').setValue('不存在的内容')
+      await wrapper.get('.history-filters').trigger('submit')
+      await flushPromises()
+      expect(wrapper.text()).toContain('未找到相关提交')
+      await button(wrapper, '清除筛选').trigger('click')
+      await flushPromises()
+      expect(wrapper.get('.history-entry').text()).toContain('found')
+      expect(invoke).toHaveBeenLastCalledWith('read_git_history', {
+        workspacePath: '/tmp/workspace',
+        repositoryId: 'one',
+        query: '',
+        reference: '',
+        skip: 0,
+      })
+      expect(actionCalls()).toHaveLength(0)
+    } finally {
+      wrapper.unmount()
+    }
+  })
+
+  it('reloads history after switching branches instead of reusing the previous branch cache', async () => {
+    let branch = 'main'
+    invoke.mockImplementation(async (command) => {
+      if (command === 'read_git_repository') return state({ branch })
+      if (command === 'read_git_history') return { commits: [commit(branch)], hasMore: false }
+      if (command === 'git_repository_action') {
+        branch = 'feature'
+        return '操作完成'
+      }
+    })
+    const wrapper = mount(GitWorkbench, {
+      attachTo: document.body,
+      props: { workspacePath: '/tmp/workspace', repositories, disabled: false },
+    })
+    try {
+      await flushPromises()
+      await button(wrapper, '提交历史').trigger('click')
+      await flushPromises()
+      expect(wrapper.get('.history-entry').text()).toContain('main')
+      await button(wrapper, '分支').trigger('click')
+      const feature = wrapper.findAll('.branch-row').find((row) => row.text().includes('feature'))!
+      await feature
+        .findAll('button')
+        .find((item) => item.text() === '切换')!
+        .trigger('click')
+      await flushPromises()
+      await button(wrapper, '提交历史').trigger('click')
+      await flushPromises()
+      expect(wrapper.get('.history-entry').text()).toContain('feature')
+      expect(invoke.mock.calls.filter(([command]) => command === 'read_git_history')).toHaveLength(2)
+    } finally {
+      wrapper.unmount()
+    }
+  })
+
+  it('explains unavailable merge actions and navigates to Stash without saving automatically', async () => {
+    const wrapper = await mountReady()
+    try {
+      await button(wrapper, '分支').trigger('click')
+      const feature = wrapper.findAll('.branch-row').find((row) => row.text().includes('feature'))!
+      const merge = feature.findAll('button').find((item) => item.text() === '合并')!
+      expect(merge.attributes('disabled')).toBeDefined()
+      expect(merge.attributes('title')).toContain('请先提交更改或保存到 Stash')
+      await wrapper.get('.branch-notice button').trigger('click')
+      expect(wrapper.find('.stash-view').exists()).toBe(true)
+      expect(document.activeElement).toBe(wrapper.get('[aria-label="Stash 说明"]').element)
+      expect(button(wrapper, '应用并保留').attributes('title')).toContain('保留此 Stash')
+      expect(actionCalls()).toHaveLength(0)
+    } finally {
+      wrapper.unmount()
+    }
+  })
+})
+
+describe('Git workbench context menus', () => {
+  it('stages and unstages the file from the correct area through the menu', async () => {
+    const wrapper = await mountReady()
+    try {
+      await wrapper
+        .get('[aria-label="查看工作区差异 partially staged.txt"]')
+        .trigger('contextmenu', { clientX: 160, clientY: 200 })
+      await flushPromises()
+      expect(document.querySelector('[role="menu"]')).not.toBeNull()
+      expect(actionCalls()).toHaveLength(0)
+      await menuItem('暂存文件').trigger('click')
+      await flushPromises()
+      expect(actionCalls()[0]![1]).toMatchObject({ request: { operation: 'stage', paths: ['partially staged.txt'] } })
+      expect(document.querySelector('.git-context-menu')).toBeNull()
+      await wrapper.get('[aria-label="查看暂存差异 partially staged.txt"]').trigger('contextmenu')
+      await flushPromises()
+      await menuItem('取消暂存').trigger('click')
+      await flushPromises()
+      expect(actionCalls()[1]![1]).toMatchObject({ request: { operation: 'unstage', paths: ['partially staged.txt'] } })
+    } finally {
+      wrapper.unmount()
+    }
+  })
+
+  it('keeps confirmation before discarding from the context menu', async () => {
+    const wrapper = await mountReady()
+    try {
+      await wrapper.get('[aria-label="查看工作区差异 partially staged.txt"]').trigger('contextmenu')
+      await flushPromises()
+      await menuItem('丢弃未暂存的更改…').trigger('click')
+      expect(wrapper.get('[role="alertdialog"]').text()).toContain('partially staged.txt')
+      expect(actionCalls()).toHaveLength(0)
+      await button(wrapper, '确认操作').trigger('click')
+      await flushPromises()
+      expect(actionCalls()[0]![1]).toMatchObject({ request: { operation: 'discard', paths: ['partially staged.txt'] } })
+    } finally {
+      wrapper.unmount()
+    }
+  })
+
+  it('copies the context commit hash and opens its diff', async () => {
+    const wrapper = await mountReady()
+    try {
+      await button(wrapper, '提交历史').trigger('click')
+      await flushPromises()
+      await wrapper.get('.history-entry').trigger('contextmenu')
+      await flushPromises()
+      await menuItem('复制提交哈希').trigger('click')
+      await flushPromises()
+      expect(invoke).toHaveBeenCalledWith('copy_content', { content: 'abc1234' })
+      await wrapper.get('.history-entry').trigger('contextmenu')
+      await flushPromises()
+      await menuItem('查看提交差异').trigger('click')
+      await flushPromises()
+      expect(invoke).toHaveBeenCalledWith('read_git_diff', expect.objectContaining({ commit: 'abc1234', path: '' }))
+      expect(wrapper.find('.commit-details').text()).toContain('提交 abc1234')
+    } finally {
+      wrapper.unmount()
+    }
+  })
+
+  it('disables deleting the current branch and confirms branch and Stash deletion', async () => {
+    const wrapper = await mountReady()
+    try {
+      await button(wrapper, '分支').trigger('click')
+      await wrapper.findAll('.branch-row')[0]!.trigger('contextmenu')
+      await flushPromises()
+      expect(menuItem('删除本地分支…').attributes('disabled')).toBeDefined()
+      expect(menuItem('切换分支').attributes('disabled')).toBeDefined()
+      const feature = wrapper.findAll('.branch-row').find((row) => row.text().includes('feature'))!
+      await feature.trigger('contextmenu')
+      await flushPromises()
+      await menuItem('删除本地分支…').trigger('click')
+      expect(actionCalls()).toHaveLength(0)
+      await button(wrapper, '确认操作').trigger('click')
+      await flushPromises()
+      expect(actionCalls()[0]![1]).toMatchObject({ request: { operation: 'deleteBranch', reference: 'feature' } })
+      await button(wrapper, 'Stash').trigger('click')
+      await wrapper.get('.stash-row').trigger('contextmenu')
+      await flushPromises()
+      await menuItem('删除 Stash…').trigger('click')
+      expect(actionCalls()).toHaveLength(1)
+      expect(wrapper.get('[role="alertdialog"]').text()).toContain('stash@{0}')
+      await button(wrapper, '确认操作').trigger('click')
+      await flushPromises()
+      expect(actionCalls()[1]![1]).toMatchObject({ request: { operation: 'dropStash', reference: 'stash@{0}' } })
+    } finally {
+      wrapper.unmount()
+    }
+  })
+
+  it('supports keyboard opening, navigation and Escape with focus restored to the file', async () => {
+    const wrapper = await mountReady()
+    try {
+      const file = wrapper.get<HTMLButtonElement>('[aria-label="查看工作区差异 partially staged.txt"]')
+      file.element.focus()
+      await file.trigger('keydown', { key: 'F10', shiftKey: true })
+      await flushPromises()
+      expect(document.activeElement).toBe(menuItem('查看差异').element)
+      await menuItem('查看差异').trigger('keydown', { key: 'ArrowDown' })
+      expect(document.activeElement).toBe(menuItem('暂存文件').element)
+      await menuItem('暂存文件').trigger('keydown', { key: 'Escape' })
+      expect(document.querySelector('.git-context-menu')).toBeNull()
+      expect(document.activeElement).toBe(file.element)
+      expect(actionCalls()).toHaveLength(0)
+    } finally {
+      wrapper.unmount()
+    }
+  })
+
+  it('dismisses menus on outside clicks, workspace changes and disabling the workbench', async () => {
+    const wrapper = await mountReady()
+    try {
+      const open = async () => {
+        await wrapper.get('[aria-label="查看工作区差异 partially staged.txt"]').trigger('contextmenu')
+        await flushPromises()
+        expect(document.querySelector('.git-context-menu')).not.toBeNull()
+      }
+      await open()
+      document.body.dispatchEvent(new Event('pointerdown', { bubbles: true }))
+      await flushPromises()
+      expect(document.querySelector('.git-context-menu')).toBeNull()
+      await open()
+      await wrapper.setProps({ workspacePath: '/tmp/other-workspace' })
+      await flushPromises()
+      expect(document.querySelector('.git-context-menu')).toBeNull()
+      await open()
+      await wrapper.setProps({ disabled: true })
+      expect(document.querySelector('.git-context-menu')).toBeNull()
+      await wrapper.get('.file-row').trigger('contextmenu')
+      expect(document.querySelector('.git-context-menu')).toBeNull()
+      expect(actionCalls()).toHaveLength(0)
+    } finally {
+      wrapper.unmount()
+    }
+  })
 })
 
 describe('Git workbench requests', () => {

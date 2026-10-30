@@ -3,12 +3,14 @@ import { onBeforeUnmount, ref } from 'vue'
 import { PhArrowsInSimple, PhSquaresFour, PhTrashSimple, PhX } from '@phosphor-icons/vue'
 import { createDialogMotion } from '../lib/dialogMotion'
 import type { SavedLayout } from '../modules/types'
+import { LAYOUT_PRESETS } from '../modules/layoutPresets'
 
 defineProps<{ savedLayouts: SavedLayout[] }>()
 const emit = defineEmits<{
   reset: []
   save: [name: string]
   apply: [name: string]
+  preset: [id: string]
   remove: [name: string]
   close: []
 }>()
@@ -59,6 +61,14 @@ onBeforeUnmount(() => motion.dispose())
       <p><strong>调整比例</strong>拖动模块间的间隙，或聚焦间隙后按方向键微调。</p>
     </div>
 
+    <section class="layout-presets" aria-label="推荐布局">
+      <h3>推荐布局</h3>
+      <button v-for="item in LAYOUT_PRESETS" :key="item.id" type="button" @click="emit('preset', item.id)">
+        <strong>{{ item.name }}</strong
+        ><span>{{ item.description }}</span>
+      </button>
+      <p>切换前可先保存当前布局，方便随时恢复。</p>
+    </section>
     <section class="layout-dialog-save" aria-label="保存布局">
       <h3>保存布局</h3>
       <div class="layout-dialog-save-row">
@@ -108,3 +118,47 @@ onBeforeUnmount(() => motion.dispose())
     </footer>
   </dialog>
 </template>
+
+<style scoped>
+.layout-presets {
+  padding: 16px 20px;
+  display: grid;
+  gap: 10px;
+}
+.layout-presets h3 {
+  font-size: var(--text-subtitle);
+  font-weight: 500;
+  margin: 0;
+}
+.layout-presets button {
+  display: grid;
+  gap: 6px;
+  padding: 14px;
+  text-align: left;
+  border: 1px solid var(--skin-border);
+  border-radius: 10px;
+  background: var(--skin-surface);
+  color: var(--skin-text);
+  font: inherit;
+  cursor: pointer;
+}
+.layout-presets button:hover {
+  border-color: var(--skin-accent);
+  background: var(--skin-accent-soft);
+}
+.layout-presets button:focus-visible {
+  outline: 2px solid var(--skin-accent);
+  outline-offset: 2px;
+}
+.layout-presets button strong {
+  font-weight: 500;
+}
+.layout-presets button span,
+.layout-presets p {
+  font-size: var(--text-small);
+  color: var(--skin-text-muted);
+}
+.layout-presets p {
+  margin: 0;
+}
+</style>

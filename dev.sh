@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
 # ============================================================================
-# WorkReport 开发模式快速启停脚本
+# WorkReport 开发模式快速启停与构建脚本
 #
 # 用法：
 #   ./dev.sh            启动开发模式（后台运行，等价于 start）
 #   ./dev.sh start      启动开发模式
 #   ./dev.sh stop       停止开发模式（结束 tauri dev 及其全部子进程）
 #   ./dev.sh restart    重启开发模式
+#   ./dev.sh build      重新构建前端、Rust 代码及桌面安装包
 #   ./dev.sh status     查看运行状态
 #   ./dev.sh logs       跟踪实时日志（Ctrl+C 退出跟踪）
 # ============================================================================
@@ -93,6 +94,12 @@ stop() {
   ok "已停止"
 }
 
+build() {
+  info "重新构建 WorkReport…"
+  npm run app:build
+  ok "构建完成"
+}
+
 status() {
   if is_running; then
     ok "运行中（PID $(main_pid)）"
@@ -113,10 +120,11 @@ case "${1:-start}" in
   start)   start ;;
   stop)    stop ;;
   restart) stop && start ;;
+  build)   build ;;
   status)  status ;;
   logs)    logs ;;
   *)
-    echo "用法：$0 [start|stop|restart|status|logs]"
+    echo "用法：$0 [start|stop|restart|build|status|logs]"
     exit 1
     ;;
 esac

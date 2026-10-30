@@ -19,8 +19,8 @@ function contextMenu(target: Element) {
   return { event, allowed: target.dispatchEvent(event) }
 }
 
-describe('temporary app-wide context menu guard', () => {
-  it('blocks native menus and existing custom handlers before they run', () => {
+describe('app-wide context menus', () => {
+  it('blocks native menus while allowing contextual application handlers', () => {
     const target = document.createElement('button')
     document.body.append(target)
     const customMenu = vi.fn()
@@ -34,11 +34,11 @@ describe('temporary app-wide context menu guard', () => {
 
     expect(allowed).toBe(false)
     expect(event.defaultPrevented).toBe(true)
-    expect(customMenu).not.toHaveBeenCalled()
-    expect(documentMenu).not.toHaveBeenCalled()
+    expect(customMenu).toHaveBeenCalledOnce()
+    expect(documentMenu).toHaveBeenCalledOnce()
   })
 
-  it('also blocks textareas inside dialogs teleported outside the app root', () => {
+  it('also filters native menus inside teleported dialogs without stopping editing handlers', () => {
     const customMenu = vi.fn()
     const wrapper = mount(
       { render: () => h(Teleport, { to: 'body' }, h('dialog', [h('textarea', { onContextmenu: customMenu })])) },
@@ -50,10 +50,10 @@ describe('temporary app-wide context menu guard', () => {
 
     expect(wrapper.element.contains(textarea)).toBe(false)
     expect(contextMenu(textarea).allowed).toBe(false)
-    expect(customMenu).not.toHaveBeenCalled()
+    expect(customMenu).toHaveBeenCalledOnce()
   })
 
-  it('restores existing menu behavior when removed', () => {
+  it('removes the native menu filter during cleanup', () => {
     const target = document.createElement('textarea')
     document.body.append(target)
     const customMenu = vi.fn()
@@ -65,7 +65,7 @@ describe('temporary app-wide context menu guard', () => {
     removeGuard()
 
     expect(contextMenu(target).allowed).toBe(true)
-    expect(customMenu).toHaveBeenCalledOnce()
+    expect(customMenu).toHaveBeenCalledTimes(2)
   })
 
   it('keeps ordinary clicks, clipboard events, and copy shortcuts available', () => {

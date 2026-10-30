@@ -210,7 +210,7 @@ describe('Git daily reports', () => {
     git.acceptSaved(configuration)
     pending.resolve({ ...configuration, repositories: [] })
     expect(await loading).toBe(false)
-    expect(git.settings.value).toEqual(configuration)
+    expect(git.settings.value).toEqual(cloneGitSettings(configuration))
     expect(git.loading.value).toBe(false)
   })
 
@@ -232,6 +232,7 @@ function moduleContext() {
   const draft = ref('')
   return {
     git,
+    ai: { defaultProvider: computed(() => undefined) },
     journal: {
       workspace: ref({ path: '/tmp/workspace', name: 'workspace' }),
       selectedDate: ref(log.date),
@@ -262,6 +263,30 @@ function moduleContext() {
 }
 
 describe('Git module', () => {
+  it('keeps icon-only fetch, copy and append actions together in the top toolbar', async () => {
+    const context = moduleContext()
+    invoke.mockResolvedValueOnce(log)
+    const wrapper = mount(GitModule, {
+      global: { provide: { [MODULE_CONTEXT as symbol]: context as unknown as ModuleContext } },
+    })
+    expect(wrapper.find('.git-toolbar [aria-label="Git 配置"]').exists()).toBe(false)
+    expect(wrapper.get('.git-toolbar-actions').text()).toBe('')
+    expect(wrapper.get('.git-fetch').attributes('aria-label')).toBe('获取提交')
+    expect(wrapper.find('.git-copy').exists()).toBe(false)
+    await wrapper.get('.git-fetch').trigger('click')
+    await flushPromises()
+    expect(wrapper.findAll('.git-toolbar-actions .icon-button')).toHaveLength(3)
+    expect(wrapper.get('.git-toolbar-actions').text()).toBe('')
+    expect(wrapper.get('.git-copy').attributes('title')).toBe('复制日报')
+    expect(wrapper.get('.git-append').attributes('title')).toBe('追加到当日日报')
+    expect(wrapper.find('.git-report-actions').exists()).toBe(false)
+    context.journal.selectedDate.value = '20261029'
+    await flushPromises()
+    expect(wrapper.find('.git-copy').exists()).toBe(false)
+    expect(wrapper.find('.git-append').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
   it('opens the workbench lazily, retains it between views, and invalidates reports after repository actions', async () => {
     const context = moduleContext()
     invoke.mockResolvedValueOnce(log)
@@ -334,16 +359,16 @@ describe('Git module', () => {
     expect(wrapper.text()).toContain('1 个仓库读取失败')
     expect(wrapper.text()).toContain('目录不存在')
     await wrapper.get('textarea').setValue('人工调整后的工作记录')
-    await wrapper.get('.git-report-actions .text-action').trigger('click')
+    await wrapper.get('.git-toolbar .git-copy').trigger('click')
     expect(invoke).toHaveBeenCalledWith('copy_content', { content: '人工调整后的工作记录' })
-    await wrapper.get('.git-report-actions .git-fetch').trigger('click')
+    await wrapper.get('.git-toolbar .git-append').trigger('click')
     await flushPromises()
     expect(context.actions.appendGitReport).toHaveBeenCalledExactlyOnceWith(
       '/tmp/workspace',
       log.date,
       '人工调整后的工作记录',
     )
-    expect(wrapper.get('.git-report-actions .git-fetch').attributes('disabled')).toBeDefined()
+    expect(wrapper.get('.git-toolbar .git-append').attributes('disabled')).toBeDefined()
     context.journal.selectedDate.value = '20261029'
     await flushPromises()
     expect(wrapper.find('textarea').exists()).toBe(false)
@@ -371,9 +396,9 @@ describe('Git module', () => {
     expect(wrapper.get<HTMLTextAreaElement>(`[aria-label="Git 日报预览 ${log.date}"]`).element.value).toContain(
       '完成 Git 配置',
     )
-    expect(wrapper.get('.git-report-actions .text-action').attributes('disabled')).toBeUndefined()
-    expect(wrapper.get('.git-report-actions .git-fetch').attributes('disabled')).toBeUndefined()
-    await wrapper.get('.git-report-actions .git-fetch').trigger('click')
+    expect(wrapper.get('.git-toolbar .git-copy').attributes('disabled')).toBeUndefined()
+    expect(wrapper.get('.git-toolbar .git-append').attributes('disabled')).toBeUndefined()
+    await wrapper.get('.git-toolbar .git-append').trigger('click')
     await flushPromises()
     expect(context.actions.appendGitReports).toHaveBeenCalledExactlyOnceWith('/tmp/workspace', [
       { date: log.date, content: gitDailyReport(log) },
@@ -395,17 +420,17 @@ describe('Git module', () => {
     expect(wrapper.findAll('textarea')).toHaveLength(2)
     await wrapper.get('[aria-label="Git 日报预览 20261027"]').setValue('第一天人工补充')
     await wrapper.get('[aria-label="Git 日报预览 20261028"]').setValue('第二天人工补充')
-    await wrapper.get('.git-report-actions .text-action').trigger('click')
+    await wrapper.get('.git-toolbar .git-copy').trigger('click')
     expect(invoke).toHaveBeenCalledWith('copy_content', {
       content: expect.stringMatching(/2026-10-27[\s\S]*第一天人工补充[\s\S]*2026-10-28[\s\S]*第二天人工补充/),
     })
-    await wrapper.get('.git-report-actions .git-fetch').trigger('click')
+    await wrapper.get('.git-toolbar .git-append').trigger('click')
     await flushPromises()
     expect(context.actions.appendGitReports).toHaveBeenCalledExactlyOnceWith('/tmp/workspace', [
       { date: '20261027', content: '第一天人工补充' },
       { date: '20261028', content: '第二天人工补充' },
     ])
-    expect(wrapper.get('.git-report-actions .git-fetch').attributes('disabled')).toBeDefined()
+    expect(wrapper.get('.git-toolbar .git-append').attributes('disabled')).toBeDefined()
     wrapper.unmount()
   })
 
@@ -429,16 +454,16 @@ describe('Git module', () => {
     })
     await wrapper.get('.git-toolbar .git-fetch').trigger('click')
     await flushPromises()
-    await wrapper.get('.git-report-actions .git-fetch').trigger('click')
+    await wrapper.get('.git-toolbar .git-append').trigger('click')
     await flushPromises()
     expect(wrapper.text()).toContain('磁盘暂时不可写')
-    expect(wrapper.get('.git-report-actions .git-fetch').attributes('disabled')).toBeUndefined()
-    await wrapper.get('.git-report-actions .git-fetch').trigger('click')
+    expect(wrapper.get('.git-toolbar .git-append').attributes('disabled')).toBeUndefined()
+    await wrapper.get('.git-toolbar .git-append').trigger('click')
     await flushPromises()
     expect(context.actions.appendGitReports).toHaveBeenNthCalledWith(2, '/tmp/workspace', [
       { date: '20261028', content: '日报项目\n1、第二天工作' },
     ])
-    expect(wrapper.get('.git-report-actions .git-fetch').attributes('disabled')).toBeDefined()
+    expect(wrapper.get('.git-toolbar .git-append').attributes('disabled')).toBeDefined()
     wrapper.unmount()
   })
 
@@ -453,7 +478,7 @@ describe('Git module', () => {
     })
     await wrapper.get('.git-toolbar .git-fetch').trigger('click')
     await flushPromises()
-    await wrapper.get('.git-report-actions .git-fetch').trigger('click')
+    await wrapper.get('.git-toolbar .git-append').trigger('click')
     context.rangeDates.value = []
     await flushPromises()
     pending.resolve({ documents: [], skippedDates: [], failed: [{ date: '20261027', error: '旧范围错误' }] })
@@ -477,10 +502,10 @@ describe('Git module', () => {
     })
     await wrapper.get('.git-toolbar .git-fetch').trigger('click')
     await flushPromises()
-    await wrapper.get('.git-report-actions .git-fetch').trigger('click')
+    await wrapper.get('.git-toolbar .git-append').trigger('click')
     await flushPromises()
-    expect(wrapper.get('.git-report-actions .git-fetch').attributes('disabled')).toBeDefined()
-    await wrapper.get('.git-report-actions .git-fetch').trigger('click')
+    expect(wrapper.get('.git-toolbar .git-append').attributes('disabled')).toBeDefined()
+    await wrapper.get('.git-toolbar .git-append').trigger('click')
     expect(context.actions.appendGitReports).toHaveBeenCalledTimes(1)
     wrapper.unmount()
   })
@@ -552,14 +577,14 @@ describe('Git module', () => {
     })
     await wrapper.get('.git-toolbar .git-fetch').trigger('click')
     await flushPromises()
-    expect(wrapper.get('.git-report-actions .git-fetch').attributes('disabled')).toBeUndefined()
+    expect(wrapper.get('.git-toolbar .git-append').attributes('disabled')).toBeUndefined()
     context.rangeDates.value = []
     await flushPromises()
     expect(context.git.result.value).toBeNull()
     await wrapper.get('.git-toolbar .git-fetch').trigger('click')
     await flushPromises()
     expect(invoke).toHaveBeenLastCalledWith('read_git_daily_log', { workspacePath: '/tmp/workspace', date: log.date })
-    expect(wrapper.get('.git-report-actions .git-fetch').attributes('disabled')).toBeUndefined()
+    expect(wrapper.get('.git-toolbar .git-append').attributes('disabled')).toBeUndefined()
     expect(wrapper.findAll('input[type="date"]')).toHaveLength(0)
     wrapper.unmount()
   })
@@ -577,6 +602,77 @@ describe('Git module', () => {
 })
 
 describe('Git settings form', () => {
+  it('reveals invalid collapsed repositories and opens newly added repositories for editing', async () => {
+    const wrapper = mount(GitSettings, {
+      attachTo: document.body,
+      props: {
+        modelValue: {
+          ...cloneGitSettings(configuration),
+          repositories: [...configuration.repositories, { id: 'invalid', name: '', path: '', author: '', branch: '' }],
+        },
+        busy: false,
+        workspacePath: '/tmp/workspace',
+        'onUpdate:modelValue': (value) => {
+          void wrapper.setProps({ modelValue: value })
+        },
+      },
+    })
+    try {
+      expect(wrapper.get<HTMLDetailsElement>('[data-repository-id="invalid"]').element.open).toBe(false)
+      expect(wrapper.vm.validate()).toBe(false)
+      expect(wrapper.get<HTMLDetailsElement>('[data-repository-id="invalid"]').element.open).toBe(true)
+      expect(document.activeElement).toBe(wrapper.get('[data-repository-id="invalid"] input').element)
+      await wrapper.get('.git-repositories-heading button').trigger('click')
+      await flushPromises()
+      const latest = wrapper.findAll<HTMLDetailsElement>('.git-repository-form').at(-1)!
+      expect(latest.element.open).toBe(true)
+      expect(document.activeElement).toBe(latest.get('input').element)
+    } finally {
+      wrapper.unmount()
+    }
+  })
+
+  it('opens advanced settings when the saved Git executable needs correction', () => {
+    const wrapper = mount(GitSettings, {
+      attachTo: document.body,
+      props: {
+        modelValue: { ...cloneGitSettings(), executable: 'relative/path' },
+        busy: false,
+        workspacePath: '/tmp/workspace',
+      },
+    })
+    try {
+      expect(wrapper.get<HTMLDetailsElement>('.git-advanced').element.open).toBe(false)
+      expect(wrapper.vm.validate()).toBe(false)
+      expect(wrapper.get<HTMLDetailsElement>('.git-advanced').element.open).toBe(true)
+      expect(document.activeElement).toBe(wrapper.get('.git-advanced input').element)
+    } finally {
+      wrapper.unmount()
+    }
+  })
+  it('keeps the AI commit prompt as a settings draft and restores the recommended prompt', async () => {
+    const wrapper = mount(GitSettings, {
+      props: {
+        modelValue: cloneGitSettings(),
+        busy: false,
+        workspacePath: '/tmp/workspace',
+        'onUpdate:modelValue': (value) => {
+          void wrapper.setProps({ modelValue: value })
+        },
+      },
+    })
+    await wrapper.get('[aria-label="Git 提交说明提示词"]').setValue('使用中文，只输出一行 fix: 说明')
+    expect(wrapper.props('modelValue').commitPrompt).toBe('使用中文，只输出一行 fix: 说明')
+    expect(wrapper.vm.validate()).toBe(true)
+    expect(invoke).not.toHaveBeenCalled()
+    await wrapper.get('.git-prompt-heading button').trigger('click')
+    expect(wrapper.props('modelValue').commitPrompt).toBe(cloneGitSettings().commitPrompt)
+    await wrapper.setProps({ modelValue: { ...cloneGitSettings(), commitPrompt: '字'.repeat(2001) } })
+    expect(wrapper.vm.validate()).toBe(false)
+    expect(wrapper.text()).toContain('2000 字')
+    wrapper.unmount()
+  })
+
   it('keeps changes in the parent draft and validates incomplete repositories before saving', async () => {
     const wrapper = mount(GitSettings, {
       props: {

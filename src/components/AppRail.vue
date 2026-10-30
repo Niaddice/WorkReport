@@ -44,7 +44,7 @@ const moduleButtons = [
   { id: 'excel', label: 'Excel报告', icon: PhFileXls },
   { id: 'summary', label: '总结', icon: PhSparkle },
   { id: 'directory', label: '工作空间目录', icon: PhFolderOpen },
-  { id: 'git', label: 'Git 日报', icon: PhGitBranch },
+  { id: 'git', label: 'Git', icon: PhGitBranch },
 ] as const
 </script>
 

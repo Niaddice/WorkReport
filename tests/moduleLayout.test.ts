@@ -17,6 +17,20 @@ beforeEach(() => {
 })
 
 describe('useModuleLayout saved layouts', () => {
+  it('applies the compact calendar preset without replacing skins or named layouts', async () => {
+    const state = makeLayout()
+    state.setSkin('jade')
+    state.saveLayout('原布局')
+    const original = state.savedLayouts.value[0]!.layout
+    expect(state.applyPreset('compact-writing')).toBe(true)
+    expect(state.items.value.map((item) => item.id)).toEqual(['calendar', 'overview', 'editor'])
+    expect(state.skin.value).toBe('jade')
+    expect(state.savedLayouts.value[0]!.layout).toEqual(original)
+    expect(state.applyPreset('unknown')).toBe(false)
+    await vi.waitFor(() => expect(save).toHaveBeenCalled())
+    expect(state.applySavedLayout('原布局')).toBe(true)
+    expect(state.layout.value).toEqual(original)
+  })
   it('persists pixel-aware resizing without changing non-adjacent modules', async () => {
     load.mockResolvedValue({
       layout: {

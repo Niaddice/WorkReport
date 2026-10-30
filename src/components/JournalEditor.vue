@@ -29,6 +29,7 @@ import {
 import { api, type Document, type FileFormat } from '../lib/workspace'
 import { pushMessage } from '../lib/messages'
 import { markdownEdit, type MarkdownAction } from '../lib/markdownEditing'
+import { registerContextEditor } from '../lib/contextMenus'
 import { selectMenuPosition } from '../lib/select'
 import { createTextareaScrollReader, elementScrollPosition, type MarkdownScrollPosition } from '../lib/markdownScroll'
 
@@ -64,6 +65,32 @@ const emit = defineEmits<{
   'toggle-journal-preview': []
 }>()
 const textarea = ref<HTMLTextAreaElement>()
+watch(
+  textarea,
+  (element, _previous, onCleanup) => {
+    if (!element) return
+    const unregister = registerContextEditor(element, {
+      scope: () => `${props.date}/${props.document?.filename}`,
+      canUndo: () => !props.disabled && props.canUndo,
+      canRedo: () => !props.disabled && props.canRedo,
+      undo: () => {
+        if (!props.disabled && props.canUndo) emit('undo')
+      },
+      redo: () => {
+        if (!props.disabled && props.canRedo) emit('redo')
+      },
+      replace: (text, start, end) => {
+        if (props.disabled) return
+        emit('edit', props.content.slice(0, start) + text + props.content.slice(end), true)
+        void nextTick(() => {
+          if (element === textarea.value) element.setSelectionRange(start + text.length, start + text.length)
+        })
+      },
+    })
+    onCleanup(unregister)
+  },
+  { flush: 'post' },
+)
 const editorBody = ref<HTMLElement>()
 const inlinePreview = ref<HTMLElement>()
 const scrollReader = createTextareaScrollReader()

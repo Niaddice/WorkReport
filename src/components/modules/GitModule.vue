@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import dayjs from 'dayjs'
-import { PhArrowClockwise, PhCopy, PhGearSix, PhGitCommit, PhNotePencil } from '@phosphor-icons/vue'
+import { PhArrowClockwise, PhCheck, PhCircleNotch, PhCopy, PhGitCommit, PhNotePencil } from '@phosphor-icons/vue'
 import { useModuleContext } from '../../modules/context'
 import { gitDailyReport, gitDailyReports, validateGitDateRange } from '../../lib/useGit'
 import { api } from '../../lib/workspace'
@@ -9,7 +9,7 @@ import type { GitReportEntry } from '../../lib/workspace'
 import { pushMessage } from '../../lib/messages'
 import GitWorkbench from '../GitWorkbench.vue'
 
-const { git, journal, actions, disabled, today, rangeDates } = useModuleContext()
+const { git, journal, actions, disabled, rangeDates, ai } = useModuleContext()
 const { settings, reading, readError, result } = git
 const report = ref('')
 const dailyReports = ref<GitReportEntry[]>([])
@@ -65,17 +65,21 @@ const pendingReports = computed(() =>
     .map((entry) => ({ date: entry.date, content: entry.content.trim() }))
     .filter((entry) => entry.content && appliedContents.value[entry.date] !== entry.content),
 )
-const atToday = computed(
-  () =>
-    !rangeDates.value.length &&
-    journal.selectedDate.value === today.value &&
-    startDate.value === today.value &&
-    endDate.value === today.value,
-)
 const alreadyIncluded = computed(() =>
   batchMode.value
     ? ready.value && !pendingReports.value.length
     : !!report.value.trim() && journal.draft.value.includes(report.value.trim()),
+)
+const appendLabel = computed(() =>
+  applying.value
+    ? '正在保存…'
+    : alreadyIncluded.value
+      ? batchMode.value
+        ? '已追加到对应日报'
+        : '已在日报中'
+      : batchMode.value
+        ? '追加到对应日报'
+        : '追加到当日日报',
 )
 watch(
   scope,
@@ -99,10 +103,6 @@ onBeforeUnmount(() => git.clear())
 function openView(value: 'daily' | 'workbench') {
   view.value = value
   if (value === 'workbench') workbenchOpened.value = true
-}
-
-async function selectToday() {
-  await actions.selectReport(today.value)
 }
 
 async function read() {
@@ -163,8 +163,8 @@ async function append() {
 </script>
 
 <template>
-  <div class="git-module" :aria-busy="reading">
-    <div class="git-toolbar">
+  <div class="git-module" :aria-busy="reading" :class="{ 'workbench-mode': view === 'workbench' }">
+    <div v-if="view === 'daily'" class="git-toolbar">
       <div class="git-date">
         <strong>{{ view === 'daily' ? dateLabel : 'Git 工作台' }}</strong
         ><span
@@ -172,35 +172,46 @@ async function append() {
           {{ settings.repositories.length }} 个仓库</span
         >
       </div>
-      <div class="git-toolbar-actions">
-        <button
-          v-if="view === 'daily'"
-          type="button"
-          class="text-action"
-          :disabled="unavailable || atToday"
-          @click="selectToday"
-        >
-          今天
-        </button>
+      <div v-if="view === 'daily'" class="git-toolbar-actions" role="group" aria-label="提交日报操作">
         <button
           type="button"
-          class="icon-button"
-          aria-label="Git 配置"
-          title="Git 配置"
-          :disabled="unavailable"
-          @click="actions.openGitSettings"
-        >
-          <PhGearSix :size="18" />
-        </button>
-        <button
-          v-if="view === 'daily'"
-          type="button"
-          class="git-fetch"
+          class="icon-button git-fetch"
+          aria-label="获取提交"
+          :title="reading ? '正在读取…' : '获取提交'"
+          :aria-busy="reading"
           :disabled="unavailable || reading || !settings.repositories.length || !!rangeError"
           @click="read"
         >
-          <PhArrowClockwise :size="16" />{{ reading ? '正在读取…' : '获取提交' }}
+          <PhArrowClockwise :size="18" :class="{ spin: reading }" aria-hidden="true" />
         </button>
+        <template v-if="total">
+          <button
+            type="button"
+            class="icon-button git-copy"
+            aria-label="复制日报"
+            title="复制日报"
+            :disabled="!ready || unavailable || reading"
+            @click="copy"
+          >
+            <PhCopy :size="18" aria-hidden="true" />
+          </button>
+          <button
+            type="button"
+            class="icon-button git-append"
+            :aria-label="appendLabel"
+            :title="appendLabel"
+            :aria-busy="applying"
+            :disabled="!canAppend || unavailable || reading || alreadyIncluded || journal.saving.value"
+            @click="append"
+          >
+            <component
+              :is="applying ? PhCircleNotch : alreadyIncluded ? PhCheck : PhNotePencil"
+              :size="18"
+              :class="{ spin: applying }"
+              aria-hidden="true"
+            />
+          </button>
+        </template>
       </div>
     </div>
     <nav class="git-views" aria-label="Git 功能">
@@ -214,6 +225,8 @@ async function append() {
       :repositories="settings.repositories"
       :disabled="unavailable"
       :active="view === 'workbench'"
+      :ai-provider-name="ai.defaultProvider.value?.name ?? null"
+      @configure-ai="actions.openAiSettings"
       @changed="git.clear()"
     />
     <div v-show="view === 'daily'" class="git-content">
@@ -297,29 +310,6 @@ async function append() {
                 spellcheck="false"
               />
             </template>
-            <div class="git-report-actions">
-              <button type="button" class="text-action" :disabled="!ready || applying || reading" @click="copy">
-                <PhCopy :size="16" />复制
-              </button>
-              <button
-                type="button"
-                class="git-fetch"
-                :disabled="!canAppend || unavailable || reading || alreadyIncluded || journal.saving.value"
-                @click="append"
-              >
-                <PhNotePencil :size="16" />{{
-                  applying
-                    ? '正在保存…'
-                    : alreadyIncluded
-                      ? batchMode
-                        ? '已追加到对应日报'
-                        : '已在日报中'
-                      : batchMode
-                        ? '追加到对应日报'
-                        : '追加到当日日报'
-                }}
-              </button>
-            </div>
             <p v-if="batchMode" class="git-hint">
               按提交日期分别追加，保留各日日报已有内容；尚无日报时自动创建，没有提交的日期保持不变。部分失败时可重试未完成日期。
             </p>
@@ -339,7 +329,16 @@ async function append() {
   min-height: 0;
   display: flex;
   flex-direction: column;
-  color: #39485d;
+  color: var(--skin-text);
+}
+.workbench-mode {
+  overflow: hidden;
+}
+.workbench-mode .git-views {
+  padding: 6px 12px;
+}
+.workbench-mode .git-views button {
+  padding: 6px 10px;
 }
 .git-toolbar {
   display: flex;
@@ -348,7 +347,7 @@ async function append() {
   justify-content: space-between;
   gap: 12px;
   padding: 16px 20px;
-  border-bottom: 1px solid #eef2f7;
+  border-bottom: 1px solid var(--skin-surface);
 }
 .git-date {
   display: grid;
@@ -361,55 +360,37 @@ async function append() {
 .git-date > span,
 .git-hint,
 .git-result-caption {
-  color: #8190a5;
+  color: var(--skin-text-muted);
   font-size: var(--text-small);
   line-height: 1.7;
 }
 .git-toolbar-actions,
-.git-report-actions,
-.git-fetch,
 .text-action {
   display: flex;
   align-items: center;
   gap: 8px;
-}
-.git-fetch {
-  border: 1px solid #d3e3fd;
-  border-radius: 10px;
-  padding: 9px 12px;
-  background: #e7f0fe;
-  color: var(--skin-accent);
-  font: inherit;
-  font-size: var(--text-body);
-  cursor: pointer;
-}
-.git-fetch:hover:not(:disabled) {
-  background: #d3e3fd;
 }
 .icon-button {
   display: grid;
   place-items: center;
   width: 32px;
   height: 32px;
+  flex-shrink: 0;
+  padding: 0;
   border: 0;
   border-radius: 50%;
   background: transparent;
-  color: #8190a5;
+  color: var(--skin-text-muted);
   cursor: pointer;
 }
 .icon-button:hover:not(:disabled) {
-  background: #e7f0fe;
+  background: var(--skin-accent-soft);
   color: var(--skin-accent);
 }
 .icon-button:disabled {
   opacity: 0.5;
   cursor: default;
 }
-.git-fetch:disabled {
-  opacity: 0.5;
-  cursor: default;
-}
-.git-fetch:focus-visible,
 .icon-button:focus-visible,
 textarea:focus-visible {
   outline: 2px solid var(--skin-accent);
@@ -426,18 +407,18 @@ textarea:focus-visible {
   flex-shrink: 0;
   gap: 4px;
   padding: 8px 20px;
-  border-bottom: 1px solid #eef2f7;
+  border-bottom: 1px solid var(--skin-surface);
 }
 .git-views button {
   padding: 8px 12px;
   border: 0;
   border-radius: 8px;
   background: transparent;
-  color: #667a94;
+  color: var(--skin-text-secondary);
   font-size: var(--text-body);
 }
 .git-views button[aria-pressed='true'] {
-  background: #e7f0fe;
+  background: var(--skin-accent-soft);
   color: var(--skin-accent);
   font-weight: 600;
 }
@@ -451,10 +432,10 @@ textarea:focus-visible {
   gap: 14px;
   min-height: 240px;
   text-align: center;
-  color: #8190a5;
+  color: var(--skin-text-muted);
 }
 .git-empty strong {
-  color: #4b607c;
+  color: var(--skin-text-body);
   font-size: var(--text-title);
   font-weight: 500;
 }
@@ -465,9 +446,9 @@ textarea:focus-visible {
 }
 .git-notice {
   padding: 10px 12px;
-  background: #fff7e5;
+  background: var(--skin-warning-soft);
   border-radius: 10px;
-  color: #8a6421;
+  color: var(--skin-warning);
   font-size: var(--text-small);
   line-height: 1.7;
 }
@@ -487,13 +468,13 @@ textarea:focus-visible {
   overflow-wrap: anywhere;
 }
 .git-repository-title > span {
-  color: #8190a5;
+  color: var(--skin-text-muted);
   font-size: var(--text-small);
 }
 .git-commits {
   margin: 0 0 0 5px;
   padding: 0 0 0 18px;
-  border-left: 2px solid #d3e3fd;
+  border-left: 2px solid var(--skin-accent-border);
   list-style: none;
 }
 .git-commits li {
@@ -524,14 +505,14 @@ textarea:focus-visible {
   overflow-wrap: anywhere;
 }
 .git-commits code {
-  color: #8190a5;
+  color: var(--skin-text-muted);
   font-size: var(--text-small);
 }
 .git-commit-meta {
   display: grid;
   gap: 3px;
   margin: 8px 0;
-  color: #8190a5;
+  color: var(--skin-text-muted);
   font-size: var(--text-small);
   overflow-wrap: anywhere;
 }
@@ -542,14 +523,14 @@ textarea:focus-visible {
   font-size: var(--text-body);
   line-height: 1.7;
   padding: 12px;
-  background: #f8fafd;
+  background: var(--skin-canvas);
   border-radius: 10px;
 }
 .git-report-preview {
   display: grid;
   gap: 12px;
   padding-top: 18px;
-  border-top: 1px solid #eef2f7;
+  border-top: 1px solid var(--skin-surface);
 }
 .git-report-preview label,
 .git-preview-heading {
@@ -561,7 +542,7 @@ textarea:focus-visible {
 }
 .git-report-preview label span,
 .git-preview-heading span {
-  color: #8190a5;
+  color: var(--skin-text-muted);
   font-size: var(--text-small);
 }
 .git-report-preview textarea {
@@ -569,9 +550,9 @@ textarea:focus-visible {
   width: 100%;
   min-height: 180px;
   padding: 14px;
-  border: 1px solid #dce5f0;
+  border: 1px solid var(--skin-border);
   border-radius: 12px;
-  background: #f8fafd;
+  background: var(--skin-canvas);
   color: inherit;
   font: inherit;
   font-size: var(--text-body);
@@ -584,10 +565,6 @@ textarea:focus-visible {
 }
 .git-day-preview textarea {
   min-height: 120px;
-}
-.git-report-actions {
-  flex-wrap: wrap;
-  justify-content: flex-end;
 }
 .git-report-preview .git-hint {
   margin: 0;

@@ -15,6 +15,7 @@ export interface GitSettings {
   executable: string
   repositories: GitRepository[]
   includeMerges: boolean
+  commitPrompt?: string
 }
 
 export interface GitCommit {
@@ -46,17 +47,27 @@ export function validateGitDateRange(startDate: string, endDate: string): string
   return ''
 }
 
-export const DEFAULT_GIT_SETTINGS: GitSettings = { executable: 'git', repositories: [], includeMerges: false }
+export const DEFAULT_GIT_COMMIT_PROMPT =
+  '根据暂存区的更改生成简洁准确的中文 Git 提交说明。首行使用 Conventional Commits 格式（如 feat:、fix:、refactor:），概括主要改动；必要时空一行后列出关键变化。只描述实际更改，不编造测试结果或工作成果，只输出提交说明正文。'
+export const DEFAULT_GIT_SETTINGS: GitSettings = {
+  executable: 'git',
+  repositories: [],
+  includeMerges: false,
+  commitPrompt: DEFAULT_GIT_COMMIT_PROMPT,
+}
 
 export function cloneGitSettings(value: GitSettings = DEFAULT_GIT_SETTINGS): GitSettings {
   return {
     executable: value.executable,
     repositories: value.repositories.map((repository) => ({ ...repository })),
     includeMerges: value.includeMerges,
+    commitPrompt: value.commitPrompt ?? DEFAULT_GIT_COMMIT_PROMPT,
   }
 }
 
 export function validateGitSettings(settings: GitSettings): string {
+  if ((settings.commitPrompt?.length ?? 0) > 2000 || settings.commitPrompt?.includes('\0'))
+    return 'Git 提交说明提示词不能超过 2000 字，且不能包含空字符。'
   const absolute = (path: string) => /^(?:\/|[a-z]:[\\/]|\\\\)/i.test(path)
   if (
     !settings.executable.trim() ||
