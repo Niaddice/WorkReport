@@ -1,14 +1,14 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, ref } from 'vue'
 import JournalEditor from '../JournalEditor.vue'
+import WorkspaceDocumentView from '../WorkspaceDocumentView.vue'
 import RangeOverview from '../RangeOverview.vue'
 import { useModuleContext } from '../../modules/context'
-import type { MarkdownScrollPosition } from '../../lib/markdownScroll'
-
 const context = useModuleContext()
 const { journal, actions, disabled, storageMode, canRestore } = context
-const { editorPreview, rangeDates, rangeDocuments, rangeLoading, rangeError } = context
-const { available: previewAvailable, visible: previewVisible } = context.journalPreview
+const { rangeDates, rangeDocuments, rangeLoading, rangeError } = context
+const splitPreview = ref(false)
+const { sourceKey: scrollSourceKey } = context.journalPreview
 const {
   document: activeDocument,
   selectedDate,
@@ -26,50 +26,50 @@ const {
   flush,
   reportError,
 } = journal
-const editor = ref<InstanceType<typeof JournalEditor>>()
+const editor = ref<InstanceType<typeof JournalEditor> | InstanceType<typeof WorkspaceDocumentView>>()
 
 function focus() {
   editor.value?.focus()
 }
-function onScrollPosition(position: MarkdownScrollPosition) {
-  if (!previewAvailable.value || position.sourceKey !== selectedDate.value) return
-  context.journalPreview.scrollPosition.value = { ...position, sourceKey: context.journalPreview.sourceKey.value }
+const handle = { focus }
+function registerEditor() {
+  context.editor.value = handle
 }
-function onRangeScrollPosition(position: MarkdownScrollPosition) {
-  if (!previewAvailable.value || !rangeDates.value.length) return
-  context.journalPreview.scrollPosition.value = { ...position, sourceKey: context.journalPreview.sourceKey.value }
-}
-
 onMounted(() => {
-  context.editor.value = { focus }
+  registerEditor()
 })
 onBeforeUnmount(() => {
-  context.editor.value = null
-  context.journalPreview.scrollPosition.value = null
+  if (context.editor.value?.focus === focus) context.editor.value = null
 })
 </script>
 
 <template>
-  <div class="editor-stage">
+  <div class="editor-stage" @focusin="registerEditor">
     <Transition name="editor-switch">
+      <WorkspaceDocumentView
+        v-if="context.workspaceDocument?.path.value"
+        key="workspace-file"
+        ref="editor"
+        :state="context.workspaceDocument"
+        :disabled="disabled"
+        @close="actions.showJournal?.()"
+        @reload="actions.requestReload"
+      />
       <RangeOverview
-        v-if="rangeDates.length"
+        v-else-if="rangeDates.length"
         key="range"
-        v-model:preview="editorPreview"
+        v-model:preview="splitPreview"
         :dates="rangeDates"
         :documents="rangeDocuments"
         :loading="rangeLoading"
         :error="rangeError"
-        :journal-preview-available="previewAvailable"
-        :journal-preview-visible="previewVisible"
-        @toggle-journal-preview="context.journalPreview.toggle"
-        @scroll-position="onRangeScrollPosition"
+        :scroll-source-key="scrollSourceKey"
       />
       <JournalEditor
         v-else
         key="editor"
         ref="editor"
-        v-model:preview="editorPreview"
+        v-model:preview="splitPreview"
         :date="selectedDate"
         :document="activeDocument"
         :is-new="isNewDraft"
@@ -83,9 +83,7 @@ onBeforeUnmount(() => {
         :can-restore="canRestore"
         :can-undo="canUndo"
         :can-redo="canRedo"
-        :journal-preview-available="previewAvailable"
-        :journal-preview-visible="previewVisible"
-        @toggle-journal-preview="context.journalPreview.toggle"
+        :scroll-source-key="scrollSourceKey"
         @edit="edit"
         @undo="undo"
         @redo="redo"
@@ -94,7 +92,6 @@ onBeforeUnmount(() => {
         @format="actions.requestFormat"
         @restore="actions.requestRestore"
         @error="reportError"
-        @scroll-position="onScrollPosition"
       />
     </Transition>
   </div>

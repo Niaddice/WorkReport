@@ -9,7 +9,7 @@ const props = withDefaults(
     id: ModuleId
     title: string
     icon: Component
-    /** 只剩一个模块时不允许关闭。 */
+    /** 是否显示关闭模块按钮。 */
     canRemove: boolean
     dragging: boolean
     /** 当前正在操作的模块。 */
@@ -98,7 +98,7 @@ function openHelp() {
           <PhCornersOut v-else :size="15" aria-hidden="true" />
         </button>
         <button
-          v-if="canRemove && !maximized"
+          v-if="canRemove"
           type="button"
           class="module-panel-action module-panel-remove"
           :aria-label="`从首页移除「${title}」模块`"

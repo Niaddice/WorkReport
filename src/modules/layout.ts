@@ -4,6 +4,7 @@ import {
   isModuleId,
   type DropSide,
   type LayoutGeometry,
+  type Layout,
   type LayoutGutter,
   type LayoutLeaf,
   type LayoutMetrics,
@@ -34,7 +35,7 @@ const MAX_LAYOUT_DEPTH = MAX_MODULES
 export const MAX_SAVED_LAYOUTS = 20
 export const MAX_LAYOUT_NAME_CHARS = 50
 
-/** 新工作空间默认左右分栏：日历在左、日报编辑在右。 */
+/** 新工作空间默认左右分栏：日历在左、日报在右。 */
 export const DEFAULT_UI_PREFERENCES: UiPreferences = {
   layout: {
     type: 'split',
@@ -61,7 +62,10 @@ function createSplit(direction: SplitDirection, ratio: number, first: LayoutNode
   return { type: 'split', direction, ratio, first, second }
 }
 
-function cloneLayout(layout: LayoutNode): LayoutNode {
+function cloneLayout(layout: LayoutNode): LayoutNode
+function cloneLayout(layout: Layout): Layout
+function cloneLayout(layout: Layout): Layout {
+  if (layout.type === 'empty') return { type: 'empty' }
   if (layout.type === 'leaf') return createLeaf(layout.id)
   return createSplit(layout.direction, layout.ratio, cloneLayout(layout.first), cloneLayout(layout.second))
 }
@@ -79,51 +83,80 @@ function normalizeSkin(value: unknown): SkinId {
   return SKINS.find((skin) => skin.id === value)?.id ?? DEFAULT_SKIN
 }
 
-function layoutHasModule(layout: LayoutNode, id: ModuleId): boolean {
+function layoutHasModule(layout: Layout, id: ModuleId): boolean {
+  if (layout.type === 'empty') return false
   if (layout.type === 'leaf') return layout.id === id
   return layoutHasModule(layout.first, id) || layoutHasModule(layout.second, id)
 }
 
-function layoutLeafCount(layout: LayoutNode): number {
+function layoutLeafCount(layout: Layout): number {
+  if (layout.type === 'empty') return 0
   if (layout.type === 'leaf') return 1
   return layoutLeafCount(layout.first) + layoutLeafCount(layout.second)
+}
+
+/** 迁移旧预览模块时，优先保留原有日报的位置。 */
+function hasEditor(value: unknown, depth = 0): boolean {
+  if (depth > MAX_LAYOUT_DEPTH || !value || typeof value !== 'object') return false
+  const node = value as Record<string, unknown>
+  if (node.type === 'leaf') return node.id === 'editor'
+  return node.type === 'split' && (hasEditor(node.first, depth + 1) || hasEditor(node.second, depth + 1))
 }
 
 /**
  * 布局树归一化：递归校验新 schema 的布局树。
  *
  * - 只接受 type 为 leaf/split 的节点，叶子 id 必须已注册；
- * - 同一模块只保留视觉顺序上的第一次出现，总数不超过 MAX_MODULES；
+ * - 同一模块只保留第一次出现；旧独立预览合并到日报，总数不超过 MAX_MODULES；
  * - split 的 ratio 夹紧到安全区间，direction 非法时回退 row；
  * - 非法子树直接丢弃，只剩一个合法子节点时用该子节点替代 split。
  */
-function normalizeLayoutNode(value: unknown, seen: Set<ModuleId>, depth: number): LayoutNode | null {
+function normalizeLayoutNode(
+  value: unknown,
+  seen: Set<string>,
+  depth: number,
+  keepEditor = hasEditor(value),
+): LayoutNode | null {
   if (depth > MAX_LAYOUT_DEPTH || !value || typeof value !== 'object') return null
   const candidate = value as Record<string, unknown>
   if (candidate.type === 'leaf') {
-    if (!isModuleId(candidate.id) || seen.has(candidate.id) || seen.size >= MAX_MODULES) return null
-    seen.add(candidate.id)
-    return createLeaf(candidate.id)
+    if (!isModuleId(candidate.id) || seen.size >= MAX_MODULES) return null
+    const legacyPreview = candidate.id.startsWith('editor-')
+    if (legacyPreview && keepEditor) return null
+    const id = legacyPreview ? 'editor' : candidate.id
+    if (seen.has(id)) return null
+    seen.add(id)
+    return createLeaf(id)
   }
   if (candidate.type !== 'split') return null
-  const first = normalizeLayoutNode(candidate.first, seen, depth + 1)
-  const second = normalizeLayoutNode(candidate.second, seen, depth + 1)
+  const first = normalizeLayoutNode(candidate.first, seen, depth + 1, keepEditor)
+  const second = normalizeLayoutNode(candidate.second, seen, depth + 1, keepEditor)
   if (!first || !second) return first ?? second
   const direction: SplitDirection = candidate.direction === 'column' ? 'column' : 'row'
   const ratio = typeof candidate.ratio === 'number' ? clampSplitRatio(candidate.ratio) : DEFAULT_SPLIT_RATIO
   return createSplit(direction, ratio, first, second)
 }
 
+function normalizeLayout(value: unknown): Layout | null {
+  if (value && typeof value === 'object' && (value as { type?: unknown }).type === 'empty') return { type: 'empty' }
+  return normalizeLayoutNode(value, new Set(), 0)
+}
+
 /** 兼容旧 schema：从 { id } 列表或更旧的 order 字符串列表中提取合法、去重后的模块 id。 */
 function collectModuleIds(value: unknown): ModuleId[] {
   const ids: ModuleId[] = []
-  const seen = new Set<ModuleId>()
+  const seen = new Set<string>()
   if (!Array.isArray(value)) return ids
+  const keepEditor = value.some((item) => (item && typeof item === 'object' ? item.id : item) === 'editor')
   for (const item of value) {
     const candidate = item && typeof item === 'object' ? (item as { id?: unknown }).id : item
-    if (!isModuleId(candidate) || seen.has(candidate)) continue
-    seen.add(candidate)
-    ids.push(candidate)
+    if (!isModuleId(candidate)) continue
+    const legacyPreview = candidate.startsWith('editor-')
+    if (legacyPreview && keepEditor) continue
+    const id = legacyPreview ? 'editor' : candidate
+    if (seen.has(id)) continue
+    seen.add(id)
+    ids.push(id)
     if (ids.length >= MAX_MODULES) break
   }
   return ids
@@ -164,13 +197,13 @@ function buildLegacyLayout(ids: ModuleId[], columns: 1 | 2): LayoutNode {
  * 把磁盘或浏览器缓存里的任意值归一化成可用布局：
  * - 新格式 { layout, skin }：布局树递归校验后优先采用；
  * - 旧格式 { columns, modules, skin } 与更旧的 { axis, order, skin }：迁移成等分分栏树；
- * - 损坏、空值或没有任何合法模块时回退默认布局，不抛错。
+ * - 显式的 empty 根节点保留全部关闭状态；损坏或缺失的布局回退默认值。
  */
 export function normalizeUiPreferences(value: unknown): UiPreferences {
   const raw = value && typeof value === 'object' ? (value as Record<string, unknown>) : {}
   const skin = normalizeSkin(raw.skin)
   const savedLayouts = normalizeSavedLayouts(raw.savedLayouts)
-  const layout = normalizeLayoutNode(raw.layout, new Set(), 0)
+  const layout = normalizeLayout(raw.layout)
   if (layout) return { layout, skin, savedLayouts }
   const modules = collectModuleIds(raw.modules)
   const legacyIds = modules.length ? modules : collectModuleIds(raw.order)
@@ -188,7 +221,7 @@ function normalizeSavedLayouts(value: unknown): SavedLayout[] {
     const candidate = item as { name?: unknown; layout?: unknown }
     const name = typeof candidate.name === 'string' ? candidate.name.trim() : ''
     if (!name || [...name].length > MAX_LAYOUT_NAME_CHARS || seen.has(name)) continue
-    const layout = normalizeLayoutNode(candidate.layout, new Set(), 0)
+    const layout = normalizeLayout(candidate.layout)
     if (!layout) continue
     seen.add(name)
     result.push({ name, layout })
@@ -198,13 +231,14 @@ function normalizeSavedLayouts(value: unknown): SavedLayout[] {
 }
 
 /** 按视觉顺序（先 first 再 second）展平布局树，得到模块板上的模块顺序。 */
-export function flattenLayout(layout: LayoutNode): ModulePlacement[] {
+export function flattenLayout(layout: Layout): ModulePlacement[] {
+  if (layout.type === 'empty') return []
   if (layout.type === 'leaf') return [{ id: layout.id }]
   return [...flattenLayout(layout.first), ...flattenLayout(layout.second)]
 }
 
 /** 按视觉顺序返回布局树里的模块 id。 */
-export function layoutIds(layout: LayoutNode): ModuleId[] {
+export function layoutIds(layout: Layout): ModuleId[] {
   return flattenLayout(layout).map((placement) => placement.id)
 }
 
@@ -235,7 +269,8 @@ function detachLayoutModule(layout: LayoutNode, id: ModuleId): LayoutDetach {
  * 从布局树里删除一个模块：删除叶子并折叠父 split（用兄弟子树替代父节点）。
  * 删除根叶子返回 null；模块不存在时原样返回原树。
  */
-export function removeLayoutModule(layout: LayoutNode, id: ModuleId): LayoutNode | null {
+export function removeLayoutModule(layout: Layout, id: ModuleId): LayoutNode | null {
+  if (layout.type === 'empty') return null
   const result = detachLayoutModule(layout, id)
   return result.removed ? result.node : layout
 }
@@ -245,8 +280,8 @@ export function removeLayoutModule(layout: LayoutNode, id: ModuleId): LayoutNode
  * ratio 取 旧叶子数 / (旧叶子数 + 1)，让新模块占总宽度的 1/n。
  * 已存在的模块不会重复添加，直接返回原树。
  */
-export function appendLayoutModule(layout: LayoutNode | null, id: ModuleId): LayoutNode {
-  if (!layout) return createLeaf(id)
+export function appendLayoutModule(layout: Layout | null, id: ModuleId): LayoutNode {
+  if (!layout || layout.type === 'empty') return createLeaf(id)
   if (layoutHasModule(layout, id)) return layout
   const count = layoutLeafCount(layout)
   return createSplit('row', clampSplitRatio(count / (count + 1)), layout, createLeaf(id))
@@ -256,8 +291,8 @@ export function appendLayoutModule(layout: LayoutNode | null, id: ModuleId): Lay
  * 追加模块到模块板最左侧：把旧根包裹成 row split，first 是新叶子、second 是旧树，
  * ratio 取 1 / (旧叶子数 + 1)，让新模块占总宽度的 1/n。
  */
-export function prependLayoutModule(layout: LayoutNode | null, id: ModuleId): LayoutNode {
-  if (!layout) return createLeaf(id)
+export function prependLayoutModule(layout: Layout | null, id: ModuleId): LayoutNode {
+  if (!layout || layout.type === 'empty') return createLeaf(id)
   if (layoutHasModule(layout, id)) return layout
   const count = layoutLeafCount(layout)
   return createSplit('row', clampSplitRatio(1 / (count + 1)), createLeaf(id), layout)
@@ -267,7 +302,8 @@ export function prependLayoutModule(layout: LayoutNode | null, id: ModuleId): La
  * 把模块移动到整个布局的最左或最右一列：先从树中移除，再用 prepend/append 包裹成新的 row split。
  * 模块不存在时原样返回。
  */
-export function moveLayoutModuleToEdge(root: LayoutNode, draggedId: ModuleId, side: 'left' | 'right'): LayoutNode {
+export function moveLayoutModuleToEdge(root: Layout, draggedId: ModuleId, side: 'left' | 'right'): Layout {
+  if (root.type === 'empty') return root
   if (!layoutHasModule(root, draggedId)) return root
   const remaining = removeLayoutModule(root, draggedId)
   if (!remaining) return root
@@ -287,7 +323,8 @@ function replaceLayoutLeaf(layout: LayoutNode, targetId: ModuleId, create: () =>
  * 把 dragged 模块拖到 target 模块的指定一侧：先删除 dragged，再把 target 叶子替换成新的分栏。
  * left/top 时 dragged 在 first；right/bottom 时 dragged 在 second；left/right 用 row，top/bottom 用 column。
  */
-export function splitLayout(root: LayoutNode, draggedId: ModuleId, targetId: ModuleId, side: DropSide): LayoutNode {
+export function splitLayout(root: Layout, draggedId: ModuleId, targetId: ModuleId, side: DropSide): Layout {
+  if (root.type === 'empty') return root
   if (draggedId === targetId || !layoutHasModule(root, targetId)) return root
   const remaining = removeLayoutModule(root, draggedId)
   if (!remaining) return root
@@ -321,7 +358,8 @@ function updateSplitAtPath(layout: LayoutNode, path: readonly number[], ratio: n
 }
 
 /** 按 0/1 路径更新某个 split 的比例并夹紧；路径无效时原样返回原树。 */
-export function setSplitRatio(root: LayoutNode, path: number[], ratio: number): LayoutNode {
+export function setSplitRatio(root: Layout, path: number[], ratio: number): Layout {
+  if (root.type === 'empty') return root
   const target = splitAtPath(root, path)
   if (!target) return root
   const clamped = clampSplitRatio(ratio)
@@ -409,12 +447,13 @@ function walkLayoutGeometry(
  * 尺寸、gap 或比例非法时返回空几何，避免产生 NaN / 负尺寸。
  */
 export function layoutGeometry(
-  root: LayoutNode,
+  root: Layout,
   width: number,
   height: number,
   gap: number,
   overrides?: ReadonlyMap<string, number>,
 ): LayoutGeometry {
+  if (root.type === 'empty') return { slots: [], gutters: [] }
   if (!isValidExtent(width) || !isValidExtent(height) || !Number.isFinite(gap) || gap < 0) {
     return { slots: [], gutters: [] }
   }
@@ -556,8 +595,21 @@ export function resizeLayoutLocally(
   root: LayoutNode,
   path: readonly number[],
   ratio: number,
+  metrics?: LayoutMetrics,
+): LayoutNode
+export function resizeLayoutLocally(
+  root: Layout,
+  path: readonly number[],
+  ratio: number,
+  metrics?: LayoutMetrics,
+): Layout
+export function resizeLayoutLocally(
+  root: Layout,
+  path: readonly number[],
+  ratio: number,
   metrics: LayoutMetrics = { width: 1, height: 1, gap: 0 },
-): LayoutNode {
+): Layout {
+  if (root.type === 'empty') return root
   const target = splitAtPath(root, path)
   if (
     !target ||
@@ -622,7 +674,8 @@ function replaceLayoutNode(layout: LayoutNode, target: LayoutNode, replacement: 
  * 新布局保持 split 方向，三个区域各占该 split 的 1/3（二进制表示：1/3 + 剩余 2/3 再对半）。
  * 拖动模块本身就是间隙某一侧时视为无效移动，原样返回。
  */
-export function insertLayoutModuleAtGutter(root: LayoutNode, draggedId: ModuleId, path: readonly number[]): LayoutNode {
+export function insertLayoutModuleAtGutter(root: Layout, draggedId: ModuleId, path: readonly number[]): Layout {
+  if (root.type === 'empty') return root
   const boundary = findBoundary(root, path, 1)
   if (!boundary || draggedId === boundary.leftLeaf || draggedId === boundary.rightLeaf) return root
   if (!layoutHasModule(root, draggedId)) return root

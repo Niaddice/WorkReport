@@ -1,11 +1,11 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, onBeforeUnmount, ref, useId, watch } from 'vue'
 import dayjs from 'dayjs'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
-import { PhBrowsers, PhCircleNotch, PhCode, PhEye, PhFileText } from '@phosphor-icons/vue'
+import { PhCircleNotch, PhColumns, PhFileText } from '@phosphor-icons/vue'
 import type { Document } from '../lib/workspace'
-import { elementScrollPosition, type MarkdownScrollPosition } from '../lib/markdownScroll'
+import { useSplitPreviewScroll } from '../lib/useSplitPreviewScroll'
 
 const props = defineProps<{
   dates: string[]
@@ -13,19 +13,40 @@ const props = defineProps<{
   loading: boolean
   error: string
   preview: boolean
-  journalPreviewAvailable?: boolean
-  journalPreviewVisible?: boolean
+  scrollSourceKey?: string
 }>()
-const emit = defineEmits<{
-  'update:preview': [value: boolean]
-  'toggle-journal-preview': []
-  'scroll-position': [position: MarkdownScrollPosition]
-}>()
+const emit = defineEmits<{ 'update:preview': [value: boolean] }>()
 type RangeRun = { start: string; end: string }
 const sortedDocuments = computed(() => [...props.documents].sort((left, right) => right.date.localeCompare(left.date)))
-function onScroll(event: Event) {
-  emit('scroll-position', elementScrollPosition(event.currentTarget as HTMLElement, ''))
+const viewport = ref<HTMLElement>()
+const previewViewport = ref<HTMLElement>()
+const previewId = useId()
+const scrollSync = useSplitPreviewScroll({
+  editor: viewport,
+  preview: previewViewport,
+  enabled: () => props.preview,
+  sourceKey: () => props.scrollSourceKey ?? [...props.dates].sort().join(','),
+})
+const resizeObserver = typeof ResizeObserver === 'undefined' ? undefined : new ResizeObserver(scrollSync.refresh)
+function setViewport(pane: string, element: unknown) {
+  const target = pane === 'editor' ? viewport : previewViewport
+  target.value = element instanceof HTMLElement ? element : undefined
 }
+watch(
+  [viewport, previewViewport],
+  (elements) => {
+    resizeObserver?.disconnect()
+    for (const element of elements) {
+      if (!element) continue
+      resizeObserver?.observe(element)
+      if (element.firstElementChild) resizeObserver?.observe(element.firstElementChild)
+    }
+    scrollSync.refresh()
+  },
+  { flush: 'post' },
+)
+watch([() => props.documents, () => props.loading], scrollSync.refresh, { flush: 'post' })
+onBeforeUnmount(() => resizeObserver?.disconnect())
 const characterCount = computed(() =>
   props.documents.reduce((total, document) => total + document.content.replace(/\s/g, '').length, 0),
 )
@@ -85,33 +106,34 @@ function render(content: string) {
       <div class="editor-body-tools">
         <button
           type="button"
-          class="editor-tool-button preview-toggle"
-          :aria-label="preview ? '查看原文' : '预览'"
-          :title="preview ? '查看原文' : '预览'"
+          class="editor-tool-button journal-split-toggle"
+          :aria-label="preview ? '收起日报预览' : '左右分栏预览'"
+          :title="preview ? '收起日报预览' : '左右分栏预览'"
           :aria-pressed="preview"
+          :aria-expanded="preview"
+          :aria-controls="preview ? previewId : undefined"
           :disabled="loading || !sortedDocuments.length"
           @click="emit('update:preview', !preview)"
         >
-          <PhCode v-if="preview" :size="15" aria-hidden="true" />
-          <PhEye v-else :size="15" aria-hidden="true" />
-        </button>
-        <button
-          type="button"
-          class="editor-tool-button journal-preview-toggle"
-          aria-label="日报预览"
-          :title="journalPreviewVisible ? '关闭日报预览' : '日报预览'"
-          :aria-pressed="!!journalPreviewVisible"
-          :disabled="!journalPreviewAvailable && !journalPreviewVisible"
-          @click="emit('toggle-journal-preview')"
-        >
-          <PhBrowsers :size="15" aria-hidden="true" />
+          <PhColumns :size="15" aria-hidden="true" />
         </button>
       </div>
     </header>
     <div class="editor-content">
-      <div class="range-overview-body" @scroll.passive="onScroll">
-        <Transition name="content-fade" mode="out-in">
-          <div :key="loading ? 'loading' : error ? 'error' : 'documents'" class="range-content">
+      <div class="range-panes" :class="{ 'is-split-preview': preview }">
+        <div
+          v-for="pane in preview ? ['editor', 'preview'] : ['editor']"
+          :id="pane === 'preview' ? previewId : undefined"
+          :key="pane"
+          :ref="(element) => setViewport(pane, element)"
+          class="range-overview-body"
+          :class="{ 'range-preview-pane': pane === 'preview' }"
+          role="region"
+          :aria-label="pane === 'editor' ? '框选日报原文' : '框选日报预览'"
+          tabindex="0"
+          @scroll.passive="scrollSync.onScroll"
+        >
+          <div class="range-content">
             <div v-if="loading" class="range-state"><PhCircleNotch class="spin" :size="17" />正在载入所选日报…</div>
             <div v-else-if="error" class="range-state range-error" role="alert">{{ error }}</div>
             <div v-else-if="!sortedDocuments.length" class="range-state">所选日期中没有可显示的日报。</div>
@@ -120,24 +142,23 @@ function render(content: string) {
                 <h3>{{ dateLabel(document.date) }}</h3>
                 <span>{{ document.filename }}</span>
               </header>
-              <Transition name="inline-fade" mode="out-in">
-                <div
-                  v-if="preview && document.format === 'md'"
-                  class="journal-prose"
-                  v-html="render(document.content)"
-                ></div>
-                <pre v-else class="range-text">{{ document.content }}</pre>
-              </Transition>
+              <div
+                v-if="pane === 'preview' && document.format === 'md'"
+                class="journal-prose"
+                v-html="render(document.content)"
+              ></div>
+              <pre v-else class="range-text">{{ document.content }}</pre>
             </article>
           </div>
-        </Transition>
+        </div>
       </div>
       <footer class="editor-footer">
         <span
           ><PhFileText :size="14" aria-hidden="true" />{{
             loading ? '正在载入所选日报…' : `已选择 ${dates.length} 天 · ${documents.length} 篇日报`
           }}</span
-        ><span>{{ characterCount }} 字</span>
+        >
+        <span>{{ characterCount }} 字</span>
       </footer>
     </div>
   </aside>

@@ -17,7 +17,7 @@ use umya_spreadsheet::{Border, CellValue, Color, Workbook, Worksheet};
 
 #[path = "excel_preview.rs"]
 mod preview;
-pub use preview::ExcelSheetPreview;
+pub use preview::{ExcelSheetPreview, plain_sheet};
 
 const MAX_TEMPLATE_BYTES: u64 = 20 * 1024 * 1024;
 const MAX_UNPACKED_BYTES: u64 = 64 * 1024 * 1024;
@@ -46,16 +46,26 @@ pub struct Settings {
     pub prompt: String,
 }
 
-/// All Excel reports belong to the active workspace, independent of legacy settings.
+/// Read the current workspace rule rather than allowing a delayed action to
+/// reuse an output directory or filename rule from an earlier settings scope.
+pub fn output_rule(root: &Path) -> Result<crate::file_rules::Rule, String> {
+    let stored = crate::settings::load(&root.join(crate::settings::FILE_NAME))?.unwrap_or_default();
+    let mut rule = crate::file_rules::effective(&stored).excel;
+    rule.directory = crate::file_rules::relative_directory(&rule.directory, false)?;
+    rule.filename_template = rule.filename_template.trim().into();
+    crate::file_rules::render_filename(
+        &rule,
+        &crate::file_rules::Context::report("20261001", "20261031", "20261031_203000")?,
+        "xlsx",
+    )?;
+    Ok(rule)
+}
+
+/// All Excel reports belong to the configured directory in the active workspace.
 pub fn prepare_directory(root: &Path) -> Result<PathBuf, String> {
-    let root = fs::canonicalize(root).map_err(|_| "工作空间目录不存在".to_string())?;
-    let directory = root.join("excel");
-    fs::create_dir_all(&directory).map_err(|_| "无法创建或打开工作空间的 excel 目录".to_string())?;
-    let directory = fs::canonicalize(directory).map_err(|_| "无法读取工作空间的 excel 目录".to_string())?;
-    if directory == root || !directory.starts_with(&root) {
-        return Err("Excel 输出目录必须位于当前工作空间内".into());
-    }
-    Ok(directory)
+    let rule = output_rule(root)?;
+    crate::file_rules::safe_directory(root, &rule.directory, true)
+        .map_err(|error| format!("Excel 输出目录必须位于当前工作空间内：{error}"))
 }
 
 pub struct Template {
@@ -100,6 +110,7 @@ pub struct Provenance {
     pub workspace_path: String,
     pub dates: Vec<String>,
     pub settings: Settings,
+    pub file_rule: crate::file_rules::Rule,
     pub prompt: Option<String>,
     pub source_revision: String,
     pub template_fingerprint: String,
@@ -154,11 +165,18 @@ impl Runtime {
         let index = previews.iter().position(|pending| pending.preview.id == id).ok_or(STALE_PREVIEW)?;
         let pending = previews.remove(index).ok_or(STALE_PREVIEW)?;
         validate(&pending.provenance)?;
-        let directory = Path::new(&pending.provenance.workspace_path).join("excel");
-        if fs::canonicalize(&directory).ok().as_ref() != Some(&pending.output_path) {
-            return Err("Excel 输出目录已变化，请重新生成预览".into());
+        let root = Path::new(&pending.provenance.workspace_path);
+        let rule = output_rule(root)?;
+        if rule != pending.provenance.file_rule {
+            return Err("Excel 文件设置已变化，请重新生成预览".into());
         }
-        let result = publish_bytes(&pending.bytes, &pending.output_path, &pending.preview.start, &pending.preview.end, pending.preview.cells.len(), None);
+        let result = (|| {
+            let directory = crate::file_rules::safe_directory(root, &rule.directory, false)?;
+            if fs::canonicalize(&directory).ok().as_ref() != Some(&pending.output_path) {
+                return Err("Excel 输出目录已变化，请重新生成预览".into());
+            }
+            publish_bytes_with_rule(&pending.bytes, &pending.output_path, &pending.preview.start, &pending.preview.end, pending.preview.cells.len(), None, Some((root, &rule)))
+        })();
         if result.is_err() {
             // No final file exists on publication failure. Keep the approved
             // plan available so a temporary disk/permission issue can be retried.
@@ -189,6 +207,10 @@ pub struct ExportFile {
     pub path: String,
     pub modified: u64,
     pub size: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub start_date: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub end_date: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -234,6 +256,8 @@ pub fn list_exports(directory: &Path) -> Result<Vec<ExportFile>, String> {
             path: path.to_string_lossy().into_owned(),
             modified,
             size: metadata.len(),
+            start_date: None,
+            end_date: None,
         });
     }
     files.sort_by(|left, right| {
@@ -891,7 +915,12 @@ pub fn prepare(
     if start != validated_start || end != validated_end || template.fingerprint() != provenance.template_fingerprint {
         return Err("Excel 预览来源不一致，请重新生成预览".into());
     }
-    let output_path = prepare_directory(Path::new(&provenance.workspace_path))?;
+    let root = Path::new(&provenance.workspace_path);
+    let rule = output_rule(root)?;
+    if rule != provenance.file_rule {
+        return Err("Excel 文件设置已变化，请重新生成预览".into());
+    }
+    let output_path = crate::file_rules::safe_directory(root, &rule.directory, true)?;
     let (bytes, cells, styles, sheets) = render_workbook(template, response, Some(&cancel))?;
     let template_name = Path::new(provenance.settings.template_path.trim())
         .file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default();
@@ -999,6 +1028,7 @@ fn render_workbook(
     Ok((bytes, cells, styles, sheets))
 }
 
+#[cfg(test)]
 fn publish_bytes(
     bytes: &[u8],
     output_directory: &Path,
@@ -1007,9 +1037,21 @@ fn publish_bytes(
     cells: usize,
     cancel: Option<&CancellationToken>,
 ) -> Result<ExportResult, String> {
+    publish_bytes_with_rule(bytes, output_directory, start, end, cells, cancel, None)
+}
+
+fn publish_bytes_with_rule(
+    bytes: &[u8],
+    output_directory: &Path,
+    start: &str,
+    end: &str,
+    cells: usize,
+    cancel: Option<&CancellationToken>,
+    publication: Option<(&Path, &crate::file_rules::Rule)>,
+) -> Result<ExportResult, String> {
     check_cancelled(cancel)?;
     if !output_directory.is_dir() {
-        return Err("Excel 输出目录不可用，请检查工作空间的 excel 目录".into());
+        return Err("Excel 输出目录不可用，请检查工作空间内配置的目录".into());
     }
     // A complete temporary workbook is created only after confirmation, then
     // published atomically without replacing an existing output or template.
@@ -1024,7 +1066,11 @@ fn publish_bytes(
         .map_err(|_| "无法完成 Excel 文件写入".to_string())?;
     check_cancelled(cancel)?;
     let stamp = crate::report_export::current_timestamp()?;
-    let (filename, path) = crate::report_export::publish(file, output_directory, start, end, &stamp, "xlsx")?;
+    let (filename, path) = if let Some((root, rule)) = publication {
+        crate::report_export::publish_rule(file, root, output_directory, rule, crate::file_rules::Feature::Excel, start, end, &stamp, "xlsx")?
+    } else {
+        crate::report_export::publish(file, output_directory, start, end, &stamp, "xlsx")?
+    };
     Ok(ExportResult {
         path: path.to_string_lossy().into_owned(),
         filename,
@@ -1574,6 +1620,7 @@ mod tests {
                 template_path: template_path.to_string_lossy().into_owned(),
                 prompt: "写入内容".into(),
             },
+            file_rule: output_rule(template_path.parent().unwrap()).unwrap(),
             source_revision: "source-hash".into(),
             template_fingerprint: template.fingerprint().into(),
         };
@@ -1639,6 +1686,52 @@ mod tests {
         assert!(sheet.cell("B2").unwrap().style().alignment().unwrap().wrap_text());
         assert!(runtime.confirm(&preview.id, |_| Ok(())).unwrap_err().contains("重新生成"));
         assert_eq!(fs::read_dir(&output).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn configured_directory_and_filename_are_used_and_registered_on_confirmation() {
+        let root = tempfile::tempdir().unwrap();
+        let mut files = crate::file_rules::Settings::default();
+        files.excel.directory = "项目报表".into();
+        files.excel.filename_template = "成果_{startDate}_{endDate}_{date}".into();
+        let stored = crate::settings::StoredSettings { files: Some(files), ..Default::default() };
+        crate::settings::save(&root.path().join(crate::settings::FILE_NAME), &stored).unwrap();
+        let path = template_file(root.path());
+        let runtime = Runtime::default();
+        let preview = runtime.insert(pending_preview(&path, CancellationToken::new())).unwrap();
+        assert_eq!(Path::new(&preview.output_directory), fs::canonicalize(root.path()).unwrap().join("项目报表"));
+        assert_eq!(fs::read_dir(&preview.output_directory).unwrap().count(), 0);
+        let output = runtime.confirm(&preview.id, |_| Ok(())).unwrap();
+        assert!(output.filename.starts_with("成果_20261019_20261025_"));
+        assert!(output.filename.ends_with(".xlsx"));
+        assert_eq!(Path::new(&output.path).parent().unwrap(), fs::canonicalize(root.path()).unwrap().join("项目报表"));
+        assert!(!root.path().join("excel").exists());
+        let records = crate::file_rules::catalog(root.path()).unwrap();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].feature, crate::file_rules::Feature::Excel);
+        assert_eq!(records[0].relative_path, format!("项目报表/{}", output.filename));
+        assert_eq!(records[0].start_date, "20261019");
+        assert_eq!(records[0].end_date, "20261025");
+    }
+
+    #[test]
+    fn changing_directory_or_filename_rule_invalidates_an_approved_preview() {
+        for change_directory in [false, true] {
+            let root = tempfile::tempdir().unwrap();
+            let path = template_file(root.path());
+            let runtime = Runtime::default();
+            let preview = runtime.insert(pending_preview(&path, CancellationToken::new())).unwrap();
+            let mut files = crate::file_rules::Settings::default();
+            if change_directory { files.excel.directory = "新报表".into(); }
+            else { files.excel.filename_template = "新成果_{date}".into(); }
+            let stored = crate::settings::StoredSettings { files: Some(files), ..Default::default() };
+            crate::settings::save(&root.path().join(crate::settings::FILE_NAME), &stored).unwrap();
+            assert!(runtime.confirm(&preview.id, |_| Ok(())).unwrap_err().contains("文件设置已变化"));
+            assert!(runtime.confirm(&preview.id, |_| Ok(())).is_err());
+            assert_eq!(fs::read_dir(root.path().join("excel")).unwrap().count(), 0);
+            assert!(!root.path().join("新报表").exists());
+            assert!(crate::file_rules::catalog(root.path()).unwrap().is_empty());
+        }
     }
 
     #[test]

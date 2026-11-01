@@ -16,6 +16,9 @@ export interface FileNode {
   name: string
   isDir: boolean
   size: number
+  /** 由后端文件索引提供，普通文件为 null；兼容旧版接口时可缺省。 */
+  journalDate?: string | null
+  protected?: boolean
 }
 export interface Preview {
   date: string
@@ -58,4 +61,5 @@ export const api = {
   switchFormat: (date: string, from: FileFormat, to: FileFormat, expectedRevision: string) =>
     invoke<Document>('switch_entry_format', { date, from, to, expectedRevision }),
   copy: (content: string) => invoke<void>('copy_content', { content }),
+  clipboardText: () => invoke<string>('read_clipboard_text'),
 }

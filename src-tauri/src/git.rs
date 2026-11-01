@@ -10,6 +10,7 @@ use tokio::{io::AsyncReadExt, process::Command, time::timeout};
 
 const MAX_COMMITS: usize = 1000;
 const MAX_OUTPUT: u64 = 4 * 1024 * 1024;
+pub const DEFAULT_COMMIT_PROMPT: &str = "根据暂存区的更改生成简洁准确的中文 Git 提交说明。首行使用 Conventional Commits 格式（如 feat:、fix:、refactor:），概括主要改动；必要时空一行后列出关键变化。只描述实际更改，不编造测试结果或工作成果，只输出提交说明正文。";
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", default)]
@@ -17,6 +18,7 @@ pub struct Settings {
     pub executable: String,
     pub repositories: Vec<Repository>,
     pub include_merges: bool,
+    pub commit_prompt: String,
 }
 
 impl Default for Settings {
@@ -25,6 +27,7 @@ impl Default for Settings {
             executable: "git".into(),
             repositories: Vec::new(),
             include_merges: false,
+            commit_prompt: DEFAULT_COMMIT_PROMPT.into(),
         }
     }
 }
@@ -70,6 +73,9 @@ pub struct DailyLog {
 }
 
 pub fn validate(settings: &Settings) -> Result<(), String> {
+    if settings.commit_prompt.chars().count() > 2000 || settings.commit_prompt.contains('\0') {
+        return Err("Git 提交说明提示词不能超过 2000 字，且不能包含空字符".into());
+    }
     let executable = settings.executable.trim();
     if executable.is_empty()
         || executable.chars().any(char::is_control)
@@ -1049,5 +1055,15 @@ mod tests {
             serde_json::from_str::<Settings>("{}").unwrap(),
             Settings::default()
         );
+    }
+
+    #[test]
+    fn old_settings_gain_a_commit_prompt_and_invalid_prompts_are_rejected() {
+        let mut settings: Settings = serde_json::from_str(r#"{"executable":"git","repositories":[],"includeMerges":false}"#).unwrap();
+        assert_eq!(settings.commit_prompt, DEFAULT_COMMIT_PROMPT);
+        settings.commit_prompt = "字".repeat(2001);
+        assert!(validate(&settings).is_err());
+        settings.commit_prompt.clear();
+        assert!(validate(&settings).is_ok());
     }
 }

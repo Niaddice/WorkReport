@@ -15,6 +15,7 @@ import {
 } from './layout'
 import type { SkinId } from '../lib/skins'
 import type { DropSide, LayoutMetrics, ModuleId, UiPreferences } from './types'
+import { LAYOUT_PRESETS } from './layoutPresets'
 
 export interface ModuleLayoutOptions {
   /** 读取或保存布局失败时通知页面编排层显示错误。 */
@@ -114,11 +115,9 @@ export function useModuleLayout(options: ModuleLayoutOptions = {}) {
   }
 
   function remove(id: ModuleId) {
-    // 所有模块都可关闭，但必须至少保留一个模块。
-    if (items.value.length <= 1) return
+    if (!items.value.some((item) => item.id === id)) return
     const next = removeLayoutModule(preferences.value.layout, id)
-    if (!next) return
-    update({ ...preferences.value, layout: next })
+    update({ ...preferences.value, layout: next ?? { type: 'empty' } })
   }
 
   /** 把 dragged 拖到 target 的左/右/上/下侧，形成新的分栏。 */
@@ -184,6 +183,13 @@ export function useModuleLayout(options: ModuleLayoutOptions = {}) {
     update({ ...preferences.value, skin: value })
   }
 
+  function applyPreset(id: string): boolean {
+    const preset = LAYOUT_PRESETS.find((item) => item.id === id)
+    if (!preset) return false
+    update({ ...preferences.value, layout: preset.layout })
+    return true
+  }
+
   function reset() {
     update(normalizeUiPreferences(DEFAULT_UI_PREFERENCES))
   }
@@ -202,6 +208,7 @@ export function useModuleLayout(options: ModuleLayoutOptions = {}) {
     moveToEdge,
     saveLayout,
     applySavedLayout,
+    applyPreset,
     removeSavedLayout,
     resize,
     setSkin,

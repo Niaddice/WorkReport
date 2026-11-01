@@ -1,5 +1,6 @@
 use chrono::NaiveDate;
 use crate::database::{self, Database, JournalRecord, Mode, Settings as DatabaseSettings};
+use crate::file_rules::{self, ManagedFile, Settings as FileSettings};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
@@ -47,6 +48,8 @@ pub struct FileNode {
     pub name: String,
     pub is_dir: bool,
     pub size: u64,
+    pub journal_date: Option<String>,
+    pub protected: bool,
 }
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -106,6 +109,7 @@ pub struct Workspace {
     database_settings: DatabaseSettings,
     database_pool: Option<Database>,
     database_error: Option<String>,
+    file_settings: FileSettings,
 }
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -142,11 +146,11 @@ fn collect_directory(path: &Path, base: &str, nodes: &mut Vec<FileNode>) -> Resu
             format!("{base}/{name}")
         };
         if file_type.is_dir() {
-            nodes.push(FileNode { path: rel.clone(), name, is_dir: true, size: 0 });
+            nodes.push(FileNode { path: rel.clone(), name, is_dir: true, size: 0, journal_date: None, protected: false });
             collect_directory(&entry.path(), &rel, nodes)?;
         } else if file_type.is_file() {
             let size = entry.metadata().map(|metadata| metadata.len()).unwrap_or(0);
-            nodes.push(FileNode { path: rel, name, is_dir: false, size });
+            nodes.push(FileNode { path: rel, name, is_dir: false, size, journal_date: None, protected: false });
         }
     }
     Ok(())
@@ -204,8 +208,9 @@ impl Workspace {
             return Err("请选择一个文件夹作为工作空间".into());
         }
         NamedTempFile::new_in(&root).map_err(io_error)?;
-        let database_settings = crate::settings::load(&root.join(crate::settings::FILE_NAME))?
-            .unwrap_or_default().database;
+        let stored = crate::settings::load(&root.join(crate::settings::FILE_NAME))?.unwrap_or_default();
+        let file_settings = file_rules::effective(&stored);
+        let database_settings = stored.database;
         let connection = if database_settings.enabled {
             Some(database::run_blocking(|| Database::connect(&root, &database_settings, &database_settings.workspace_id)))
         } else { None };
@@ -220,6 +225,7 @@ impl Workspace {
             database_settings,
             database_pool,
             database_error,
+            file_settings,
         })
     }
     pub fn root(&self) -> &Path {
@@ -244,81 +250,76 @@ impl Workspace {
                 .into_owned(),
         }
     }
-    fn year_directory(&self, date: &str) -> Result<PathBuf, String> {
-        valid_date(date)?;
-        let directory = self.root.join(&date[..4]);
-        match fs::symlink_metadata(&directory) {
-            Ok(meta) if meta.file_type().is_symlink() || !meta.is_dir() => {
-                return Err("日报年份目录必须是工作空间内的普通目录".into())
-            }
-            Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
-                return Err(io_error(error))
-            }
-            _ => {}
-        }
-        Ok(directory)
+    #[cfg(test)]
+    pub fn file_settings(&self) -> &FileSettings { &self.file_settings }
+
+    pub fn accept_file_settings(&mut self, settings: FileSettings) {
+        self.file_settings = settings;
+        self.index.clear();
     }
-    fn entry_path(&self, date: &str, format: Format) -> Result<PathBuf, String> {
-        let path = self
-            .year_directory(date)?
-            .join(format!("{date}.{}", format.extension()));
+
+    pub fn managed_journal_files(&self) -> Result<Vec<ManagedFile>, String> {
+        file_rules::journal_records(&self.root, &self.file_settings)
+    }
+
+    fn checked_journal_path(&self, path: PathBuf) -> Result<PathBuf, String> {
+        let relative = file_rules::relative_path(&self.root, &path)?;
+        let parent = Path::new(&relative).parent().and_then(Path::to_str).unwrap_or("");
+        file_rules::safe_directory(&self.root, parent, false)?;
+        let path = file_rules::safe_file(&self.root, &relative)?;
         match fs::symlink_metadata(&path) {
             Ok(meta) if meta.file_type().is_symlink() || !meta.is_file() => {
-                return Err("日报文件必须是工作空间内的普通文件".into())
+                return Err("日报文件必须是工作空间内的普通文件".into());
             }
-            Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
-                return Err(io_error(error))
-            }
-            _ => {}
+            Err(error) if error.kind() != std::io::ErrorKind::NotFound => return Err(io_error(error)),
+            _ => {},
         }
         Ok(path)
     }
+
+    fn register_journal(&self, path: &Path, date: &str) -> Result<(), String> {
+        let relative = file_rules::relative_path(&self.root, path)?;
+        file_rules::register(&self.root, ManagedFile::journal(&relative, date)?)
+    }
+
+    fn entry_path(&self, date: &str, format: Format) -> Result<PathBuf, String> {
+        valid_date(date)?;
+        if let Some(cached) = self.index.get(date).filter(|cached| cached.format == format) {
+            let path = self.checked_journal_path(cached.path.clone())?;
+            if path.exists() { return Ok(path); }
+        }
+        let records = self.managed_journal_files()?;
+        let mut other = None;
+        for record in records.into_iter().filter(|record| record.date == date) {
+            let path = self.checked_journal_path(self.root.join(&record.relative_path))?;
+            if path.extension().and_then(|value| value.to_str()) == Some(format.extension()) {
+                return Ok(path);
+            }
+            other.get_or_insert(path);
+        }
+        // Keep a saved journal's name when changing format after a naming-rule change.
+        let path = if let Some(path) = other { path.with_extension(format.extension()) }
+            else { file_rules::journal_target(&self.root, &self.file_settings, date, format.extension())? };
+        self.checked_journal_path(path)
+    }
+
     fn scan(&self) -> Result<HashMap<String, FoundFile>, String> {
         let mut found: HashMap<String, FoundFile> = HashMap::new();
-        for year in fs::read_dir(&self.root).map_err(io_error)? {
-            let year = year.map_err(io_error)?;
-            if !year.file_type().map_err(io_error)?.is_dir() {
-                continue;
-            }
-            let year_name = year.file_name().to_string_lossy().into_owned();
-            if year_name.len() != 4 || !year_name.bytes().all(|byte| byte.is_ascii_digit()) {
-                continue;
-            }
-            for item in fs::read_dir(year.path()).map_err(io_error)? {
-                let item = item.map_err(io_error)?;
-                if !item.file_type().map_err(io_error)?.is_file() {
-                    continue;
-                }
-                let filename = item.file_name().to_string_lossy().into_owned();
-                let (date, format) = if let Some(date) = filename.strip_suffix(".md") {
-                    (date, Format::Md)
-                } else if let Some(date) = filename.strip_suffix(".txt") {
-                    (date, Format::Txt)
-                } else {
-                    continue;
-                };
-                let date = date.to_string();
-                if valid_date(&date).is_err() || &date[..4] != year_name.as_str() {
-                    continue;
-                }
-                let metadata = match item.metadata() {
-                    Ok(metadata) => metadata,
-                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
-                    Err(error) => return Err(io_error(error)),
-                };
-                let file = FoundFile {
-                    path: item.path(),
-                    filename,
-                    format,
-                    modified: metadata.modified().ok(),
-                    size: metadata.len(),
-                };
-                match found.get(&date) {
-                    Some(existing) if existing.format == Format::Md || format == Format::Txt => {}
-                    _ => {
-                        found.insert(date, file);
-                    }
-                }
+        for record in self.managed_journal_files()? {
+            let path = self.checked_journal_path(self.root.join(&record.relative_path))?;
+            let format = match path.extension().and_then(|value| value.to_str()) {
+                Some("md") => Format::Md, Some("txt") => Format::Txt, _ => continue,
+            };
+            let metadata = match fs::metadata(&path) {
+                Ok(metadata) => metadata,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(error) => return Err(io_error(error)),
+            };
+            let filename = path.file_name().ok_or("日报文件名无效")?.to_string_lossy().into_owned();
+            let file = FoundFile { path, filename, format, modified: metadata.modified().ok(), size: metadata.len() };
+            match found.get(&record.date) {
+                Some(existing) if existing.format == Format::Md || format == Format::Txt => {},
+                _ => { found.insert(record.date, file); },
             }
         }
         Ok(found)
@@ -362,6 +363,7 @@ impl Workspace {
             let Some(cached) = self.index.get(date).cloned() else {
                 continue;
             };
+            self.checked_journal_path(cached.path.clone())?;
             let metadata = match fs::metadata(&cached.path) {
                 Ok(metadata) => metadata,
                 Err(_) => {
@@ -402,7 +404,8 @@ impl Workspace {
         Ok(previews)
     }
     fn read_file(&self, date: &str, format: Format) -> Result<Document, String> {
-        let content = fs::read_to_string(self.entry_path(date, format)?).map_err(|error| {
+        let path = self.entry_path(date, format)?;
+        let content = fs::read_to_string(&path).map_err(|error| {
             if error.kind() == std::io::ErrorKind::InvalidData {
                 "日报文件不是 UTF-8 编码，请在外部编辑器中转换后再打开".into()
             } else {
@@ -411,7 +414,7 @@ impl Workspace {
         })?;
         Ok(Document {
             date: date.into(),
-            filename: format!("{date}.{}", format.extension()),
+            filename: path.file_name().ok_or("日报文件名无效")?.to_string_lossy().into_owned(),
             format,
             revision: revision(&content),
             content,
@@ -447,8 +450,11 @@ impl Workspace {
             self.remember(&document);
             return Ok(document);
         }
-        let directory = self.year_directory(date)?;
-        fs::create_dir_all(&directory).map_err(io_error)?;
+        let directory = path.parent().ok_or("无法确定日报目录")?;
+        let relative = file_rules::relative_path(&self.root, directory)?;
+        let directory = file_rules::safe_directory(&self.root, &relative, true)?;
+        // Record identity before publishing, so even an interrupted write remains discoverable.
+        self.register_journal(&path, date)?;
         let mut temp = NamedTempFile::new_in(&directory).map_err(io_error)?;
         temp.write_all(content.as_bytes()).map_err(io_error)?;
         temp.as_file().sync_all().map_err(io_error)?;
@@ -501,12 +507,12 @@ impl Workspace {
         if from == to {
             return Ok(current);
         }
-        let target = self.entry_path(date, to)?;
+        let source = self.entry_path(date, from)?;
+        let target = self.checked_journal_path(source.with_extension(to.extension()))?;
         if target.exists() {
             return Err(format!(
-                "{}.{} 已存在，未覆盖文件。请先在工作空间中处理同名日报。",
-                date,
-                to.extension()
+                "{} 已存在，未覆盖文件。请先在工作空间中处理同名日报。",
+                target.file_name().unwrap_or_default().to_string_lossy()
             ));
         }
         let directory = target
@@ -518,10 +524,10 @@ impl Workspace {
         temp.write_all(current.content.as_bytes())
             .map_err(io_error)?;
         temp.as_file().sync_all().map_err(io_error)?;
+        self.register_journal(&target, date)?;
         temp.persist_noclobber(&target)
             .map_err(|error| io_error(error.error))?;
-        let source = self.entry_path(date, from)?;
-        if self.read_file(date, from)?.revision != expected_revision {
+        if revision(&fs::read_to_string(&source).map_err(io_error)?) != expected_revision {
             return Err("原文件在切换时被外部修改，两份文件均已保留，请刷新后检查".into());
         }
         fs::remove_file(source).map_err(|_| {
@@ -588,28 +594,35 @@ impl Workspace {
         database::run_blocking(|| database.read(date))
     }
 
-    fn document_from_record(record: JournalRecord) -> Document {
-        Document {
-            filename: format!("{}.{}", record.date, record.format.extension()),
+    fn journal_filename(&self, date: &str, format: Format) -> Result<String, String> {
+        file_rules::render_filename(&self.file_settings.journal, &file_rules::Context::journal(date)?, format.extension())
+    }
+
+    fn document_from_record(&self, record: JournalRecord) -> Result<Document, String> {
+        Ok(Document {
+            filename: self.journal_filename(&record.date, record.format)?,
             date: record.date, format: record.format, content: record.content,
             revision: record.revision, backup_warning: None,
-        }
+        })
     }
 
     pub fn list(&mut self) -> Result<Vec<Entry>, String> {
         if !self.database_only() { return self.list_files(); }
         let database = self.connected_database()?;
         let records = database::run_blocking(|| database.list())?;
-        Ok(records.into_iter().map(|record| Entry {
-            filename: format!("{}.{}", record.date, record.format.extension()),
+        records.into_iter().map(|record| Ok(Entry {
+            filename: self.journal_filename(&record.date, record.format)?,
             date: record.date, format: record.format,
-        }).collect())
+        })).collect()
     }
 
     /// 列出工作空间下除设置文件外的全部文件与目录（用于目录树展示）。
     pub fn list_workspace_files(&mut self) -> Result<Vec<FileNode>, String> {
         let mut nodes = Vec::new();
         collect_directory(&self.root, "", &mut nodes)?;
+        let dates: HashMap<_, _> = self.managed_journal_files()?.into_iter()
+            .map(|record| (record.relative_path, record.date)).collect();
+        for node in &mut nodes { node.journal_date = dates.get(&node.path).cloned(); node.protected = crate::directory_ops::is_protected(self, &node.path); }
         Ok(nodes)
     }
 
@@ -632,7 +645,7 @@ impl Workspace {
         if !self.database_only() { return self.read_file(date, format); }
         let record = self.database_record(date)?.ok_or("数据库中没有这一天的日报，请刷新后重试")?;
         if record.format != format { return Err("数据库中的日报格式已变更，请刷新后重试".into()); }
-        Ok(Self::document_from_record(record))
+        self.document_from_record(record)
     }
 
     pub fn create_with_content(&mut self, date: &str, format: Format, content: &str) -> Result<Document, String> {
@@ -640,12 +653,12 @@ impl Workspace {
         if self.database_only() {
             let database = self.connected_database()?;
             if let Some(record) = database::run_blocking(|| database.read(date))? {
-                return Ok(Self::document_from_record(record));
+                return self.document_from_record(record);
             }
             let record = JournalRecord::new(date, format, content);
             database::run_blocking(|| database.save(&record, None))?;
             self.record_history(date, format, content);
-            return Ok(Self::document_from_record(record));
+            return self.document_from_record(record);
         }
         let was_pending = self.begin_backup();
         let document = self.create_file_with_content(date, format, content)?;
@@ -660,7 +673,7 @@ impl Workspace {
             let database = self.connected_database()?;
             database::run_blocking(|| database.save(&record, Some(expected_revision)))?;
             self.record_history(date, format, content);
-            return Ok(Self::document_from_record(record));
+            return self.document_from_record(record);
         }
         let was_pending = self.begin_backup();
         let document = self.save_file(date, format, content, expected_revision)?;
@@ -746,7 +759,7 @@ impl Workspace {
             let record = JournalRecord::new(date, to, current.content);
             let database = self.connected_database()?;
             database::run_blocking(|| database.save(&record, Some(expected_revision)))?;
-            return Ok(Self::document_from_record(record));
+            return self.document_from_record(record);
         }
         let was_pending = self.begin_backup();
         let document = self.switch_file_format(date, from, to, expected_revision)?;
@@ -986,7 +999,7 @@ fn read_optional_bytes(path: &Path) -> Result<Option<Vec<u8>>, String> {
     fs::read(path).map(Some).map_err(io_error)
 }
 
-fn write_file_change(change: &FileChange) -> Result<(), String> {
+fn write_file_change(root: &Path, change: &FileChange) -> Result<(), String> {
     let parent = change.path.parent().ok_or("无法确定复制目标目录")?;
     match fs::symlink_metadata(parent) {
         Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => return Err("复制目标年份目录必须是工作空间内的普通目录".into()),
@@ -996,11 +1009,8 @@ fn write_file_change(change: &FileChange) -> Result<(), String> {
     }
     if read_optional_bytes(&change.path)? != change.before { return Err("目标日报在操作过程中被其他程序修改，已停止复制".into()); }
     if let Some(content) = &change.after {
-        match fs::create_dir(parent) {
-            Ok(()) => {},
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {},
-            Err(error) => return Err(io_error(error)),
-        }
+        let relative = file_rules::relative_path(root, parent)?;
+        file_rules::safe_directory(root, &relative, true)?;
         let metadata = fs::symlink_metadata(parent).map_err(io_error)?;
         if metadata.file_type().is_symlink() || !metadata.is_dir() { return Err("复制目标年份目录必须是工作空间内的普通目录".into()); }
         let mut temp = NamedTempFile::new_in(parent).map_err(io_error)?;
@@ -1012,14 +1022,14 @@ fn write_file_change(change: &FileChange) -> Result<(), String> {
     Ok(())
 }
 
-fn apply_file_changes(changes: &[FileChange]) -> Result<(), String> {
+fn apply_file_changes(root: &Path, changes: &[FileChange]) -> Result<(), String> {
     let mut applied: Vec<&FileChange> = Vec::new();
     for change in changes {
-        if let Err(error) = write_file_change(change) {
+        if let Err(error) = write_file_change(root, change) {
             let mut rollback_failed = false;
             for previous in applied.into_iter().rev() {
                 let rollback = FileChange { path: previous.path.clone(), before: previous.after.clone(), after: previous.before.clone() };
-                if write_file_change(&rollback).is_err() { rollback_failed = true; }
+                if write_file_change(root, &rollback).is_err() { rollback_failed = true; }
             }
             return Err(if rollback_failed { format!("{error}。部分目标文件无法恢复，请检查目标文件；源日报数据均已保留。") } else { format!("{error}。本次目标变更已撤回，源日报数据均已保留。") });
         }
@@ -1028,11 +1038,11 @@ fn apply_file_changes(changes: &[FileChange]) -> Result<(), String> {
     Ok(())
 }
 
-fn rollback_file_changes(changes: &[FileChange]) -> bool {
+fn rollback_file_changes(root: &Path, changes: &[FileChange]) -> bool {
     let mut failed = false;
     for change in changes.iter().rev() {
         let rollback = FileChange { path: change.path.clone(), before: change.after.clone(), after: change.before.clone() };
-        if write_file_change(&rollback).is_err() { failed = true; }
+        if write_file_change(root, &rollback).is_err() { failed = true; }
     }
     !failed
 }
@@ -1064,7 +1074,11 @@ impl Workspace {
             if let Some(content) = other { changes.push(FileChange { path: other_path, before: Some(content), after: None }); }
             copied += 1;
         }
-        apply_file_changes(&changes)?;
+        for record in records {
+            let path = self.entry_path(&record.date, record.format)?;
+            self.register_journal(&path, &record.date)?;
+        }
+        apply_file_changes(&self.root, &changes)?;
         let verification = (|| {
             for record in records {
                 let document = self.read_file(&record.date, record.format)?;
@@ -1076,7 +1090,7 @@ impl Workspace {
             verify_source()
         })();
         if let Err(error) = verification {
-            let rolled_back = rollback_file_changes(&changes);
+            let rolled_back = rollback_file_changes(&self.root, &changes);
             return Err(if rolled_back { format!("{error}。本次目标变更已撤回，源数据已保留。") } else { format!("{error}。目标文件有外部修改，部分目标变更无法撤回，请检查；源数据已保留。") });
         }
         Ok((copied, skipped))
@@ -1092,6 +1106,101 @@ mod tests {
         let workspace = Workspace::open(dir.path().to_str().unwrap()).unwrap();
         (dir, workspace)
     }
+    fn custom_journal_settings(workspace: &mut Workspace, directory: &str, template: &str) {
+        let mut files = workspace.file_settings().clone();
+        files.journal.directory = directory.into();
+        files.journal.filename_template = template.into();
+        let files = file_rules::normalize(workspace.root(), &files).unwrap();
+        workspace.accept_file_settings(files);
+    }
+
+    #[test]
+    fn custom_journal_names_keep_date_identity_and_legacy_reports() {
+        let (dir, mut workspace) = setup();
+        fs::create_dir(dir.path().join("2026")).unwrap();
+        fs::write(dir.path().join("2026/20261029.md"), "legacy").unwrap();
+        custom_journal_settings(&mut workspace, "工作/日报", "日报_{YYYY}年{MM}月{DD}日");
+        let created = workspace.create_with_content("20261030", Format::Md, "custom").unwrap();
+        assert_eq!(created.filename, "日报_2026年10月30日.md");
+        let path = dir.path().join("工作/日报/2026/日报_2026年10月30日.md");
+        assert_eq!(fs::read_to_string(&path).unwrap(), "custom");
+        assert!(!entry_file(&dir, "20261030", Format::Md).exists());
+        let entries = workspace.list().unwrap();
+        assert_eq!(entries.iter().map(|entry| entry.date.as_str()).collect::<Vec<_>>(), ["20261029", "20261030"]);
+        assert_eq!(workspace.read("20261029", Format::Md).unwrap().content, "legacy");
+        let nodes = workspace.list_workspace_files().unwrap();
+        assert_eq!(nodes.iter().find(|node| node.name == created.filename).unwrap().journal_date.as_deref(), Some("20261030"));
+        let reopened = Workspace::open(dir.path().to_str().unwrap()).unwrap();
+        assert_eq!(reopened.read("20261030", Format::Md).unwrap().filename, created.filename);
+    }
+
+    #[test]
+    fn changing_name_rules_keeps_existing_paths_and_format_switch_keeps_stem() {
+        let (dir, mut workspace) = setup();
+        custom_journal_settings(&mut workspace, "日报", "旧日报_{date}");
+        let created = workspace.create_with_content("20261030", Format::Md, "unchanged").unwrap();
+        custom_journal_settings(&mut workspace, "日报", "新日报_{YYYY}-{MM}-{DD}");
+        let saved = workspace.save("20261030", Format::Md, "edited", &created.revision).unwrap();
+        assert_eq!(saved.filename, "旧日报_20261030.md");
+        let converted = workspace.switch_format("20261030", Format::Md, Format::Txt, &saved.revision).unwrap();
+        assert_eq!(converted.filename, "旧日报_20261030.txt");
+        assert_eq!(converted.content, "edited");
+        assert!(!dir.path().join("日报/2026/旧日报_20261030.md").exists());
+        assert!(dir.path().join("日报/2026/旧日报_20261030.txt").is_file());
+        let next = workspace.create_with_content("20261031", Format::Md, "new").unwrap();
+        assert_eq!(next.filename, "新日报_2026-10-31.md");
+        assert_eq!(workspace.list().unwrap().len(), 2);
+        assert_eq!(crate::history::list(workspace.root(), Some("20261030")).unwrap().len(), 2);
+    }
+
+    #[test]
+    fn custom_names_are_used_for_database_documents_and_copy_back_to_files() {
+        let (dir, mut workspace) = setup();
+        custom_journal_settings(&mut workspace, "日报", "工作_{date}");
+        enable_database(&mut workspace, Mode::Database);
+        let created = workspace.create_with_content("20261030", Format::Md, "database").unwrap();
+        assert_eq!(created.filename, "工作_20261030.md");
+        assert_eq!(workspace.list().unwrap()[0].filename, created.filename);
+        let (result, _, _) = workspace.prepare_transfer("databaseToFiles", "copy", "abort").unwrap();
+        assert_eq!(result.copied, 1);
+        let path = dir.path().join("日报/2026/工作_20261030.md");
+        assert_eq!(fs::read_to_string(path).unwrap(), "database");
+        custom_journal_settings(&mut workspace, "日报", "新的_{date}");
+        assert_eq!(workspace.read_file("20261030", Format::Md).unwrap().filename, "工作_20261030.md");
+    }
+
+    #[test]
+    fn git_append_uses_custom_journal_target_and_default_format() {
+        let (dir, mut workspace) = setup();
+        custom_journal_settings(&mut workspace, "日报", "工作_{date}");
+        workspace.database_settings.default_format = Format::Md;
+        let result = workspace.append_git_reports(git_reports(&[("20261030", "git content")])).unwrap();
+        assert!(result.failed.is_empty());
+        assert_eq!(result.documents[0].filename, "工作_20261030.md");
+        assert_eq!(fs::read_to_string(dir.path().join("日报/2026/工作_20261030.md")).unwrap(), "git content");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn custom_journal_parent_symlinks_and_replaced_cached_files_are_rejected() {
+        let (dir, mut workspace) = setup();
+        custom_journal_settings(&mut workspace, "日报", "工作_{date}");
+        let outside = TempDir::new().unwrap();
+        std::os::unix::fs::symlink(outside.path(), dir.path().join("日报")).unwrap();
+        assert!(workspace.create_with_content("20261030", Format::Md, "private").is_err());
+        assert!(fs::read_dir(outside.path()).unwrap().next().is_none());
+        fs::remove_file(dir.path().join("日报")).unwrap();
+        workspace.create_with_content("20261030", Format::Md, "normal").unwrap();
+        workspace.list().unwrap();
+        let path = dir.path().join("日报/2026/工作_20261030.md");
+        let external = outside.path().join("private.md");
+        fs::write(&external, "private").unwrap();
+        fs::remove_file(&path).unwrap();
+        std::os::unix::fs::symlink(&external, &path).unwrap();
+        assert!(workspace.read("20261030", Format::Md).is_err());
+        assert!(workspace.previews(&["20261030".into()]).is_err());
+    }
+
     #[test]
     fn missing_workspace_prompts_for_another_directory() {
         let dir = TempDir::new().unwrap();
@@ -1672,7 +1781,7 @@ mod tests {
             FileChange { path: first.clone(), before: Some(b"original".to_vec()), after: Some(b"new".to_vec()) },
             FileChange { path: second.clone(), before: Some(b"stale".to_vec()), after: Some(b"bad overwrite".to_vec()) },
         ];
-        assert!(apply_file_changes(&changes).unwrap_err().contains("已撤回"));
+        assert!(apply_file_changes(dir.path(), &changes).unwrap_err().contains("已撤回"));
         assert_eq!(fs::read(&first).unwrap(), b"original");
         assert_eq!(fs::read(&second).unwrap(), b"external change");
     }

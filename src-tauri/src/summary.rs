@@ -155,8 +155,31 @@ fn inspect_directory(root: &Path, relative: &str, create: bool) -> Result<PathBu
 }
 
 pub fn prepare_directory(root: &Path, settings: &Settings) -> Result<PathBuf, String> {
-    let normalized = normalize_settings(root, settings)?;
-    inspect_directory(root, &normalized.output_directory, true)
+    let rule = output_rule(root, settings)?;
+    crate::file_rules::safe_directory(root, &rule.directory, true)
+}
+
+/// The shared file rule is authoritative once saved. Standalone legacy callers
+/// can still supply their existing summary directory before that migration.
+fn output_rule(root: &Path, legacy: &Settings) -> Result<crate::file_rules::Rule, String> {
+    let stored = crate::settings::load(&root.join(crate::settings::FILE_NAME))?.unwrap_or_default();
+    let mut rule = if stored.files.is_some() {
+        crate::file_rules::effective(&stored).summary
+    } else {
+        let normalized = normalize_settings(root, legacy)?;
+        crate::file_rules::Rule {
+            directory: normalized.output_directory,
+            ..crate::file_rules::Settings::default().summary
+        }
+    };
+    rule.directory = crate::file_rules::relative_directory(&rule.directory, false)?;
+    rule.filename_template = rule.filename_template.trim().into();
+    crate::file_rules::render_filename(
+        &rule,
+        &crate::file_rules::Context::report("20261001", "20261031", "20261031_203000")?,
+        "md",
+    )?;
+    Ok(rule)
 }
 
 fn date_range(dates: &[String]) -> Result<(String, String), String> {
@@ -202,7 +225,8 @@ fn export_at(
     if content.trim().is_empty() {
         return Err("总结内容为空，无法导出".into());
     }
-    let directory = prepare_directory(root, settings)?;
+    let rule = output_rule(root, settings)?;
+    let directory = crate::file_rules::safe_directory(root, &rule.directory, true)?;
     let mut temporary =
         NamedTempFile::new_in(&directory).map_err(|error| format!("无法创建总结文件：{error}"))?;
     temporary
@@ -212,8 +236,8 @@ fn export_at(
         .as_file()
         .sync_all()
         .map_err(|error| format!("无法同步总结文件：{error}"))?;
-    let (filename, path) = crate::report_export::publish(
-        temporary, &directory, &start, &end, stamp, format.extension(),
+    let (filename, path) = crate::report_export::publish_rule(
+        temporary, root, &directory, &rule, crate::file_rules::Feature::Summary, &start, &end, stamp, format.extension(),
     )?;
     Ok(ExportResult {
         filename,
@@ -246,7 +270,7 @@ mod tests {
         let custom: Settings = serde_json::from_str(r#"{"outputDirectory":"归档/总结"}"#).unwrap();
         assert_eq!(custom.output_directory, "归档/总结");
         let root = tempfile::tempdir().unwrap();
-        assert_eq!(prepare_directory(root.path(), &settings("总结")).unwrap(), root.path().join("summary"));
+        assert_eq!(prepare_directory(root.path(), &settings("总结")).unwrap(), fs::canonicalize(root.path()).unwrap().join("summary"));
     }
 
     #[test]
@@ -373,6 +397,27 @@ mod tests {
         );
         assert!(workspace.list().unwrap().is_empty());
         assert_eq!(fs::read_dir(root.join("summary")).unwrap().count(), 3);
+    }
+
+    #[test]
+    fn shared_file_rule_controls_directory_and_names_in_both_formats() {
+        let root = tempfile::tempdir().unwrap();
+        let mut files = crate::file_rules::Settings::default();
+        files.summary.directory = "工作总结".into();
+        files.summary.filename_template = "项目总结_{startDate}_{endDate}_{YYYY}-{MM}-{DD}".into();
+        let stored = crate::settings::StoredSettings { files: Some(files), ..Default::default() };
+        crate::settings::save(&root.path().join(crate::settings::FILE_NAME), &stored).unwrap();
+        for format in [Format::Md, Format::Txt] {
+            let output = export_at(root.path(), &settings("旧目录"), &dates(), "完整总结", format, "20261028_160500").unwrap();
+            assert_eq!(output.filename, format!("项目总结_20261014_20261022_2026-10-28.{}", format.extension()));
+            assert_eq!(Path::new(&output.path).parent().unwrap(), fs::canonicalize(root.path()).unwrap().join("工作总结"));
+            assert_eq!(fs::read_to_string(output.path).unwrap(), "完整总结");
+        }
+        assert!(!root.path().join("旧目录").exists());
+        assert!(!root.path().join("summary").exists());
+        let records = crate::file_rules::catalog(root.path()).unwrap();
+        assert_eq!(records.len(), 2);
+        assert!(records.iter().all(|record| record.feature == crate::file_rules::Feature::Summary && record.start_date == "20261014" && record.end_date == "20261022"));
     }
 
     #[test]

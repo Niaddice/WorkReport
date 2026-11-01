@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { invoke, isTauri } from '@tauri-apps/api/core'
-import { APPEARANCE_STORAGE_KEY, useAppearance } from '../src/lib/useAppearance'
+import { APPEARANCE_STORAGE_KEY, normalizeAppearanceSettings, useAppearance } from '../src/lib/useAppearance'
 
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn(), isTauri: vi.fn() }))
 
@@ -23,6 +23,31 @@ afterEach(() => {
 })
 
 describe('appearance settings', () => {
+  it('defaults old settings to two seconds and adopts, reloads and resets saved gesture durations', async () => {
+    const appearance = useAppearance()
+    expect(appearance.railHoldDelayMs.value).toBe(2000)
+    expect(appearance.railHoldDurationMs.value).toBe(2000)
+    vi.mocked(invoke).mockResolvedValueOnce({ scale: 100, railHoldDelayMs: 700, railHoldDurationMs: 3800 })
+    await appearance.load()
+    expect(appearance.railHoldDelayMs.value).toBe(700)
+    expect(appearance.railHoldDurationMs.value).toBe(3800)
+    appearance.acceptSaved({ scale: 100, rail: 'right', railHoldDelayMs: 500, railHoldDurationMs: 10_000 })
+    expect(appearance.railHoldDelayMs.value).toBe(500)
+    expect(appearance.railHoldDurationMs.value).toBe(10_000)
+    vi.mocked(invoke).mockResolvedValueOnce({ scale: 100 })
+    await appearance.reload()
+    expect(appearance.railHoldDelayMs.value).toBe(2000)
+    expect(appearance.railHoldDurationMs.value).toBe(2000)
+  })
+
+  it.each([undefined, null, '2000', 0, 499, 501, 10_100, NaN, Infinity])(
+    'falls back to safe gesture defaults for %s',
+    (value) => {
+      const settings = normalizeAppearanceSettings({ railHoldDelayMs: value, railHoldDurationMs: value })
+      expect(settings.railHoldDelayMs).toBe(2000)
+      expect(settings.railHoldDurationMs).toBe(2000)
+    },
+  )
   it('starts at 100% and reads saved settings without writing defaults', async () => {
     const appearance = useAppearance()
     expect(appearance.scale.value).toBe(100)
@@ -102,13 +127,17 @@ describe('appearance settings', () => {
   })
 
   it('reads browser-preview preferences under a separate key without touching IPC', async () => {
-    const storage = new Map<string, string>([[APPEARANCE_STORAGE_KEY, JSON.stringify({ scale: 90 })]])
+    const storage = new Map<string, string>([
+      [APPEARANCE_STORAGE_KEY, JSON.stringify({ scale: 90, railHoldDelayMs: 600, railHoldDurationMs: 900 })],
+    ])
     const getItem = vi.fn((key: string) => storage.get(key) ?? null)
     vi.stubGlobal('localStorage', { getItem })
     vi.mocked(isTauri).mockReturnValue(false)
     const appearance = useAppearance()
     expect(await appearance.load()).toBe(true)
     expect(appearance.scale.value).toBe(90)
+    expect(appearance.railHoldDelayMs.value).toBe(600)
+    expect(appearance.railHoldDurationMs.value).toBe(900)
     expect(getItem).toHaveBeenCalledExactlyOnceWith(APPEARANCE_STORAGE_KEY)
     expect(invoke).not.toHaveBeenCalled()
   })

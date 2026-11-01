@@ -4,7 +4,7 @@ import { mount } from '@vue/test-utils'
 import ExcelSettings from '../src/components/ExcelSettings.vue'
 import { RECOMMENDED_EXCEL_PROMPT, type ExcelSettings as ExcelSettingsData } from '../src/lib/useExcel'
 
-describe('Excel settings with a fixed workspace output directory', () => {
+describe('Excel settings with workspace output rules', () => {
   it('fills the recommended rules only when requested and keeps the settings editable', async () => {
     const original = { enabled: true, templatePath: '/templates/report.xlsx', prompt: '原有提示词' }
     const wrapper = mount(ExcelSettings, {
@@ -36,6 +36,23 @@ describe('Excel settings with a fixed workspace output directory', () => {
     expect(wrapper.text()).not.toContain('选择目录')
     expect(wrapper.text()).toContain('当前工作空间下的 excel 目录')
     expect(wrapper.vm.validate()).toBe(true)
+    expect(wrapper.emitted('update:modelValue')).toBeUndefined()
+    wrapper.unmount()
+  })
+  it('shows the draft directory and opens the shared directory settings', async () => {
+    const wrapper = mount(ExcelSettings, {
+      props: {
+        modelValue: { enabled: false, templatePath: '', prompt: '' },
+        busy: false,
+        aiReady: true,
+        workspacePath: '/workspace',
+        outputDirectory: '输出/Excel',
+      },
+    })
+    expect(wrapper.text()).toContain('当前工作空间下的 输出/Excel 目录')
+    const button = wrapper.findAll('button').find((item) => item.text() === '设置目录和文件名')!
+    await button.trigger('click')
+    expect(wrapper.emitted('configureDirectories')).toHaveLength(1)
     expect(wrapper.emitted('update:modelValue')).toBeUndefined()
     wrapper.unmount()
   })

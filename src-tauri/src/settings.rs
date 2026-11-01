@@ -12,6 +12,8 @@ pub const FILE_NAME: &str = "workreport.json";
 #[derive(Clone, Default, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StoredSettings {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub files: Option<crate::file_rules::Settings>,
     #[serde(default)]
     pub appearance: crate::appearance::Settings,
     #[serde(default)]
@@ -124,10 +126,16 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join(FILE_NAME);
         let settings = StoredSettings {
+            files: None,
             ui: None,
             database: crate::database::Settings::default(),
             git: crate::git::Settings::default(),
-            appearance: crate::appearance::Settings { scale: 110, ..Default::default() },
+            appearance: crate::appearance::Settings {
+                scale: 110,
+                rail_hold_delay_ms: 700,
+                rail_hold_duration_ms: 3800,
+                ..Default::default()
+            },
             ai: crate::ai::Settings {
                 providers: vec![provider("one")],
                 default_provider_id: Some("one".into()),
@@ -146,6 +154,8 @@ mod tests {
         save(&path, &settings).unwrap();
         let restored = load(&path).unwrap().expect("settings file");
         assert_eq!(restored.appearance.scale, 110);
+        assert_eq!(restored.appearance.rail_hold_delay_ms, 700);
+        assert_eq!(restored.appearance.rail_hold_duration_ms, 3800);
         assert_eq!(restored.ai.summary_prompt, "按项目归类");
         assert_eq!(restored.ai.default_provider_id.as_deref(), Some("one"));
         assert_eq!(restored.ai.providers[0].executable, "/usr/local/bin/codex");
@@ -162,6 +172,7 @@ mod tests {
         save(
             &path,
             &StoredSettings {
+                files: None,
                 ui: None,
                 database: crate::database::Settings::default(),
                 git: crate::git::Settings::default(),
@@ -216,6 +227,7 @@ mod tests {
         save(
             &path,
             &StoredSettings {
+                files: None,
                 ui: None,
                 database: crate::database::Settings::default(),
                 git: crate::git::Settings::default(),
@@ -286,6 +298,22 @@ mod tests {
         assert!(written["ui"]["modules"][0].get("span").is_none());
         assert!(written["ui"].get("axis").is_none());
         assert!(written["ui"].get("order").is_none());
+    }
+
+    #[test]
+    fn explicitly_empty_module_layout_and_snapshot_survive_settings_round_trip() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join(FILE_NAME);
+        let preferences = crate::ui::normalize(serde_json::from_value(serde_json::json!({
+            "skin": "default",
+            "layout": {"type": "empty"},
+            "savedLayouts": [{"name": "空白布局", "layout": {"type": "empty"}}]
+        })).unwrap());
+        save(&path, &StoredSettings { ui: Some(preferences), ..StoredSettings::default() }).unwrap();
+        let restored = crate::ui::normalize(load(&path).unwrap().unwrap().ui.unwrap());
+        assert_eq!(restored.layout, Some(serde_json::json!({"type": "empty"})));
+        assert_eq!(restored.saved_layouts.len(), 1);
+        assert_eq!(restored.saved_layouts[0].layout, serde_json::json!({"type": "empty"}));
     }
 
     #[test]

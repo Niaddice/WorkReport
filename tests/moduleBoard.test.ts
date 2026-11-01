@@ -6,7 +6,7 @@ import dayjs from 'dayjs'
 import ModuleBoard from '../src/components/ModuleBoard.vue'
 import { resizeLayoutLocally } from '../src/modules/layout'
 import { MODULE_CONTEXT } from '../src/modules/context'
-import type { LayoutMetrics, LayoutNode, ModuleId } from '../src/modules/types'
+import type { Layout, LayoutMetrics, LayoutNode, ModuleId } from '../src/modules/types'
 
 beforeAll(() => {
   globalThis.ResizeObserver = class {
@@ -52,6 +52,7 @@ function fakeContext() {
     rangeLoading: ref(false),
     rangeError: ref(''),
     editorPreview: ref(false),
+    canAddJournalPreview: computed(() => true),
     journalPreview: {
       available: computed(() => false),
       visible: ref(false),
@@ -85,7 +86,7 @@ const rowLayout: LayoutNode = {
   second: leaf('history'),
 }
 
-function mountBoard(layout: LayoutNode = rowLayout, width = 800, height = 600, stubs: Record<string, boolean> = {}) {
+function mountBoard(layout: Layout = rowLayout, width = 800, height = 600, stubs: Record<string, boolean> = {}) {
   spies.push(
     vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockImplementation(function (this: HTMLElement) {
       return this.classList.contains('module-board') ? width : 0
@@ -120,6 +121,27 @@ function pointer(type: string, x: number, y: number, buttons: number) {
 }
 
 describe('module board', () => {
+  it('renders the empty state and keeps the last maximized module closeable', async () => {
+    const wrapper = mountBoard({ type: 'empty' })
+    try {
+      await flushPromises()
+      expect(wrapper.findAll('.module-panel')).toHaveLength(0)
+      expect(wrapper.get('.module-board-empty').text()).toContain('侧边功能栏')
+      await wrapper.setProps({ layout: leaf('overview') })
+      await flushPromises()
+      expect(wrapper.find('.module-board-empty').exists()).toBe(false)
+      await wrapper.get('.module-maximize-button').trigger('click')
+      await flushPromises()
+      await wrapper.get('.module-panel-remove').trigger('click')
+      expect(wrapper.emitted('remove')).toEqual([['overview']])
+      await wrapper.setProps({ layout: { type: 'empty' } })
+      await flushPromises()
+      expect(wrapper.find('.module-maximize-backdrop').exists()).toBe(false)
+      expect(document.body.classList.contains('is-module-maximized')).toBe(false)
+    } finally {
+      wrapper.unmount()
+    }
+  })
   it('activates the calendar from its content, keyboard focus and rail reveal like every other module', async () => {
     const wrapper = mountBoard({ ...rowLayout, first: leaf('calendar'), second: leaf('overview') })
     const activeIds = () =>

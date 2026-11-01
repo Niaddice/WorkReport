@@ -249,7 +249,6 @@ watch(
               @pointerdown="startDrag(dateKey(day), $event)"
               @pointerenter="moveDrag(dateKey(day))"
               @click="onDayClick(dateKey(day))"
-              @contextmenu.prevent
             >
               <div class="day-top">
                 <span class="day-number">{{ day.date() }}</span
@@ -299,7 +298,6 @@ watch(
                 @pointerdown="startDrag(dateKey(day), $event)"
                 @pointerenter="moveDrag(dateKey(day))"
                 @click="onDayClick(dateKey(day))"
-                @contextmenu.prevent
               >
                 {{ day.date() }}
               </button>

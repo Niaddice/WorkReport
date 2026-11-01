@@ -1,6 +1,7 @@
 import { invoke, isTauri } from '@tauri-apps/api/core'
 import { ref } from 'vue'
 import { summaryExportContent } from './summary'
+import { DEFAULT_FILE_SETTINGS, type FileRule } from './fileSettings'
 
 export interface SummaryOutputSettings {
   outputDirectory: string
@@ -42,6 +43,7 @@ function readPreviewSettings(): SummaryOutputSettings {
 
 export function useSummaryOutput() {
   const settings = ref<SummaryOutputSettings>(cloneSettings(DEFAULT_SUMMARY_OUTPUT_SETTINGS))
+  const fileRule = ref<FileRule>({ ...DEFAULT_FILE_SETTINGS.summary })
   const loading = ref(false)
   const error = ref('')
   const exporting = ref(false)
@@ -97,6 +99,7 @@ export function useSummaryOutput() {
     activeExport = undefined
     activeOpen = undefined
     settings.value = cloneSettings(DEFAULT_SUMMARY_OUTPUT_SETTINGS)
+    fileRule.value = { ...DEFAULT_FILE_SETTINGS.summary }
     exporting.value = false
     opening.value = false
     error.value = ''
@@ -199,8 +202,16 @@ export function useSummaryOutput() {
     error.value = ''
   }
 
+  function acceptFileSettings(value: FileRule) {
+    if (fileRule.value.directory === value.directory && fileRule.value.filenameTemplate === value.filenameTemplate)
+      return
+    fileRule.value = { ...value }
+    acceptSaved({ outputDirectory: value.directory })
+  }
+
   return {
     settings,
+    fileRule,
     loading,
     error,
     load,
@@ -214,5 +225,6 @@ export function useSummaryOutput() {
     opening,
     openError,
     acceptSaved,
+    acceptFileSettings,
   }
 }

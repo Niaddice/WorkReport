@@ -2,7 +2,10 @@ import type { Component } from 'vue'
 import type { SkinId } from '../lib/skins'
 
 /** 内置模块 id；新增模块只需在 registry 中登记，并在持久化层保持字符串兼容。 */
-export type ModuleId = 'calendar' | 'editor' | 'overview' | 'history' | 'summary' | 'excel' | 'directory' | 'git'
+export type ModuleType = 'calendar' | 'editor' | 'overview' | 'history' | 'summary' | 'excel' | 'directory' | 'git'
+
+/** 保留旧独立日报预览的 id 类型供迁移读取；当前布局统一使用模块类型 id。 */
+export type ModuleId = ModuleType | `editor-${number}`
 
 export interface ModulePlacement {
   id: ModuleId
@@ -10,7 +13,7 @@ export interface ModulePlacement {
 
 /** 模块目录条目：界面、拖放与模块目录弹窗都从这里读取元数据。 */
 export interface ModuleDefinition {
-  id: ModuleId
+  id: ModuleType
   title: string
   description: string
   icon: Component
@@ -53,6 +56,12 @@ export interface LayoutSplit {
 /** 可嵌套的分栏布局树：叶子是模块，split 是左右/上下分栏。 */
 export type LayoutNode = LayoutLeaf | LayoutSplit
 
+/** 没有打开模块的布局；只用在布局根节点。 */
+export interface EmptyLayout {
+  type: 'empty'
+}
+export type Layout = LayoutNode | EmptyLayout
+
 /** 布局树渲染后的模块矩形（相对模块板内边距）。 */
 export interface LayoutSlot extends Rect {
   id: ModuleId
@@ -83,13 +92,13 @@ export interface LayoutMetrics {
 /** 用户保存的布局快照：名字 + 布局树。 */
 export interface SavedLayout {
   name: string
-  layout: LayoutNode
+  layout: Layout
 }
 
 /** 与 Rust 侧 ui::Preferences 对应的工作空间界面偏好。 */
 export interface UiPreferences {
   /** 模块板的分栏布局树。 */
-  layout: LayoutNode
+  layout: Layout
   skin: SkinId
   /** 用户保存的布局快照，随界面偏好一起持久化。 */
   savedLayouts: SavedLayout[]
@@ -98,7 +107,7 @@ export interface UiPreferences {
 export const MAX_MODULES = 12
 
 /** 稳定顺序，用于模块目录与旧布局迁移校验。 */
-export const MODULE_IDS: readonly ModuleId[] = [
+export const MODULE_IDS: readonly ModuleType[] = [
   'calendar',
   'editor',
   'overview',
@@ -110,5 +119,12 @@ export const MODULE_IDS: readonly ModuleId[] = [
 ]
 
 export function isModuleId(value: unknown): value is ModuleId {
-  return typeof value === 'string' && (MODULE_IDS as readonly string[]).includes(value)
+  return (
+    typeof value === 'string' &&
+    ((MODULE_IDS as readonly string[]).includes(value) || /^editor-[1-9]\d{0,8}$/.test(value))
+  )
+}
+
+export function moduleType(id: ModuleId): ModuleType {
+  return id.startsWith('editor-') ? 'editor' : (id as ModuleType)
 }

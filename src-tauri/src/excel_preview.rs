@@ -91,6 +91,26 @@ pub struct ExcelCellBorder {
     pub color: String,
 }
 
+/// A bounded, read-only grid for CSV and legacy Excel values.
+pub fn plain_sheet(name: &str, values: Vec<Vec<String>>, start_row: u32, start_column: u32, truncated: bool) -> ExcelSheetPreview {
+    let row_count = values.len().max(1) as u32;
+    let column_count = values.iter().map(Vec::len).max().unwrap_or(1).max(1) as u32;
+    let style = ExcelCellStyle { font_family: "Arial".into(), font_size: 14.0, bold: false, italic: false, underline: false, strike: false,
+        color: "#222222".into(), background: "#FFFFFF".into(), horizontal_align: "left", vertical_align: "top", wrap_text: true,
+        border_top: None, border_right: None, border_bottom: None, border_left: None };
+    let mut cells = Vec::new();
+    for (r, row) in values.into_iter().enumerate() { for (c, text) in row.into_iter().enumerate() {
+        let row = start_row + r as u32; let column = start_column + c as u32;
+        cells.push(ExcelSheetCell { row, column, address: format!("{}{row}", column_label(column)), text, formula: None,
+            style: style.clone(), row_span: 1, column_span: 1, changed: false });
+    } }
+    ExcelSheetPreview { name: name.into(), state: "visible".into(), truncated, regions: vec![ExcelPreviewRegion {
+        start_row, start_column, row_count, column_count,
+        rows: (start_row..start_row + row_count).map(|index| ExcelPreviewRow { index, height: 28.0, hidden: false }).collect(),
+        columns: (start_column..start_column + column_count).map(|index| ExcelPreviewColumn { index, label: column_label(index), width: 150.0, hidden: false }).collect(), cells,
+    }] }
+}
+
 fn column_label(mut column: u32) -> String {
     let mut label = Vec::new();
     while column > 0 {

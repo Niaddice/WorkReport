@@ -108,6 +108,16 @@ describe('report date range parsing', () => {
     expect(reportDateRange('20261019-20261025.xlsx')).toBeNull()
     expect(reportDateRange('')).toBeNull()
   })
+  it('uses recorded dates for custom names and gives valid metadata priority over a legacy name', () => {
+    expect(reportDateRange({ filename: '项目成果.xlsx', startDate: '20261019', endDate: '20261025' })).toEqual({
+      start: '20261019',
+      end: '20261025',
+    })
+    const renamed = { filename: '总结_20260901-20260902_old.xlsx', startDate: '20261019', endDate: '20261025' }
+    expect(reportOverlapsRange(renamed, '20261021', '20261021')).toBe(true)
+    expect(reportOverlapsRange(renamed, '20261101', '20261130')).toBe(false)
+    expect(reportDateRange({ ...renamed, startDate: '20260229' })).toEqual({ start: '20260901', end: '20260902' })
+  })
 })
 
 describe('report range overlap', () => {
@@ -653,6 +663,45 @@ describe('Excel preview and confirmation lifecycle', () => {
     excel.acceptSaved({ ...configured, prompt: '新规则' })
     expect(excel.settings.value.prompt).toBe('新规则')
     expect(excel.preview.value).toBeNull()
+    expect(invoke).toHaveBeenLastCalledWith('discard_excel_preview', { previewId: prepared.id })
+  })
+
+  it('discards an approved workbook when its filename rule changes and keeps an unchanged rule approved', async () => {
+    mockConfiguredCommands()
+    const excel = useExcel()
+    await excel.prepareSelection('/workspace', ['20261021'])
+    excel.acceptFileSettings({ ...excel.fileRule.value })
+    expect(excel.preview.value).toEqual(prepared)
+    excel.acceptFileSettings({ directory: 'excel', filenameTemplate: '项目成果_{date}' })
+    expect(excel.preview.value).toBeNull()
+    expect(excel.fileRule.value.filenameTemplate).toBe('项目成果_{date}')
+    expect(excel.settings.value).toEqual(configured)
+    expect(invoke).toHaveBeenLastCalledWith('discard_excel_preview', { previewId: prepared.id })
+    expect(vi.mocked(invoke).mock.calls.some((call) => call[0] === 'confirm_excel')).toBe(false)
+  })
+
+  it('ignores preparation and export-file reads finishing after a directory change', async () => {
+    const generated = deferred<ExcelPreview>()
+    const read = deferred<{ filename: string; path: string; sheets: [] }>()
+    vi.mocked(invoke).mockImplementation((command) => {
+      if (command === 'load_excel_settings') return Promise.resolve(configured)
+      if (command === 'prepare_excel') return generated.promise
+      if (command === 'read_excel_export') return read.promise
+      return Promise.resolve()
+    })
+    const excel = useExcel()
+    const preparation = excel.prepareSelection('/workspace', ['20261021'])
+    const opening = excel.openExport('/workspace', '/workspace/excel/old.xlsx')
+    await settle()
+    excel.acceptFileSettings({ directory: '项目报告', filenameTemplate: excel.fileRule.value.filenameTemplate })
+    generated.resolve(prepared)
+    read.resolve({ filename: 'old.xlsx', path: '/workspace/excel/old.xlsx', sheets: [] })
+    expect(await preparation).toBe(false)
+    expect(await opening).toBe(false)
+    expect(excel.preview.value).toBeNull()
+    expect(excel.exportPreview.value).toBeNull()
+    expect(excel.previewOpening.value).toBe(false)
+    expect(invoke).toHaveBeenCalledWith('cancel_ai', { requestId: expect.any(String) })
     expect(invoke).toHaveBeenLastCalledWith('discard_excel_preview', { previewId: prepared.id })
   })
 

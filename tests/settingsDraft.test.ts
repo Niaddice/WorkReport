@@ -2,6 +2,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { effectScope, nextTick, ref, type EffectScope } from 'vue'
 import { DEFAULT_DATABASE_SETTINGS, cloneDatabaseSettings } from '../src/lib/database'
 import { cloneWorkspaceSettings, useSettingsDraft, type WorkspaceSettings } from '../src/lib/settingsDraft'
+import { cloneGitSettings } from '../src/lib/useGit'
+import { cloneFileSettings } from '../src/lib/fileSettings'
 
 const scopes: EffectScope[] = []
 afterEach(() => {
@@ -10,8 +12,8 @@ afterEach(() => {
 
 function initialSettings(): WorkspaceSettings {
   return {
-    appearance: { scale: 100, rail: 'right' },
-    git: { executable: 'git', repositories: [], includeMerges: false },
+    appearance: { scale: 100, rail: 'right', railHoldDelayMs: 2000, railHoldDurationMs: 2000 },
+    git: cloneGitSettings(),
     database: cloneDatabaseSettings(DEFAULT_DATABASE_SETTINGS),
     ai: {
       providers: [
@@ -31,6 +33,7 @@ function initialSettings(): WorkspaceSettings {
     },
     excel: { enabled: false, templatePath: '', prompt: '' },
     summary: { outputDirectory: 'summary' },
+    files: cloneFileSettings(),
   }
 }
 
@@ -71,6 +74,7 @@ describe('manual settings draft', () => {
     state.draft.value.ai.defaultProviderId = 'second'
     state.draft.value.ai.generationPreference = '改写时保留数字'
     state.draft.value.ai.summaryPrompt = '按项目整理'
+    state.draft.value.git.commitPrompt = '按 Conventional Commits 生成中文说明'
     state.draft.value.summary.outputDirectory = '总结/周报'
     state.draft.value.git.repositories.push({ id: 'repo', name: '日报', path: '/tmp/project', author: '', branch: '' })
     state.draft.value.excel = {
@@ -87,9 +91,12 @@ describe('manual settings draft', () => {
   it('submits one complete detached snapshot only when save is clicked', async () => {
     const state = createDraft()
     state.draft.value.appearance.scale = 90
+    state.draft.value.appearance.railHoldDelayMs = 800
+    state.draft.value.appearance.railHoldDurationMs = 3500
     state.draft.value.ai.summaryPrompt = '用简短段落总结'
     state.draft.value.summary.outputDirectory = '输出/总结'
     state.draft.value.excel.prompt = '整理工作记录'
+    state.draft.value.git.commitPrompt = '只输出一行提交说明'
     state.draft.value.database.enabled = true
     state.draft.value.database.sqlitePath = 'backup/reports.sqlite'
     state.draft.value.git.repositories.push({
@@ -179,7 +186,7 @@ describe('manual settings draft', () => {
     expect(state.unchanged.value).toBe(false)
     expect(state.persist).not.toHaveBeenCalled()
     state.reset()
-    expect(state.draft.value).toEqual(state.source.value)
+    expect(state.draft.value).toEqual(cloneWorkspaceSettings(state.source.value))
     expect(state.draft.value.summary.outputDirectory).toBe('后台目录')
   })
 

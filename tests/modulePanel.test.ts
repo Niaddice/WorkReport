@@ -138,7 +138,7 @@ describe('module panel', () => {
     wrapper.unmount()
   })
 
-  it('hides the remove action when only one module remains', () => {
+  it('honors an explicit request to hide the remove action', () => {
     const last = mountPanel({ id: 'calendar', title: '日历', canRemove: false })
     expect(last.find('.module-panel-remove').exists()).toBe(false)
     last.unmount()
@@ -208,7 +208,7 @@ describe('module panel', () => {
     expect(maximized.classes()).toContain('is-maximized')
     expect(maximized.attributes('role')).toBe('dialog')
     expect(maximized.attributes('aria-modal')).toBe('true')
-    expect(maximized.find('.module-panel-remove').exists()).toBe(false)
+    expect(maximized.find('.module-panel-remove').exists()).toBe(true)
     expect(maximized.find('.module-drag-handle').exists()).toBe(false)
     expect(maximized.find('.module-maximize-button').attributes('aria-label')).toContain('还原')
     await maximized.find('.module-maximize-button').trigger('click')

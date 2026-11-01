@@ -54,6 +54,23 @@ describe('summary output settings', () => {
     expect(invoke).toHaveBeenCalledExactlyOnceWith('load_summary_settings')
   })
 
+  it('accepts the shared rule and ignores an export result after that rule changes', async () => {
+    const write = deferred<SummaryExportResult>()
+    vi.mocked(invoke).mockImplementation((command) =>
+      command === 'export_summary' ? write.promise : Promise.resolve(configured),
+    )
+    const output = useSummaryOutput()
+    const exporting = output.exportSummary('/workspace', ['20261022'], '完整总结', 'md')
+    await tick()
+    output.acceptFileSettings({ directory: '项目总结', filenameTemplate: '成果_{date}' })
+    expect(output.settings.value.outputDirectory).toBe('项目总结')
+    expect(output.exporting.value).toBe(true)
+    write.resolve(exported)
+    expect(await exporting).toBe(false)
+    expect(output.result.value).toBeNull()
+    expect(output.exporting.value).toBe(false)
+  })
+
   it('reads settings, exports sorted unique dates and leaves Markdown intact', async () => {
     vi.mocked(invoke).mockResolvedValueOnce(configured).mockResolvedValueOnce(exported)
     const output = useSummaryOutput()

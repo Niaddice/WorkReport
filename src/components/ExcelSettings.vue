@@ -5,8 +5,18 @@ import { open } from '@tauri-apps/plugin-dialog'
 import { PhFileXls, PhSparkle } from '@phosphor-icons/vue'
 import { cloneExcelSettings, RECOMMENDED_EXCEL_PROMPT, type ExcelSettings } from '../lib/useExcel'
 
-const props = defineProps<{ modelValue: ExcelSettings; busy: boolean; aiReady: boolean; workspacePath: string }>()
-const emit = defineEmits<{ 'update:modelValue': [settings: ExcelSettings]; configureAi: [] }>()
+const props = defineProps<{
+  modelValue: ExcelSettings
+  busy: boolean
+  aiReady: boolean
+  workspacePath: string
+  outputDirectory?: string
+}>()
+const emit = defineEmits<{
+  'update:modelValue': [settings: ExcelSettings]
+  configureAi: []
+  configureDirectories: []
+}>()
 const draft = computed(() => props.modelValue)
 const picking = ref(false)
 const localError = ref('')
@@ -127,6 +137,16 @@ defineExpose({ validate })
         前往模型配置
       </button>
     </p>
+    <p class="field-hint">
+      报告保存到当前工作空间下的 {{ outputDirectory || 'excel' }} 目录。<button
+        type="button"
+        class="text-action"
+        :disabled="formBusy"
+        @click="emit('configureDirectories')"
+      >
+        设置目录和文件名
+      </button>
+    </p>
     <Transition name="settings-reveal">
       <div v-if="draft.enabled" class="settings-reveal-shell">
         <div class="settings-reveal-inner">
@@ -185,7 +205,6 @@ defineExpose({ validate })
               ></textarea
               ><span class="preference-count">{{ draft.prompt.length }} / 6000</span>
             </div>
-            <p class="field-hint">报告固定保存到当前工作空间下的 excel 目录，目录不存在时自动创建。</p>
             <p class="field-hint excel-range-note">支持单日或任意日期范围，可跨周、跨月或跨年。</p>
           </div>
         </div>
