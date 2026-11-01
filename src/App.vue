@@ -14,25 +14,37 @@ import SettingsDialog from './components/SettingsDialog.vue'
 import WorkspaceGate from './components/WorkspaceGate.vue'
 import ConfirmDialog from './components/ConfirmDialog.vue'
 import SettingsLeaveDialog from './components/SettingsLeaveDialog.vue'
+import FileChangesDialog from './components/FileChangesDialog.vue'
 import WorkspaceSwitchDialog from './components/WorkspaceSwitchDialog.vue'
 import MessageHost from './components/MessageHost.vue'
-import { api, type Document, type FileFormat, type GitAppendResult, type GitReportEntry } from './lib/workspace'
+import ButtonTooltip from './components/ButtonTooltip.vue'
+import { api, type Document, type FileFormat } from './lib/workspace'
 import { historyShortcut } from './lib/shortcuts'
 import { installContextMenuGuard } from './lib/contextMenus'
 import TextContextMenu from './components/TextContextMenu.vue'
 import { useJournal } from './lib/useJournal'
+import { useWorkspaceDocument } from './lib/useWorkspaceDocument'
 import { aiSummarySource, plainTextSummary } from './lib/summary'
 import { useAi } from './lib/ai'
 import ModuleBoard from './components/ModuleBoard.vue'
 import LayoutDialog from './components/LayoutDialog.vue'
 import type { DropSide, LayoutMetrics, ModuleId } from './modules/types'
+import { moduleType } from './modules/types'
 import { MODULE_CONTEXT, type CalendarHandle, type EditorHandle, type ModuleActions } from './modules/context'
 import { useModuleLayout } from './modules/useModuleLayout'
 import type { SkinId } from './lib/skins'
 import { useAppearance } from './lib/useAppearance'
 import { validExcelDates, useExcel } from './lib/useExcel'
 import { useSummaryOutput } from './lib/useSummaryOutput'
+import { workspaceFilesApi, type FileRequest, type FileChangeResult } from './lib/workspaceFiles'
 import { settingsApi, type WorkspaceSettings } from './lib/settingsDraft'
+import {
+  cloneFileSettings,
+  fileSettingsApi,
+  FileChangesCancelled,
+  type FileSettings,
+  type FileChangesDecision,
+} from './lib/fileSettings'
 import {
   databaseApi,
   cloneDatabaseSettings,
@@ -44,15 +56,15 @@ import { useHolidays } from './lib/holidays'
 import { useHolidayReminder } from './lib/useHolidayReminder'
 import { clearMessages, dismissMessage, pushMessage } from './lib/messages'
 import { useJournalPreview } from './lib/useJournalPreview'
-import JournalPreviewWindow from './components/JournalPreviewWindow.vue'
-import JournalPreviewContent from './components/JournalPreviewContent.vue'
 import { useGit } from './lib/useGit'
 import { useUpdater } from './lib/useUpdater'
 import UpdateDialog from './components/UpdateDialog.vue'
 
 const nativeApp = isTauri()
 const updater = useUpdater({ beforeInstall: prepareForUpdate })
-const journal = useJournal()
+const workspaceDocument = useWorkspaceDocument((): string | undefined => journal.workspace.value?.path)
+const journal: ReturnType<typeof useJournal> = useJournal({ beforeFlush: workspaceDocument.flush })
+let fileOpenRevision = 0
 const {
   workspace,
   entries,
@@ -77,7 +89,14 @@ const holidayReady = ref(false)
 const { settings: summaryOutputSettings } = summaryOutput
 const summaryWorkspacePath = ref('')
 const { settings: excelSettings, preparing: excelPreparing, exporting: excelExporting } = excel
-const { scale: appearanceScale, rail: appearanceRail, loading: appearanceLoading, error: appearanceError } = appearance
+const {
+  scale: appearanceScale,
+  rail: appearanceRail,
+  railHoldDelayMs,
+  railHoldDurationMs,
+  loading: appearanceLoading,
+  error: appearanceError,
+} = appearance
 watch(
   appearanceScale,
   (scale) => {
@@ -88,6 +107,9 @@ watch(
 // Settings live inside the workspace, so a newly opened workspace brings its own values.
 watch(workspace, (value, previous) => {
   if (!value || value.path === previous?.path) return
+  workspaceDocument.clear()
+  fileOpenRevision++
+  fileSettings.value = cloneFileSettings()
   void loadWorkspaceSettings(true)
 })
 const { settings: aiSettings, error: aiSettingsError, defaultProvider, summaryVisible, summaryResult, summaryMode } = ai
@@ -109,6 +131,15 @@ const settingsCloseTarget = ref<'settings' | 'close'>('settings')
 function settingsButtonRect() {
   return appRail.value?.getSettingsRect() ?? null
 }
+const fileSettings = ref<FileSettings>(cloneFileSettings())
+const settingsFilesError = ref('')
+const fileChangesDialog = ref<InstanceType<typeof FileChangesDialog>>()
+function acceptFileSettings(value: FileSettings) {
+  fileSettings.value = cloneFileSettings(value)
+  journal.setFileSettings(fileSettings.value)
+  excel.acceptFileSettings(fileSettings.value.excel)
+  summaryOutput.acceptFileSettings(fileSettings.value.summary)
+}
 const databaseSettings = ref(cloneDatabaseSettings(DEFAULT_DATABASE_SETTINGS))
 const databaseLoading = ref(false)
 const settingsDatabaseError = ref('')
@@ -125,12 +156,18 @@ watch(
 )
 
 const workspaceSettings = computed<WorkspaceSettings>(() => ({
-  appearance: { scale: appearanceScale.value, rail: appearanceRail.value },
+  appearance: {
+    scale: appearanceScale.value,
+    rail: appearanceRail.value,
+    railHoldDelayMs: railHoldDelayMs.value,
+    railHoldDurationMs: railHoldDurationMs.value,
+  },
   ai: aiSettings.value,
   excel: excelSettings.value,
   summary: summaryOutputSettings.value,
   database: databaseSettings.value,
   git: git.settings.value,
+  files: fileSettings.value,
 }))
 const settingsReading = ref(false)
 const settingsSaving = ref(false)
@@ -166,7 +203,6 @@ const settingsLeaveError = ref('')
 const confirmDialog = ref<InstanceType<typeof ConfirmDialog>>()
 const modalKind = ref<'reload' | 'format' | 'restore'>('format')
 const targetFormat = ref<FileFormat>('md')
-const editorPreview = ref(false)
 const layoutError = ref('')
 const moduleLayout = useModuleLayout({
   onError: (message) => {
@@ -204,17 +240,15 @@ function closeLayoutDialog() {
 function removeModule(id: ModuleId) {
   moduleLayout.remove(id)
 }
-function editorPreviewAnchor() {
-  return moduleBoard.value?.getModuleRect('editor') ?? null
-}
 async function activateModule(id: ModuleId) {
   if (page.value !== 'home') {
     await navigate('home')
     if ((page.value as string) !== 'home') return
   }
-  if (!layoutItems.value.some((item) => item.id === id)) moduleLayout.add(id)
+  const existing = layoutItems.value.find((item) => moduleType(item.id) === moduleType(id))
+  if (!existing) moduleLayout.add(id)
   await nextTick()
-  moduleBoard.value?.reveal(id)
+  moduleBoard.value?.reveal(existing?.id ?? id)
 }
 async function openLayoutFromRail() {
   if (page.value !== 'home') {
@@ -256,7 +290,7 @@ function closeSkinDialog() {
 /** 目录模块里点单篇表示聚焦这一天：先解除框选，避免总结 / Excel 仍按旧范围统计。 */
 async function selectReport(date: string) {
   if (journal.appendingGit.value) return
-  if (date === selectedDate.value) return
+  if (date === selectedDate.value && !workspaceDocument.path.value && !rangeDates.value.length) return
   if (rangeDates.value.length) {
     calendarHandle.value?.clearRange()
     clearRange()
@@ -311,7 +345,6 @@ const canRestore = computed(() => backups.value[documentKey.value] !== undefined
 let unlistenClose: (() => void) | undefined
 let unlistenHistory: (() => void) | undefined
 let removeContextMenuGuard: (() => void) | undefined
-let historyMenuAvailable = false
 let clockTimer: ReturnType<typeof setInterval> | undefined
 let updateTimer: ReturnType<typeof setTimeout> | undefined
 let appDisposed = false
@@ -429,10 +462,12 @@ async function loadWorkspaceSettings(reload: boolean): Promise<boolean> {
     reload ? summaryOutput.reload() : summaryOutput.load(),
     loadDatabaseSettings(),
     git.load(),
+    loadFileSettings(revision),
   ])
   if (revision !== settingsLoadRevision) return false
   settingsReading.value = false
   settingsReady.value = results.every(Boolean)
+  if (results[6]) acceptFileSettings(fileSettings.value)
   if (!settingsReady.value)
     settingsError.value =
       [
@@ -441,11 +476,26 @@ async function loadWorkspaceSettings(reload: boolean): Promise<boolean> {
         excel.error.value,
         summaryOutput.error.value,
         settingsDatabaseError.value,
+        settingsFilesError.value,
         git.error.value,
       ]
         .filter(Boolean)
         .join('；') || '读取设置失败，请重新进入设置后重试。'
   return settingsReady.value
+}
+async function loadFileSettings(revision: number): Promise<boolean> {
+  const path = workspace.value?.path
+  settingsFilesError.value = ''
+  try {
+    const stored = nativeApp ? await fileSettingsApi.load() : cloneFileSettings()
+    if (workspace.value?.path !== path || revision !== settingsLoadRevision) return false
+    fileSettings.value = cloneFileSettings(stored)
+    return true
+  } catch (cause) {
+    if (workspace.value?.path === path && revision === settingsLoadRevision)
+      settingsFilesError.value = `读取目录设置失败：${String(cause)}`
+    return false
+  }
 }
 async function loadDatabaseSettings(): Promise<boolean> {
   const path = workspace.value?.path
@@ -492,21 +542,41 @@ async function saveWorkspaceSettings(value: WorkspaceSettings): Promise<boolean>
       return false
     }
     const storageChanged = JSON.stringify(value.database) !== JSON.stringify(databaseSettings.value)
-    const stored = await settingsApi.save(path, value)
+    const proposed = cloneFileSettings(value.files, value.summary.outputDirectory)
+    const filesChanged = JSON.stringify(proposed) !== JSON.stringify(fileSettings.value)
+    let fileChanges: FileChangesDecision | undefined
+    if (filesChanged) {
+      const plan = await fileSettingsApi.preview(path, proposed)
+      if (workspace.value?.path !== path) return false
+      let renameExisting = { journal: false, excel: false, summary: false }
+      if (
+        plan.directories.some((change) => change.fileCount > 0 || (change.targetFileCount ?? 0) > 0) ||
+        plan.filenames.length
+      ) {
+        const decision = await fileChangesDialog.value?.confirm(plan)
+        if (!decision) throw new FileChangesCancelled()
+        renameExisting = decision
+      }
+      fileChanges = { token: plan.token, renameExisting }
+    }
+    const stored = await settingsApi.save(path, { ...value, files: proposed }, fileChanges)
     if (workspace.value?.path !== path) return false
     ai.acceptSaved(stored.ai)
     appearance.acceptSaved(stored.appearance)
     excel.acceptSaved(stored.excel)
     summaryOutput.acceptSaved(stored.summary)
+    acceptFileSettings(cloneFileSettings(stored.files, stored.summary.outputDirectory))
     git.acceptSaved(stored.git)
     databaseSettings.value = cloneDatabaseSettings(stored.database)
-    if (storageChanged) {
+    if (filesChanged) workspaceDocument.clear()
+    if (storageChanged || filesChanged) {
       clearRange()
       calendarHandle.value?.clearRange()
       await journal.reload()
     }
     return true
   } catch (cause) {
+    if (cause instanceof FileChangesCancelled) throw cause
     settingsError.value = `保存设置失败：${String(cause)}`
     return false
   } finally {
@@ -635,9 +705,36 @@ function showConfirmation() {
   confirmDialog.value?.open()
 }
 async function selectDate(date: string) {
-  if (excelBusy.value) return
-  // 日期导航只更新日报，保留用户当前操作模块的焦点和激活状态。
+  if (excelBusy.value || busy.value) return
+  const intent = ++fileOpenRevision
+  if (!(await workspaceDocument.flush()) || intent !== fileOpenRevision) return
+  workspaceDocument.clear()
   await journal.select(date)
+}
+async function openWorkspaceFile(path: string) {
+  if (busy.value || excelBusy.value || page.value !== 'home') return
+  const currentWorkspace = workspace.value?.path
+  const intent = ++fileOpenRevision
+  if (!(await journal.flush()) || intent !== fileOpenRevision || workspace.value?.path !== currentWorkspace) return
+  clearRange()
+  calendarHandle.value?.clearRange()
+  const editorModule = layoutItems.value.find((item) => moduleType(item.id) === 'editor')
+  if (!editorModule) moduleLayout.add('editor')
+  await nextTick()
+  if (intent !== fileOpenRevision) return
+  moduleBoard.value?.reveal(editorModule?.id ?? 'editor', { focus: false })
+  const value = await workspaceDocument.open(path)
+  if (intent !== fileOpenRevision) return
+  if (value?.journalDate) {
+    workspaceDocument.clear()
+    await selectReport(value.journalDate)
+  }
+}
+async function showJournal() {
+  if (busy.value || !(await journal.flush())) return
+  fileOpenRevision++
+  workspaceDocument.clear()
+  await journal.reload(true)
 }
 async function requestFormat(format: FileFormat) {
   if (isNewDraft.value) {
@@ -671,7 +768,8 @@ async function confirmModal() {
     }
     void confirmDialog.value?.close()
   } else {
-    await journal.reload()
+    if (workspaceDocument.path.value) await workspaceDocument.discardAndReload()
+    else await journal.reload()
     void confirmDialog.value?.close()
   }
 }
@@ -693,14 +791,15 @@ async function loadRange(dates: string[], duringGitAppend = false) {
     return
   }
   const revision = ++rangeRevision
+  fileOpenRevision++
+  if (!(await journal.flush()) || revision !== rangeRevision) return
+  workspaceDocument.clear()
   excel.clearSelection()
   rangeDates.value = [...dates].sort()
   rangeDocuments.value = []
   rangeError.value = ''
   rangeLoading.value = true
   try {
-    if (!(await journal.flush()) && revision === rangeRevision)
-      rangeError.value = '当前草稿保存失败，合并视图可能不是最新内容。'
     if (revision !== rangeRevision) return
     const selected = entries.value
       .filter((entry) => dates.includes(entry.date))
@@ -719,6 +818,7 @@ async function refreshHome() {
   if (excelBusy.value) return
   refreshRevision.value++
   if (rangeDates.value.length) await loadRange([...rangeDates.value])
+  else if (workspaceDocument.path.value) await workspaceDocument.reload()
   else await journal.refresh()
 }
 function performHistory(action: 'undo' | 'redo') {
@@ -736,13 +836,18 @@ function performHistory(action: 'undo' | 'redo') {
     document.querySelector('dialog[open]:not(.is-inline)')
   )
     return
-  if (action === 'undo') journal.undo()
+  if (workspaceDocument.path.value) {
+    if (workspaceDocument.document.value?.kind === 'text') {
+      if (action === 'undo') workspaceDocument.undo()
+      else workspaceDocument.redo()
+    }
+  } else if (action === 'undo') journal.undo()
   else journal.redo()
 }
 function onHistoryKeydown(event: KeyboardEvent) {
-  // On macOS the native Edit menu owns the key equivalents and forwards them
-  // through the `history-action` event instead of dispatching keydown here.
-  if (isMac && nativeApp && historyMenuAvailable) return
+  // WebKit can deliver shortcuts directly even when the native Edit menu is
+  // installed. Handle those DOM events as well as the native menu events.
+  if (event.isComposing || event.keyCode === 229 || event.defaultPrevented) return
   if (
     page.value !== 'home' ||
     busy.value ||
@@ -911,71 +1016,63 @@ async function appendGitReport(workspacePath: string, date: string, content: str
     return false
   const existing = journal.draft.value
   if (existing.includes(content.trim())) {
-    pushMessage({ tone: 'info', text: '当前日报已包含这份 Git 日报。' })
+    pushMessage({ tone: 'info', text: '当前日报已包含这份 Git 工作记录。' })
     return false
   }
   const separator = !existing ? '' : existing.endsWith('\n\n') ? '' : existing.endsWith('\n') ? '\n' : '\n\n'
   journal.edit(`${existing}${separator}${content.trim()}`, true)
-  editorPreview.value = false
   const saved = await journal.flush()
   if (saved) pushMessage({ tone: 'success', text: 'Git 工作记录已追加到日报并保存' })
   return saved
 }
-async function appendGitReports(workspacePath: string, reports: GitReportEntry[]): Promise<GitAppendResult | null> {
+const moduleDisabled = computed(() => page.value !== 'home' || busy.value || requestingAi.value)
+async function changeWorkspaceFiles(path: string, request: FileRequest, token?: string): Promise<FileChangeResult> {
   if (
-    !reports.length ||
     busy.value ||
-    saving.value ||
-    settingsLoading.value ||
     settingsSaving.value ||
-    page.value !== 'home' ||
-    workspace.value?.path !== workspacePath
+    settingsReading.value ||
+    databaseBusy.value ||
+    excelBusy.value ||
+    summaryOutput.exporting.value ||
+    requestingAi.value ||
+    ai.summaryGenerating.value
   )
-    return null
-  const selectedDates = [...new Set(rangeDates.value.length ? rangeDates.value : [selectedDate.value])].sort()
-  const permittedDates = new Set(selectedDates)
-  if (new Set(reports.map((report) => report.date)).size !== reports.length) return null
-  if (reports.some((report) => !permittedDates.has(report.date) || !report.content.trim())) return null
-  const sourceDate = selectedDate.value
-  const selectionKey = JSON.stringify(selectedDates)
-  const current = () =>
-    workspace.value?.path === workspacePath &&
-    page.value === 'home' &&
-    selectedDate.value === sourceDate &&
-    JSON.stringify([...new Set(rangeDates.value.length ? rangeDates.value : [selectedDate.value])].sort()) ===
-      selectionKey
-  const result = await journal.appendGitReports(workspacePath, reports, {
-    isCurrent: current,
-    afterSave: async () => {
-      if (!current()) return
-      refreshRevision.value++
-      if (rangeDates.value.length) {
-        await loadRange([...selectedDates], true)
-        if (rangeError.value) throw new Error(rangeError.value)
-      }
-    },
-  })
-  if (!result || !current()) return null
-  const saved = result.documents.length
-  const skipped = result.skippedDates.length
-  const failed = result.failed.length
-  if (failed) {
-    pushMessage({
-      tone: 'warning',
-      text: `Git 工作记录已追加 ${saved} 天，跳过 ${skipped} 天，${failed} 天保存失败，可检查对应日期后重试。`,
-    })
-  } else if (saved) {
-    pushMessage({
-      tone: journal.error.value ? 'warning' : 'success',
-      text: `Git 工作记录已分别追加到 ${saved} 天的日报并保存${skipped ? `，跳过 ${skipped} 天已有内容` : ''}。`,
-    })
-  } else {
-    pushMessage({ tone: 'info', text: '所选日报已包含这些 Git 工作记录，已跳过重复追加。' })
+    throw new Error('当前任务尚未完成，请稍后再操作文件。')
+  if (workspace.value?.path !== path) throw new Error('工作空间已切换，请重新打开操作窗口。')
+  busy.value = true
+  let result: FileChangeResult
+  try {
+    if (!(await journal.flush())) throw new Error(error.value || '请先保存当前日报。')
+    if (workspace.value?.path !== path) throw new Error('工作空间已切换。')
+    const approved = token ?? (await workspaceFilesApi.preview(path, request)).token
+    result = await workspaceFilesApi.apply(path, request, approved)
+    if (workspace.value?.path !== path) throw new Error('文件已处理，但工作空间已切换，请刷新目录。')
+    acceptFileSettings(result.files)
+    if (request.action === 'rename') workspaceDocument.remap(request.path, result.path)
+    if (request.action === 'delete') workspaceDocument.remap(request.path, null)
+    excel.clearExport()
+    summaryOutput.clearExport()
+  } finally {
+    busy.value = false
   }
+  await journal.reload(true)
+  if (workspaceDocument.path.value) {
+    const value = await workspaceDocument.reload()
+    if (value?.journalDate) {
+      workspaceDocument.clear()
+      await selectReport(value.journalDate)
+    }
+  }
+  if (rangeDates.value.length) await loadRange([...rangeDates.value], true)
+  if (layoutItems.value.some((item) => moduleType(item.id) === 'excel')) await excel.loadExports(path)
+  refreshRevision.value++
   return result
 }
-const moduleDisabled = computed(() => page.value !== 'home' || busy.value || requestingAi.value)
+
 const moduleActions: ModuleActions = {
+  openWorkspaceFile,
+  showJournal,
+  changeWorkspaceFiles,
   selectDate,
   selectReport,
   loadRange,
@@ -1005,17 +1102,18 @@ const moduleActions: ModuleActions = {
     void openGitSettings()
   },
   appendGitReport,
-  appendGitReports,
   syncHolidays: (year: number) => {
     void syncHolidays(year)
   },
 }
 provide(MODULE_CONTEXT, {
   journal,
+  workspaceDocument,
   ai,
   holidays,
   excel,
   summaryOutput,
+  fileSettings,
   git,
   summarySelectionDates,
   excelBlockedReason,
@@ -1028,7 +1126,6 @@ provide(MODULE_CONTEXT, {
   rangeDocuments,
   rangeLoading,
   rangeError,
-  editorPreview,
   journalPreview,
   calendar: calendarHandle,
   editor: editorHandle,
@@ -1047,6 +1144,17 @@ watch(error, (value) => {
     text: value,
     duration: dirty.value ? 0 : undefined,
     actions: dirty.value ? [{ label: '重试保存', run: () => void journal.flush() }] : undefined,
+  })
+})
+watch(workspaceDocument.error, (value) => {
+  if (!value) return
+  pushMessage({
+    tone: 'error',
+    text: value,
+    duration: workspaceDocument.dirty.value ? 0 : undefined,
+    actions: workspaceDocument.dirty.value
+      ? [{ label: '重试保存文件', run: () => void workspaceDocument.flush() }]
+      : undefined,
   })
 })
 watch(backupWarning, (value) => {
@@ -1136,6 +1244,8 @@ function beforeUnload(event: BeforeUnloadEvent) {
     updater.busy.value ||
     dirty.value ||
     saving.value ||
+    workspaceDocument.dirty.value ||
+    workspaceDocument.saving.value ||
     settingsSaving.value ||
     databaseBusy.value ||
     summaryOutput.exporting.value ||
@@ -1158,8 +1268,16 @@ function onFocus() {
     !excelBusy.value &&
     !rangeDates.value.length &&
     !databaseBusy.value
-  )
-    void journal.refresh()
+  ) {
+    if (workspaceDocument.path.value) {
+      if (
+        !workspaceDocument.dirty.value &&
+        !workspaceDocument.saving.value &&
+        workspaceDocument.document.value?.kind === 'text'
+      )
+        void workspaceDocument.reload()
+    } else void journal.refresh()
+  }
 }
 onMounted(async () => {
   removeContextMenuGuard = installContextMenuGuard()
@@ -1181,6 +1299,10 @@ onMounted(async () => {
     try {
       unlistenClose = await getCurrentWindow().onCloseRequested(async (event) => {
         event.preventDefault()
+        if (fileChangesDialog.value?.isOpen()) {
+          await fileChangesDialog.value.close()
+          return
+        }
         if (pendingWorkspaceSwitch.value) {
           cancelWorkspaceSwitch()
           return
@@ -1203,7 +1325,6 @@ onMounted(async () => {
       unlistenHistory = await listen<string>('history-action', (event) => {
         if (event.payload === 'undo' || event.payload === 'redo') performHistory(event.payload)
       })
-      historyMenuAvailable = true
     } catch (cause) {
       journal.reportError(cause)
     }
@@ -1225,6 +1346,7 @@ onBeforeUnmount(() => {
   ai.closeSummary()
   void excel.cancel()
   journal.dispose()
+  workspaceDocument.dispose()
   clearMessages()
 })
 </script>
@@ -1322,6 +1444,7 @@ onBeforeUnmount(() => {
           />
         </div>
       </SettingsDialog>
+      <FileChangesDialog ref="fileChangesDialog" />
       <SettingsLeaveDialog
         ref="settingsLeaveDialog"
         :action="pendingSettingsExit"
@@ -1346,10 +1469,10 @@ onBeforeUnmount(() => {
         ref="confirmDialog"
         :kind="modalKind"
         :target-format="targetFormat"
-        :filename="activeDocument?.filename"
+        :filename="workspaceDocument.path.value ? workspaceDocument.document.value?.filename : activeDocument?.filename"
         :date="selectedDate"
-        :storage-mode="storageMode"
-        :error="error"
+        :storage-mode="workspaceDocument.path.value ? 'files' : storageMode"
+        :error="workspaceDocument.path.value ? workspaceDocument.error.value : error"
         :busy="busy"
         @confirm="confirmModal"
         @cancel="cancelConfirm"
@@ -1365,23 +1488,19 @@ onBeforeUnmount(() => {
         @remove="removeSavedLayout"
         @close="closeLayoutDialog"
       />
-      <JournalPreviewWindow
-        :visible="journalPreview.visible.value && page === 'home' && !!workspace"
-        :top-inset="nativeApp && isMac ? 36 : 0"
-        :anchor-rect="editorPreviewAnchor"
-        @close="journalPreview.close"
-      >
-        <JournalPreviewContent />
-      </JournalPreviewWindow>
     </div>
     <AppRail
       v-if="workspace"
+      :key="workspace.path"
       ref="appRail"
       :disabled="busy || excelBusy || picking"
       :active="layoutItems.map((item) => item.id)"
+      :hold-delay-ms="railHoldDelayMs"
+      :hold-duration-ms="railHoldDurationMs"
       :settings-active="page === 'settings'"
       :settings-busy="settingsLoading || settingsSaving || settingsLeaveBusy || databaseBusy"
       @module="activateModule"
+      @remove="removeModule"
       @refresh="refreshHome"
       @layout="openLayoutFromRail"
       @settings="toggleSettings"
@@ -1390,5 +1509,6 @@ onBeforeUnmount(() => {
     <UpdateDialog :updater="updater" />
     <MessageHost />
     <TextContextMenu :scope="`${documentKey}/${page}`" />
+    <ButtonTooltip />
   </div>
 </template>

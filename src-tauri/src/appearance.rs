@@ -10,15 +10,24 @@ fn default_rail() -> String {
     "right".into()
 }
 
+fn default_rail_hold_ms() -> u32 {
+    2000
+}
+
 pub const RAIL_SIDES: [&str; 2] = ["left", "right"];
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 pub struct Settings {
     #[serde(default = "default_scale")]
     pub scale: u16,
     /// 功能栏位置：left 或 right；缺省视为 right，兼容旧 appearance.json。
     #[serde(default = "default_rail")]
     pub rail: String,
+    #[serde(default = "default_rail_hold_ms")]
+    pub rail_hold_delay_ms: u32,
+    #[serde(default = "default_rail_hold_ms")]
+    pub rail_hold_duration_ms: u32,
 }
 
 impl Default for Settings {
@@ -26,6 +35,8 @@ impl Default for Settings {
         Self {
             scale: default_scale(),
             rail: default_rail(),
+            rail_hold_delay_ms: default_rail_hold_ms(),
+            rail_hold_duration_ms: default_rail_hold_ms(),
         }
     }
 }
@@ -36,6 +47,11 @@ pub fn validate(settings: &Settings) -> Result<(), String> {
     }
     if !RAIL_SIDES.contains(&settings.rail.as_str()) {
         return Err("功能栏位置仅支持左侧或右侧".into());
+    }
+    for duration in [settings.rail_hold_delay_ms, settings.rail_hold_duration_ms] {
+        if !(500..=10_000).contains(&duration) || duration % 100 != 0 {
+            return Err("长按关闭的两个时长须在 0.5–10 秒之间，步长为 0.1 秒".into());
+        }
     }
     Ok(())
 }
@@ -98,6 +114,41 @@ mod tests {
         let settings = load(root.path()).unwrap();
         assert_eq!(settings.scale, 110);
         assert_eq!(settings.rail, "right");
+        assert_eq!(settings.rail_hold_delay_ms, 2000);
+        assert_eq!(settings.rail_hold_duration_ms, 2000);
+    }
+
+    #[test]
+    fn hold_durations_round_trip_independently_in_camel_case() {
+        let root = tempfile::tempdir().unwrap();
+        let settings = Settings {
+            rail_hold_delay_ms: 500,
+            rail_hold_duration_ms: 10_000,
+            ..Default::default()
+        };
+        save(root.path(), &settings).unwrap();
+        assert_eq!(load(root.path()).unwrap(), settings);
+        let json: serde_json::Value = serde_json::from_slice(
+            &fs::read(root.path().join("appearance.json")).unwrap(),
+        ).unwrap();
+        assert_eq!(json["railHoldDelayMs"], 500);
+        assert_eq!(json["railHoldDurationMs"], 10_000);
+    }
+
+    #[test]
+    fn invalid_hold_durations_do_not_overwrite_settings() {
+        let root = tempfile::tempdir().unwrap();
+        save(root.path(), &Settings::default()).unwrap();
+        let original = fs::read(root.path().join("appearance.json")).unwrap();
+        for duration in [0, 499, 501, 2050, 10_100, u32::MAX] {
+            for settings in [
+                Settings { rail_hold_delay_ms: duration, ..Default::default() },
+                Settings { rail_hold_duration_ms: duration, ..Default::default() },
+            ] {
+                assert!(save(root.path(), &settings).unwrap_err().contains("长按关闭"));
+                assert_eq!(fs::read(root.path().join("appearance.json")).unwrap(), original);
+            }
+        }
     }
 
     #[test]

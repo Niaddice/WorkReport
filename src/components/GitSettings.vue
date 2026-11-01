@@ -107,7 +107,7 @@ defineExpose({ validate, focusInvalid })
       </button>
     </div>
     <p v-if="!modelValue.repositories.length" class="git-hint">
-      添加项目仓库后，即可在 Git 模块中整理工作记录，或打开 Git 工作台管理变更、分支与远程同步。
+      添加项目仓库后，即可在 Git 工作台中切换项目、管理更改与分支，并多选提交获取信息或整理工作记录。
     </p>
     <details
       v-for="(repository, index) in modelValue.repositories"
@@ -160,39 +160,8 @@ defineExpose({ validate, focusInvalid })
             >
               <PhFolderOpen :size="18" /></button></span
         ></label>
-        <div class="git-fields-row">
-          <label class="git-field"
-            ><span>日报作者筛选</span
-            ><input
-              :value="repository.author"
-              :disabled="formBusy"
-              placeholder="姓名或邮箱；留空为全部作者"
-              @input="updateRepository(repository.id, { author: ($event.target as HTMLInputElement).value })"
-          /></label>
-          <label class="git-field"
-            ><span>日报分支筛选</span
-            ><input
-              :value="repository.branch"
-              :disabled="formBusy"
-              placeholder="留空为当前分支 HEAD"
-              @input="updateRepository(repository.id, { branch: ($event.target as HTMLInputElement).value })"
-          /></label>
-        </div>
       </div>
     </details>
-    <label class="git-checkbox">
-      <input
-        type="checkbox"
-        :checked="modelValue.includeMerges"
-        :disabled="formBusy"
-        @change="update({ includeMerges: ($event.target as HTMLInputElement).checked })"
-      />
-      包含合并提交
-    </label>
-    <p class="git-hint">
-      日报按本机时区和提交时间筛选日期，作者按姓名或邮箱包含匹配，不区分大小写。以上筛选仅用于日报；Git
-      工作台操作仓库当前检出的分支。
-    </p>
     <p class="git-hint">
       保存时会检查仓库实际目录和主要远程地址，相同仓库只能添加一次。支持识别同一远程仓库常见的 SSH / HTTPS 地址写法。
     </p>
@@ -308,7 +277,6 @@ defineExpose({ validate, focusInvalid })
   font-size: var(--text-small);
   line-height: 1.7;
 }
-.git-checkbox,
 .git-prompt-heading,
 .git-repositories-heading,
 .git-path-input,
@@ -316,9 +284,6 @@ defineExpose({ validate, focusInvalid })
   display: flex;
   align-items: center;
   gap: 8px;
-}
-.git-checkbox {
-  font-size: var(--text-body);
 }
 .git-repositories-heading,
 .git-prompt-heading {
@@ -398,17 +363,7 @@ defineExpose({ validate, focusInvalid })
     transition: none;
   }
 }
-.git-fields-row {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 16px;
-}
 .git-path-input input {
   flex: 1;
-}
-@media (max-width: 1000px) {
-  .git-fields-row {
-    grid-template-columns: minmax(0, 1fr);
-  }
 }
 </style>

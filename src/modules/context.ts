@@ -1,6 +1,6 @@
 import { inject, type ComputedRef, type InjectionKey, type Ref } from 'vue'
 import type { Dayjs } from 'dayjs'
-import type { Document, FileFormat, GitAppendResult, GitReportEntry } from '../lib/workspace'
+import type { Document, FileFormat } from '../lib/workspace'
 import type { useJournal } from '../lib/useJournal'
 import type { useAi } from '../lib/ai'
 import type { useHolidays } from '../lib/holidays'
@@ -8,6 +8,9 @@ import type { useExcel } from '../lib/useExcel'
 import type { useSummaryOutput } from '../lib/useSummaryOutput'
 import type { useJournalPreview } from '../lib/useJournalPreview'
 import type { useGit } from '../lib/useGit'
+import type { FileSettings } from '../lib/fileSettings'
+import type { useWorkspaceDocument } from '../lib/useWorkspaceDocument'
+import type { FileRequest, FileChangeResult } from '../lib/workspaceFiles'
 
 export type JournalStore = ReturnType<typeof useJournal>
 export type AiStore = ReturnType<typeof useAi>
@@ -27,6 +30,9 @@ export interface EditorHandle {
 
 /** 模块可以调用的页面级动作；所有状态写入仍由 composable 统一处理。 */
 export interface ModuleActions {
+  openWorkspaceFile?: (path: string) => Promise<void>
+  showJournal?: () => Promise<void>
+  changeWorkspaceFiles?: (workspacePath: string, request: FileRequest, token?: string) => Promise<FileChangeResult>
   selectDate(date: string): Promise<void>
   /** 目录模块专用：先解除框选再聚焦单日，保证各模块同步到同一篇日报。 */
   selectReport(date: string): Promise<void>
@@ -50,7 +56,6 @@ export interface ModuleActions {
   openHolidaySettings(): void
   openGitSettings(): void
   appendGitReport(workspacePath: string, date: string, content: string): Promise<boolean>
-  appendGitReports(workspacePath: string, reports: GitReportEntry[]): Promise<GitAppendResult | null>
   syncHolidays(year: number): void
 }
 
@@ -59,6 +64,8 @@ export interface ModuleActions {
  * App.vue 的模板绑定，新增模块也不需要修改页面编排层。
  */
 export interface ModuleContext {
+  workspaceDocument?: ReturnType<typeof useWorkspaceDocument>
+  fileSettings?: Ref<FileSettings>
   journal: JournalStore
   ai: AiStore
   holidays: HolidayStore
@@ -77,7 +84,6 @@ export interface ModuleContext {
   rangeDocuments: Ref<Document[]>
   rangeLoading: Ref<boolean>
   rangeError: Ref<string>
-  editorPreview: Ref<boolean>
   journalPreview: ReturnType<typeof useJournalPreview>
   calendar: Ref<CalendarHandle | null>
   editor: Ref<EditorHandle | null>

@@ -23,8 +23,17 @@ import { pushMessage } from '../lib/messages'
 import ModelPicker from './ModelPicker.vue'
 import CliModelPicker from './CliModelPicker.vue'
 import { APPEARANCE_SCALES, DEFAULT_APPEARANCE_SCALE } from '../lib/useAppearance'
+import {
+  DEFAULT_RAIL_HOLD_MS,
+  MIN_RAIL_HOLD_MS,
+  MAX_RAIL_HOLD_MS,
+  RAIL_HOLD_STEP_MS,
+  normalizeRailHoldMs,
+} from '../lib/railHoldSettings'
 import ExcelSettings from './ExcelSettings.vue'
 import SummaryOutputSettings from './SummaryOutputSettings.vue'
+import DirectorySettings from './DirectorySettings.vue'
+import { cloneFileSettings } from '../lib/fileSettings'
 import DatabaseSettings from './DatabaseSettings.vue'
 import AppSelect from './AppSelect.vue'
 import {
@@ -76,9 +85,29 @@ const {
   (settings) => props.save(settings),
 )
 const busy = computed(() => props.loading || props.saving || props.databaseBusy || draftSaving.value)
+const railHoldOptions = [
+  { key: 'railHoldDelayMs', label: '长按等待时间', description: '按住已打开模块的功能按钮，等待此时长后显示进度圈。' },
+  {
+    key: 'railHoldDurationMs',
+    label: '进度圈完成时间',
+    description: '进度圈填满后关闭模块；松开鼠标或移出按钮即可取消。',
+  },
+] as const
+function onRailHoldInput(event: Event, key: (typeof railHoldOptions)[number]['key']) {
+  const milliseconds =
+    Math.round((Number((event.target as HTMLInputElement).value) * 1000) / RAIL_HOLD_STEP_MS) * RAIL_HOLD_STEP_MS
+  draft.value.appearance[key] = normalizeRailHoldMs(milliseconds)
+}
 const databaseForm = ref<InstanceType<typeof DatabaseSettings>>()
 const excelForm = ref<InstanceType<typeof ExcelSettings>>()
 const summaryForm = ref<InstanceType<typeof SummaryOutputSettings>>()
+const directoryForm = ref<InstanceType<typeof DirectorySettings>>()
+const filesDraft = computed({
+  get: () => cloneFileSettings(draft.value.files, draft.value.summary.outputDirectory),
+  set: (value) => {
+    draft.value.files = value
+  },
+})
 const gitForm = ref<InstanceType<typeof GitSettings>>()
 const validationError = ref('')
 const historyLimitGb = computed(() => Math.round(draft.value.database.historyLimitBytes / (1024 * 1024 * 1024)))
@@ -152,9 +181,10 @@ async function saveAll(): Promise<boolean> {
     gitForm.value?.focusInvalid()
     return false
   }
-  if (summaryForm.value && !summaryForm.value.validate()) {
-    validationError.value = '请检查总结输出目录。'
-    navigate('summary')
+  if (directoryForm.value && !directoryForm.value.validate()) {
+    validationError.value = '请检查保存目录和文件名规则。'
+    await navigate('directories')
+    directoryForm.value?.focusInvalid()
     return false
   }
   if (excelForm.value && !excelForm.value.validate()) {
@@ -195,16 +225,27 @@ const presetOptions = [
 const pageRoot = ref<HTMLElement>()
 const contentHeading = ref<HTMLElement>()
 type SettingsSection =
-  'workspace' | 'appearance' | 'holidays' | 'ai' | 'prompts' | 'summary' | 'excel' | 'database' | 'git' | 'updates'
+  | 'workspace'
+  | 'directories'
+  | 'appearance'
+  | 'holidays'
+  | 'ai'
+  | 'prompts'
+  | 'summary'
+  | 'excel'
+  | 'database'
+  | 'git'
+  | 'updates'
 const navigation = [
   {
     label: '基础设置',
     items: [
       { id: 'workspace', title: '工作空间', description: '日报与配置的保存位置', icon: PhFolderOpen },
-      { id: 'appearance', title: '外观与字体', description: '调整阅读时的字体大小', icon: PhMonitor },
+      { id: 'directories', title: '目录设置', description: '保存目录与日期文件名规则', icon: PhFolderOpen },
+      { id: 'appearance', title: '外观与字体', description: '字号、功能栏与长按关闭', icon: PhMonitor },
       { id: 'holidays', title: '放假信息', description: '手动同步放假与调休安排', icon: PhCalendarCheck },
       { id: 'database', title: '数据存储', description: '数据库备份、复制与迁移', icon: PhDatabase },
-      { id: 'git', title: 'Git 配置', description: '项目仓库、提交说明与日报筛选', icon: PhGitBranch },
+      { id: 'git', title: 'Git 配置', description: '项目仓库与 AI 提交说明', icon: PhGitBranch },
       { id: 'updates', title: '应用更新', description: '查看版本与检查更新', icon: PhArrowCircleDown },
     ],
   },
@@ -237,6 +278,10 @@ const sectionChanges = computed<Record<SettingsSection, boolean>>(() => {
   const differs = (left: unknown, right: unknown) => JSON.stringify(left) !== JSON.stringify(right)
   return {
     workspace: false,
+    directories: differs(
+      cloneFileSettings(current.files, current.summary.outputDirectory),
+      cloneFileSettings(stored.files, stored.summary.outputDirectory),
+    ),
     holidays: false,
     updates: false,
     database: differs(current.database, stored.database),
@@ -410,6 +455,30 @@ function remove(id: string) {
         <div class="settings-panels">
           <Transition name="settings-panel">
             <section
+              v-show="activeSection === 'directories'"
+              id="settings-panel-directories"
+              tabindex="0"
+              class="settings-section settings-panel"
+              :inert="activeSection !== 'directories'"
+              aria-labelledby="directory-settings-title"
+            >
+              <div class="settings-section-heading">
+                <div>
+                  <h3 id="directory-settings-title">功能文件保存规则</h3>
+                  <p>分别设置日报、Excel 报告和总结的保存目录及文件名称，所有目录都位于当前工作空间内。</p>
+                </div>
+              </div>
+              <DirectorySettings
+                ref="directoryForm"
+                v-model="filesDraft"
+                :busy="busy"
+                :workspace-path="workspace?.path ?? ''"
+                :journal-format="draft.database.defaultFormat"
+              />
+            </section>
+          </Transition>
+          <Transition name="settings-panel">
+            <section
               v-show="activeSection === 'updates'"
               id="settings-panel-updates"
               tabindex="0"
@@ -465,7 +534,7 @@ function remove(id: string) {
               <div class="settings-section-heading">
                 <div>
                   <h3 id="appearance-settings-title">外观与字体</h3>
-                  <p>调整界面字号与功能栏位置，保存后应用到整个 App。</p>
+                  <p>调整界面字号、功能栏位置与长按关闭交互，保存后生效。</p>
                 </div>
               </div>
               <div class="appearance-setting-row">
@@ -539,6 +608,31 @@ function remove(id: string) {
                   >
                     {{ option.label }}
                   </button>
+                </div>
+              </div>
+              <div v-for="option in railHoldOptions" :key="option.key" class="appearance-setting-row">
+                <div class="appearance-setting-copy">
+                  <h4 :id="`${option.key}-label`">{{ option.label }}</h4>
+                  <p :id="`${option.key}-description`">{{ option.description }}</p>
+                  <span class="appearance-scale-range">0.5–10 秒 · 每次 0.1 秒 · 默认 2 秒</span>
+                </div>
+                <div class="history-limit rail-hold-slider">
+                  <input
+                    :id="option.key"
+                    type="range"
+                    :min="MIN_RAIL_HOLD_MS / 1000"
+                    :max="MAX_RAIL_HOLD_MS / 1000"
+                    :step="RAIL_HOLD_STEP_MS / 1000"
+                    :value="(draft.appearance[option.key] ?? DEFAULT_RAIL_HOLD_MS) / 1000"
+                    :aria-labelledby="`${option.key}-label`"
+                    :aria-describedby="`${option.key}-description`"
+                    :aria-valuetext="`${(draft.appearance[option.key] ?? DEFAULT_RAIL_HOLD_MS) / 1000} 秒`"
+                    :disabled="busy"
+                    @input="onRailHoldInput($event, option.key)"
+                  />
+                  <output :for="option.key"
+                    >{{ (draft.appearance[option.key] ?? DEFAULT_RAIL_HOLD_MS) / 1000 }} 秒</output
+                  >
                 </div>
               </div>
               <div
@@ -959,6 +1053,9 @@ function remove(id: string) {
                 v-model="draft.summary"
                 :workspace-path="workspace?.path ?? ''"
                 :busy="busy"
+                :directory="filesDraft.summary.directory"
+                :filename-template="filesDraft.summary.filenameTemplate"
+                @configure-directories="navigate('directories')"
               />
             </section>
           </Transition>
@@ -983,7 +1080,9 @@ function remove(id: string) {
                 :busy="busy"
                 :ai-ready="aiReady"
                 :workspace-path="workspace?.path ?? ''"
+                :output-directory="filesDraft.excel.directory"
                 @configure-ai="navigate('ai')"
+                @configure-directories="navigate('directories')"
               />
             </section>
           </Transition>

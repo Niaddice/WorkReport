@@ -1,4 +1,4 @@
-// Only the app's contextual editing and Git menus are exposed.
+// Only the app's contextual menus are exposed.
 export const CONTEXT_MENUS_ENABLED = true
 
 export interface ContextMenuItem {
@@ -26,6 +26,8 @@ export interface ContextEditor {
   undo: () => unknown
   redo: () => unknown
   replace: (text: string, start: number, end: number) => unknown
+  replaceSelection?: (text: string) => unknown
+  selectedText?: () => string
 }
 
 const editors = new WeakMap<HTMLElement, ContextEditor>()

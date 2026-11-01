@@ -21,6 +21,7 @@ beforeAll(() => {
 
 function mountDirectory(files: FileNode[], selectedDate = '20261027') {
   const selectReport = vi.fn()
+  const openWorkspaceFile = vi.fn()
   const context = {
     journal: {
       workspace: ref({ path: '/tmp/workspace', name: 'workspace' }),
@@ -29,7 +30,7 @@ function mountDirectory(files: FileNode[], selectedDate = '20261027') {
       busy: ref(false),
     },
     disabled: ref(false),
-    actions: { selectReport },
+    actions: { selectReport, openWorkspaceFile },
   }
   invoke.mockImplementation((command: string, args?: { path?: string }) => {
     if (command === 'list_workspace_files') return Promise.resolve(files)
@@ -40,7 +41,7 @@ function mountDirectory(files: FileNode[], selectedDate = '20261027') {
   const wrapper = mount(DirectoryModule, {
     global: { provide: { [MODULE_CONTEXT as symbol]: context as unknown as ModuleContext } },
   })
-  return { wrapper, selectReport }
+  return { wrapper, selectReport, openWorkspaceFile }
 }
 
 const files: FileNode[] = [
@@ -63,9 +64,9 @@ function dirButton(wrapper: Awaited<ReturnType<typeof mountReady>>['wrapper'], n
 }
 
 async function mountReady(files: FileNode[], selectedDate?: string) {
-  const { wrapper, selectReport } = mountDirectory(files, selectedDate)
+  const { wrapper, selectReport, openWorkspaceFile } = mountDirectory(files, selectedDate)
   await flushPromises()
-  return { wrapper, selectReport }
+  return { wrapper, selectReport, openWorkspaceFile }
 }
 
 beforeEach(() => {
@@ -99,26 +100,20 @@ describe('directory module', () => {
     expect((excel.element as HTMLButtonElement).disabled).toBe(false)
     expect(excel.classes()).toContain('is-excel')
 
-    // 非日报、非 Excel 文件不可点击（禁用）。
-    expect((fileButton(wrapper, 'notes.md').element as HTMLButtonElement).disabled).toBe(true)
-    expect((fileButton(wrapper, '周报.md').element as HTMLButtonElement).disabled).toBe(true)
+    // 普通文件也保留右键操作入口，单击不切换日报。
+    expect((fileButton(wrapper, 'notes.md').element as HTMLButtonElement).disabled).toBe(false)
+    expect((fileButton(wrapper, '周报.md').element as HTMLButtonElement).disabled).toBe(false)
 
     wrapper.unmount()
   })
 
-  it('previews an excel file in the export dialog', async () => {
-    const { wrapper } = await mountReady(files)
-
+  it('opens spreadsheets and ordinary text files in the journal module instead of a dialog', async () => {
+    const { wrapper, openWorkspaceFile } = await mountReady(files)
     await fileButton(wrapper, '周报.xlsx').trigger('click')
-    await flushPromises()
-
-    expect(invoke).toHaveBeenCalledWith('read_workspace_excel', {
-      workspacePath: '/tmp/workspace',
-      path: '周报.xlsx',
-    })
-    expect(wrapper.find('.excel-export-preview-dialog').exists()).toBe(true)
-    expect(wrapper.find('.excel-export-preview-header strong').text()).toBe('周报.xlsx')
-
+    expect(openWorkspaceFile).toHaveBeenCalledWith('周报.xlsx')
+    await fileButton(wrapper, 'notes.md').trigger('click')
+    expect(openWorkspaceFile).toHaveBeenCalledWith('notes.md')
+    expect(wrapper.find('.excel-export-preview-dialog').exists()).toBe(false)
     wrapper.unmount()
   })
 

@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
-import { flushPromises, mount } from '@vue/test-utils'
+import { DOMWrapper, flushPromises, mount } from '@vue/test-utils'
 import dayjs from 'dayjs'
 
 const { nativeRuntime, ipcInvoke } = vi.hoisted(() => ({
@@ -31,6 +31,7 @@ import App from '../src/App.vue'
 import AppRail from '../src/components/AppRail.vue'
 import CalendarPane from '../src/components/CalendarPane.vue'
 import JournalEditor from '../src/components/JournalEditor.vue'
+import RichMarkdownEditor from '../src/components/RichMarkdownEditor.vue'
 import ConfirmDialog from '../src/components/ConfirmDialog.vue'
 import { installHolidayData } from '../src/lib/chinaHolidays'
 import { emptyHolidayState } from '../src/lib/holidays'
@@ -92,7 +93,7 @@ describe('journal history routing', () => {
         case 'load_summary_settings':
           return { outputDirectory: 'summary' }
         case 'load_database_settings':
-          return { ...DEFAULT_DATABASE_SETTINGS }
+          return { ...DEFAULT_DATABASE_SETTINGS, defaultFormat: 'md' }
         case 'load_ui_preferences':
           return {
             skin: 'default',
@@ -120,9 +121,13 @@ describe('journal history routing', () => {
     const wrapper = mount(App, { attachTo: document.body })
     await flushPromises()
     expect(wrapper.find('dialog.summary-dialog.is-inline[open]').exists()).toBe(true)
-    const input = wrapper.get<HTMLTextAreaElement>('.markdown-editor')
-    input.element.focus()
-    await input.setValue('本次编辑')
+    const richEditor = wrapper.getComponent(RichMarkdownEditor)
+    richEditor.vm.focus()
+    richEditor.vm.getEditableElement()!.focus()
+    richEditor.vm.selectAll()
+    richEditor.vm.replaceSelection('本次编辑')
+    await flushPromises()
+    const input = wrapper.get<HTMLElement>('.markdown-editor')
     return { wrapper, input }
   }
 
@@ -131,12 +136,12 @@ describe('journal history routing', () => {
     const { wrapper, input } = await mountHistoryApp()
     try {
       await input.trigger('keydown', { key: 'z', ctrlKey: true })
-      expect(input.element.value).toBe('')
+      expect(input.text()).toBe('')
       await input.trigger('keydown', { key: 'z', ctrlKey: true, shiftKey: true })
-      expect(input.element.value).toBe('本次编辑')
+      expect(input.text()).toBe('本次编辑')
       await input.trigger('keydown', { key: 'z', ctrlKey: true })
       await input.trigger('keydown', { key: 'y', ctrlKey: true })
-      expect(input.element.value).toBe('本次编辑')
+      expect(input.text()).toBe('本次编辑')
     } finally {
       wrapper.unmount()
       platform.mockRestore()
@@ -151,10 +156,75 @@ describe('journal history routing', () => {
       expect(historyAction).toBeTypeOf('function')
       historyAction({ payload: 'undo' })
       await flushPromises()
-      expect(input.element.value).toBe('')
+      expect(input.text()).toBe('')
       historyAction({ payload: 'redo' })
       await flushPromises()
-      expect(input.element.value).toBe('本次编辑')
+      expect(input.text()).toBe('本次编辑')
+    } finally {
+      wrapper.unmount()
+      platform.mockRestore()
+    }
+  })
+
+  it('handles macOS DOM history shortcuts once when the native menu listener is installed', async () => {
+    const platform = vi.spyOn(navigator, 'platform', 'get').mockReturnValue('MacIntel')
+    const { wrapper, input } = await mountHistoryApp()
+    try {
+      expect(nativeRuntime.listeners.get('history-action')).toBeTypeOf('function')
+      const editor = wrapper.getComponent(RichMarkdownEditor)
+      editor.vm.selectAll()
+      editor.vm.replaceSelection('第二次编辑')
+      await flushPromises()
+      expect(input.text()).toBe('第二次编辑')
+
+      await input.trigger('keydown', { key: 'z', metaKey: true })
+      expect(input.text()).toBe('本次编辑')
+      await input.trigger('keydown', { key: 'z', metaKey: true, shiftKey: true })
+      expect(input.text()).toBe('第二次编辑')
+
+      nativeRuntime.listeners.get('history-action')!({ payload: 'undo' })
+      await flushPromises()
+      expect(input.text()).toBe('本次编辑')
+    } finally {
+      wrapper.unmount()
+      platform.mockRestore()
+    }
+  })
+
+  it('leaves macOS history shortcuts in other editable fields to their own history', async () => {
+    const platform = vi.spyOn(navigator, 'platform', 'get').mockReturnValue('MacIntel')
+    const { wrapper, input } = await mountHistoryApp()
+    const field = document.createElement('input')
+    document.body.append(field)
+    try {
+      field.focus()
+      const event = new KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true, cancelable: true })
+      field.dispatchEvent(event)
+      await flushPromises()
+      expect(event.defaultPrevented).toBe(false)
+      expect(input.text()).toBe('本次编辑')
+    } finally {
+      field.remove()
+      wrapper.unmount()
+      platform.mockRestore()
+    }
+  })
+
+  it.each(['composing', 'handled'] as const)('does not undo for a %s macOS shortcut', async (kind) => {
+    const platform = vi.spyOn(navigator, 'platform', 'get').mockReturnValue('MacIntel')
+    const { wrapper, input } = await mountHistoryApp()
+    try {
+      const event = new KeyboardEvent('keydown', {
+        key: 'z',
+        metaKey: true,
+        bubbles: true,
+        cancelable: true,
+        isComposing: kind === 'composing',
+      })
+      if (kind === 'handled') event.preventDefault()
+      input.element.dispatchEvent(event)
+      await flushPromises()
+      expect(input.text()).toBe('本次编辑')
     } finally {
       wrapper.unmount()
       platform.mockRestore()
@@ -168,13 +238,13 @@ describe('journal history routing', () => {
       const dialog = wrapper.get<HTMLDialogElement>('.layout-dialog')
       dialog.element.showModal()
       await input.trigger('keydown', { key: 'z', ctrlKey: true })
-      expect(input.element.value).toBe('本次编辑')
+      expect(input.text()).toBe('本次编辑')
       nativeRuntime.listeners.get('history-action')!({ payload: 'undo' })
       await flushPromises()
-      expect(input.element.value).toBe('本次编辑')
+      expect(input.text()).toBe('本次编辑')
       dialog.element.close()
       await input.trigger('keydown', { key: 'z', ctrlKey: true })
-      expect(input.element.value).toBe('')
+      expect(input.text()).toBe('')
     } finally {
       wrapper.unmount()
       platform.mockRestore()
@@ -303,7 +373,7 @@ describe('function rail', () => {
     const buttons = wrapper.findAll('.rail-button')
     expect(buttons.map((button) => button.attributes('aria-label'))).toEqual([
       '日历',
-      '日报编辑',
+      '编辑',
       '数据概览',
       '历史记录',
       'Excel报告',
@@ -336,6 +406,47 @@ describe('function rail', () => {
       expect(button.attributes('disabled')).toBeDefined()
     }
     wrapper.unmount()
+  })
+
+  it('opens the module menu from the keyboard and restores focus when dismissed', async () => {
+    const wrapper = mount(AppRail, {
+      props: { disabled: false, active: ['calendar', 'editor'] },
+      attachTo: document.body,
+    })
+    try {
+      const calendar = wrapper.get<HTMLButtonElement>('[aria-label="日历"]')
+      calendar.element.focus()
+      await calendar.trigger('keydown', { key: 'F10', shiftKey: true })
+      await flushPromises()
+      const menu = new DOMWrapper(document.body.querySelector<HTMLElement>('.module-context-menu')!)
+      expect(menu.attributes('aria-label')).toBe('模块操作')
+      expect(document.activeElement).toBe(menu.get('button').element)
+      expect(calendar.attributes('aria-expanded')).toBe('true')
+      await wrapper.setProps({ active: ['calendar', 'editor'] })
+      expect(document.querySelector('.module-context-menu')).toBe(menu.element)
+      await menu.trigger('keydown', { key: 'Escape' })
+      expect(document.querySelector('.module-context-menu')).toBeNull()
+      expect(document.activeElement).toBe(calendar.element)
+      expect(wrapper.emitted('module')).toBeUndefined()
+      expect(wrapper.emitted('remove')).toBeUndefined()
+
+      await wrapper.setProps({ active: ['calendar'] })
+      await calendar.trigger('keydown', { key: 'ContextMenu' })
+      await flushPromises()
+      const lastModuleMenu = new DOMWrapper(document.body.querySelector<HTMLElement>('.module-context-menu')!)
+      expect(lastModuleMenu.get('button').attributes('disabled')).toBeUndefined()
+      expect(document.activeElement).toBe(lastModuleMenu.get('button').element)
+      await lastModuleMenu.trigger('keydown', { key: 'Escape' })
+      expect(document.activeElement).toBe(calendar.element)
+
+      await calendar.trigger('contextmenu')
+      await wrapper.setProps({ disabled: true })
+      expect(document.querySelector('.module-context-menu')).toBeNull()
+      await calendar.trigger('contextmenu')
+      expect(document.querySelector('.module-context-menu')).toBeNull()
+    } finally {
+      wrapper.unmount()
+    }
   })
 })
 
@@ -446,7 +557,7 @@ describe('journal editor actions', () => {
     const tools = wrapper.find('.editor-body-tools')
     expect(tools.exists()).toBe(true)
     expect(tools.find('.format-toggle').text()).toBe('MD')
-    expect(tools.find('.preview-toggle').exists()).toBe(true)
+    expect(tools.find('.journal-split-toggle').exists()).toBe(true)
     expect(tools.find('.copy-icon').exists()).toBe(true)
     expect(wrapper.find('.editor-toolbar-actions').exists()).toBe(false)
     expect(wrapper.find('.ai-toggle').exists()).toBe(false)
@@ -454,10 +565,10 @@ describe('journal editor actions', () => {
     wrapper.unmount()
   })
 
-  it('keeps plain-text mode without a preview toggle', () => {
+  it('keeps plain-text editing available with a preview toggle', () => {
     const wrapper = mountEditor('纯文本内容', 'txt')
 
-    expect(wrapper.find('.preview-toggle').exists()).toBe(false)
+    expect(wrapper.find('.journal-split-toggle').exists()).toBe(true)
     expect(wrapper.find('.format-toggle').text()).toBe('TXT')
     expect(wrapper.find('.copy-icon').exists()).toBe(true)
 

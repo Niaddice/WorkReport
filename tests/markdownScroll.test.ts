@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest'
 import {
   createTextareaScrollReader,
   elementScrollPosition,
+  markdownPreviewScrollPosition,
   markdownPreviewScrollTop,
   markdownWithSourceLines,
   type MarkdownScrollPosition,
@@ -49,6 +50,25 @@ describe('Markdown source scroll mapping', () => {
     expect(elementScrollPosition(element, position.sourceKey)).toEqual({ ...position, ratio: 0 })
   })
 
+  it('maps preview scrolling back to the same source line without losing paragraph alignment', () => {
+    const element = document.createElement('div')
+    Object.defineProperties(element, { scrollHeight: { value: 1200 }, clientHeight: { value: 200 } })
+    element.scrollTop = 600
+    const anchors = [
+      { line: 0, top: 0 },
+      { line: 10, top: 500 },
+      { line: 14, top: 700 },
+      { line: 30, top: 1100 },
+    ]
+    const position = markdownPreviewScrollPosition(element, 'report', anchors)
+    expect(position.line).toBe(12)
+    expect(markdownPreviewScrollTop(position, anchors, 1000)).toBe(600)
+    element.scrollTop = 1000
+    expect(markdownPreviewScrollPosition(element, 'report', anchors).atBottom).toBe(true)
+    element.scrollTop = 0
+    expect(markdownPreviewScrollPosition(element, 'report', anchors).line).toBe(0)
+  })
+
   it('measures wrapped source lines once, invalidates after edits and removes the hidden mirror', () => {
     const textarea = document.createElement('textarea')
     textarea.value = '标题\n会折成三行的长段落\n结尾'
@@ -68,6 +88,11 @@ describe('Markdown source scroll mapping', () => {
     const reader = createTextareaScrollReader()
     try {
       expect(reader.read(textarea, '20261026').line).toBeCloseTo(1 + 2 / 3)
+      expect(reader.scrollTopFor(textarea, reader.read(textarea, '20261026'))).toBeCloseTo(70)
+      expect(reader.scrollTopFor(textarea, { sourceKey: '20261026', line: null, ratio: 0.5, atBottom: false })).toBe(
+        200,
+      )
+      expect(reader.scrollTopFor(textarea, { sourceKey: '20261026', line: 1, ratio: 0.5, atBottom: true })).toBe(400)
       const measurements = top.mock.calls.length
       textarea.scrollTop = 80
       expect(reader.read(textarea, '20261026').line).toBeCloseTo(1 + 5 / 6)

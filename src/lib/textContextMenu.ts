@@ -56,9 +56,13 @@ export function textMenuSession(target: HTMLElement, io: TextClipboard = clipboa
     const end = control?.selectionEnd ?? null
     const direction = control?.selectionDirection ?? 'none'
     const range = control ? null : selectedRange(field, true)
-    const selected = control && start !== null && end !== null ? original.slice(start, end) : (range?.toString() ?? '')
-    const readOnly = control?.readOnly ?? false
     const editor = contextEditor(field)
+    const selected = editor?.selectedText
+      ? editor.selectedText()
+      : control && start !== null && end !== null
+        ? original.slice(start, end)
+        : (range?.toString() ?? '')
+    const readOnly = control?.readOnly ?? false
     const scope = editor?.scope()
     const valid = () =>
       !unavailable(field) &&
@@ -111,6 +115,7 @@ export function textMenuSession(target: HTMLElement, io: TextClipboard = clipboa
     const replace = (text: string) => {
       assertCurrent()
       if (editor && start !== null && end !== null) editor.replace(text, start, end)
+      else if (editor?.replaceSelection) editor.replaceSelection(text)
       else native('insertText', text)
     }
     const enabled = (action: 'undo' | 'redo') => {

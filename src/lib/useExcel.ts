@@ -1,6 +1,7 @@
 import { invoke, isTauri } from '@tauri-apps/api/core'
 import { ref } from 'vue'
 import type { ExcelSheetPreviewData } from './excelPreview'
+import { DEFAULT_FILE_SETTINGS, type FileRule } from './fileSettings'
 
 export interface ExcelSettings {
   enabled: boolean
@@ -39,6 +40,8 @@ export interface ExcelExportFile {
   path: string
   modified: number
   size: number
+  startDate?: string
+  endDate?: string
 }
 export interface ExcelExportPreview {
   filename: string
@@ -84,10 +87,21 @@ export function validExcelDates(dates: string[]): boolean {
 }
 
 /**
- * 解析报告文件名中的起止日期，兼容原有的「周报」前缀；
+ * 优先使用导出时记录的日期，兼容原有文件名中的「周报」等前缀；
  * 无法识别（非标准命名）时返回 null，调用方按“始终显示”处理。
  */
-export function reportDateRange(filename: string): { start: string; end: string } | null {
+export function reportDateRange(
+  file: string | Pick<ExcelExportFile, 'filename' | 'startDate' | 'endDate'>,
+): { start: string; end: string } | null {
+  if (
+    typeof file !== 'string' &&
+    file.startDate &&
+    file.endDate &&
+    validExcelDates([file.startDate, file.endDate]) &&
+    file.startDate <= file.endDate
+  )
+    return { start: file.startDate, end: file.endDate }
+  const filename = typeof file === 'string' ? file : file.filename
   const match = /^(?:总结|周报|报告|Excel报告)_(\d{8})-(\d{8})_/.exec(filename)
   if (!match || !validExcelDates([match[1]!, match[2]!]) || match[1]! > match[2]!) return null
   return { start: match[1]!, end: match[2]! }
@@ -97,8 +111,12 @@ export function reportDateRange(filename: string): { start: string; end: string 
  * 判断报告是否与给定的日期范围（闭区间，YYYYMMDD）有交集；
  * 无法识别日期范围的文件按“始终显示”处理。
  */
-export function reportOverlapsRange(filename: string, start: string, end: string): boolean {
-  const range = reportDateRange(filename)
+export function reportOverlapsRange(
+  file: string | Pick<ExcelExportFile, 'filename' | 'startDate' | 'endDate'>,
+  start: string,
+  end: string,
+): boolean {
+  const range = reportDateRange(file)
   return !range || (range.start <= end && range.end >= start)
 }
 
@@ -126,6 +144,7 @@ function readPreviewSettings(): ExcelSettings {
 
 export function useExcel() {
   const settings = ref<ExcelSettings>(cloneExcelSettings(DEFAULT_EXCEL_SETTINGS))
+  const fileRule = ref<FileRule>({ ...DEFAULT_FILE_SETTINGS.excel })
   const loading = ref(false)
   const error = ref('')
   const preparing = ref(false)
@@ -148,6 +167,7 @@ export function useExcel() {
   let exportsWorkspace = ''
   let previewWorkspace = ''
   let writingPreviewId = ''
+  let exportPreviewRevision = 0
 
   function discardToken(id: string): Promise<void> {
     return isTauri() ? invoke<void>('discard_excel_preview', { previewId: id }).catch(() => {}) : Promise.resolve()
@@ -174,6 +194,7 @@ export function useExcel() {
   }
 
   function closeExportPreview() {
+    exportPreviewRevision++
     exportPreview.value = null
     previewOpening.value = false
     previewOpenError.value = ''
@@ -208,18 +229,21 @@ export function useExcel() {
   /** 读取某个已导出文件，供只读预览。 */
   async function openExport(workspacePath: string, path: string): Promise<boolean> {
     if (!isTauri() || !workspacePath) return false
+    const revision = ++exportPreviewRevision
+    const current = () => revision === exportPreviewRevision
     previewOpening.value = true
     previewOpenError.value = ''
     exportPreview.value = null
     try {
       const value = await invoke<ExcelExportPreview>('read_excel_export', { workspacePath, path })
+      if (!current()) return false
       exportPreview.value = value && Array.isArray(value.sheets) ? value : null
       return !!exportPreview.value
     } catch (cause) {
-      previewOpenError.value = `读取 Excel 内容失败：${String(cause)}`
+      if (current()) previewOpenError.value = `读取 Excel 内容失败：${String(cause)}`
       return false
     } finally {
-      previewOpening.value = false
+      if (current()) previewOpening.value = false
     }
   }
 
@@ -271,6 +295,7 @@ export function useExcel() {
     clearExport()
     loadTask = undefined
     settings.value = cloneExcelSettings(DEFAULT_EXCEL_SETTINGS)
+    fileRule.value = { ...DEFAULT_FILE_SETTINGS.excel }
     error.value = ''
     return load()
   }
@@ -397,8 +422,21 @@ export function useExcel() {
     error.value = ''
   }
 
+  /** A changed filename rule invalidates approval just as a directory change does. */
+  function acceptFileSettings(value: FileRule) {
+    if (fileRule.value.directory === value.directory && fileRule.value.filenameTemplate === value.filenameTemplate)
+      return
+    scope++
+    clearExport()
+    loadTask = undefined
+    fileRule.value = { ...value }
+    loading.value = false
+    error.value = ''
+  }
+
   return {
     settings,
+    fileRule,
     loading,
     error,
     load,
@@ -425,5 +463,6 @@ export function useExcel() {
     openExport,
     closeExportPreview,
     acceptSaved,
+    acceptFileSettings,
   }
 }

@@ -4,7 +4,7 @@ const { load, save } = vi.hoisted(() => ({ load: vi.fn(), save: vi.fn() }))
 vi.mock('../src/lib/uiPreferences', () => ({ uiPreferencesApi: { load, save } }))
 
 import { useModuleLayout } from '../src/modules/useModuleLayout'
-import { layoutGeometry } from '../src/modules/layout'
+import { layoutGeometry, normalizeUiPreferences } from '../src/modules/layout'
 
 function makeLayout() {
   return useModuleLayout({ workspacePath: () => '/tmp/workspace' })
@@ -17,6 +17,40 @@ beforeEach(() => {
 })
 
 describe('useModuleLayout saved layouts', () => {
+  it('persists all modules closed, reloads the empty layout, and opens a module again', async () => {
+    const state = makeLayout()
+    state.remove('calendar')
+    state.remove('editor')
+    expect(state.items.value).toEqual([])
+    expect(state.layout.value).toEqual({ type: 'empty' })
+    state.saveLayout('空白布局')
+    await vi.waitFor(() => expect(save.mock.calls.at(-1)?.[0].layout).toEqual({ type: 'empty' }))
+    const snapshot = save.mock.calls.at(-1)![0]
+    load.mockResolvedValue(snapshot)
+    const restored = makeLayout()
+    await restored.load()
+    expect(restored.items.value).toEqual([])
+    restored.add('history')
+    expect(restored.items.value).toEqual([{ id: 'history' }])
+    restored.applySavedLayout('空白布局')
+    expect(restored.items.value).toEqual([])
+    restored.remove('calendar')
+    expect(restored.layout.value).toEqual({ type: 'empty' })
+    restored.reset()
+    expect(restored.items.value.map((item) => item.id)).toEqual(['calendar', 'editor'])
+  })
+  it('merges a legacy preview into the journal when loading and saving a layout', async () => {
+    load.mockResolvedValue({ layout: { type: 'leaf', id: 'editor-9' } })
+    const state = makeLayout()
+    await state.load()
+    expect(state.items.value.map((item) => item.id)).toEqual(['editor'])
+    state.add('editor')
+    expect(state.items.value).toHaveLength(1)
+    state.saveLayout('日报布局')
+    await vi.waitFor(() => expect(save).toHaveBeenCalled())
+    expect(normalizeUiPreferences(save.mock.calls.at(-1)![0]).layout).toEqual({ type: 'leaf', id: 'editor' })
+  })
+
   it('applies the compact calendar preset without replacing skins or named layouts', async () => {
     const state = makeLayout()
     state.setSkin('jade')

@@ -10,12 +10,13 @@ import {
 } from './workspace'
 import { dateKey } from './calendar'
 import { DEFAULT_DATABASE_SETTINGS } from './database'
+import { DEFAULT_FILE_SETTINGS, formatFileName, type FileSettings } from './fileSettings'
 
-function emptyDocument(date: string, format: FileFormat): Document {
-  return { date, filename: `${date}.${format}`, format, content: '', revision: '' }
+function emptyDocument(date: string, format: FileFormat, template: string): Document {
+  return { date, filename: formatFileName(template, { date }, format), format, content: '', revision: '' }
 }
 
-export function useJournal() {
+export function useJournal(options: { beforeFlush?: () => Promise<boolean> } = {}) {
   const workspace = ref<Workspace | null>(null)
   const entries = ref<Entry[]>([])
   const previews = ref<Record<string, string>>({})
@@ -44,6 +45,17 @@ export function useJournal() {
   const previewVersions = new Map<string, number>()
   /** 新建日报使用的格式，由「数据存储」中的默认格式设置驱动。 */
   let defaultFormat: FileFormat = DEFAULT_DATABASE_SETTINGS.defaultFormat
+  let filenameTemplate = DEFAULT_FILE_SETTINGS.journal.filenameTemplate
+
+  function setFileSettings(settings: Pick<FileSettings, 'journal'>) {
+    filenameTemplate = settings.journal.filenameTemplate
+    if (isNewDraft.value && document.value) {
+      document.value = {
+        ...document.value,
+        filename: formatFileName(filenameTemplate, { date: document.value.date }, document.value.format),
+      }
+    }
+  }
 
   function setDefaultFormat(format: FileFormat) {
     defaultFormat = format === 'md' ? 'md' : 'txt'
@@ -114,7 +126,7 @@ export function useJournal() {
 
   function applyDraft(date: string, format: FileFormat = defaultFormat) {
     isNewDraft.value = true
-    document.value = emptyDocument(date, format)
+    document.value = emptyDocument(date, format, filenameTemplate)
     draft.value = ''
     savedAt.value = null
     resetHistory()
@@ -150,9 +162,9 @@ export function useJournal() {
     }
   }
 
-  async function flush(): Promise<boolean> {
+  async function flushJournal(): Promise<boolean> {
     clearTimeout(timer)
-    if (pendingSave) return pendingSave.then((success) => (success && dirty.value ? flush() : success))
+    if (pendingSave) return pendingSave.then((success) => (success && dirty.value ? flushJournal() : success))
     if (!document.value) return true
     if (isNewDraft.value && !draft.value.trim()) return true
     const task = (async () => {
@@ -198,7 +210,12 @@ export function useJournal() {
       }
     })
     // Preview reads can outlive the write; include any edits made during them.
-    return task.then((success) => (success && dirty.value ? flush() : success))
+    return task.then((success) => (success && dirty.value ? flushJournal() : success))
+  }
+
+  async function flush(): Promise<boolean> {
+    if (options.beforeFlush && !(await options.beforeFlush())) return false
+    return flushJournal()
   }
 
   function scheduleSave() {
@@ -273,6 +290,7 @@ export function useJournal() {
       error.value = ''
       const nextWorkspace = await api.open(path, syncSettingsFrom)
       workspace.value = nextWorkspace
+      filenameTemplate = DEFAULT_FILE_SETTINGS.journal.filenameTemplate
       backupWarning.value = ''
       // Clear the old draft immediately after the backend changes workspace.
       applyDocument(null)
@@ -431,7 +449,11 @@ export function useJournal() {
     try {
       if (!(await flush())) return false
       if (isNewDraft.value && document.value) {
-        document.value = { ...document.value, format, filename: `${document.value.date}.${format}` }
+        document.value = {
+          ...document.value,
+          format,
+          filename: formatFileName(filenameTemplate, { date: document.value.date }, format),
+        }
         error.value = ''
         return true
       }
@@ -497,6 +519,7 @@ export function useJournal() {
     flush,
     select,
     setDefaultFormat,
+    setFileSettings,
     open,
     switchFormat,
     reload,

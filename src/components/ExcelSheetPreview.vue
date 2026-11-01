@@ -15,7 +15,7 @@ import {
 } from '../lib/excelPreview'
 import './excelSheetPreview.css'
 
-const props = defineProps<{ sheets: ExcelSheetPreviewData[]; previewId: string }>()
+const props = defineProps<{ sheets: ExcelSheetPreviewData[]; previewId: string; showChanges?: boolean }>()
 const instanceId = useId()
 const activeSheetName = ref('')
 const activeRegionIndex = ref(0)
@@ -296,7 +296,7 @@ onBeforeUnmount(() => observer?.disconnect())
           {{ sheet.name }}<small v-if="sheet.state !== 'visible'">已隐藏</small>
         </button>
       </div>
-      <span class="excel-sheet-legend"><i aria-hidden="true"></i>填充或格式调整</span>
+      <span v-if="showChanges !== false" class="excel-sheet-legend"><i aria-hidden="true"></i>填充或格式调整</span>
     </footer>
   </div>
 </template>

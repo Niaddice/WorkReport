@@ -40,7 +40,10 @@ const generationStarting = ref(false)
 const generationEditing = ref(!preparing.value && !preview.value)
 const generationPrompt = ref(excel.previewPrompt.value || settings.value.prompt)
 const generationTemplate = computed(() => settings.value.templatePath.split(/[\\/]/).pop() ?? '')
-const generationDirectory = computed(() => `${(workspace.value?.path ?? '').replace(/[\\/]+$/, '')}/excel`)
+const generationDirectory = computed(() => {
+  const directory = context.fileSettings?.value.excel.directory ?? excel.fileRule.value.directory
+  return `${(workspace.value?.path ?? '').replace(/[\\/]+$/, '')}/${directory}`
+})
 const elapsedSeconds = ref(0)
 let generationRevision = 0
 let progressTimer: ReturnType<typeof setInterval> | undefined
@@ -66,7 +69,7 @@ const dates = computed(() =>
 const scopeLabel = computed(() => rangeLabel(dates.value))
 const visibleExports = computed(() => {
   const current = dates.value
-  return exports.value.filter((file) => reportOverlapsRange(file.filename, current[0]!, current[current.length - 1]!))
+  return exports.value.filter((file) => reportOverlapsRange(file, current[0]!, current[current.length - 1]!))
 })
 const localBlockedReason = computed(() => {
   if (!validExcelDates(dates.value)) return '请选择有效的日期或日期范围。'
@@ -96,9 +99,19 @@ watch(
     generationOpen.value = false
   },
 )
-watch([() => workspace.value?.path ?? '', () => settings.value.enabled, dates], () => refreshExports(), {
-  immediate: true,
-})
+watch(
+  [
+    () => workspace.value?.path ?? '',
+    () => settings.value.enabled,
+    generationDirectory,
+    () => excel.fileRule.value.filenameTemplate,
+    dates,
+  ],
+  () => refreshExports(),
+  {
+    immediate: true,
+  },
+)
 watch(result, (value) => {
   if (value) {
     generationOpen.value = false

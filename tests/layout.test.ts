@@ -19,7 +19,15 @@ import {
   setSplitRatio,
   splitLayout,
 } from '../src/modules/layout'
-import type { LayoutLeaf, LayoutNode, LayoutSlot, LayoutSplit, ModuleId, SplitDirection } from '../src/modules/types'
+import type {
+  Layout,
+  LayoutLeaf,
+  LayoutNode,
+  LayoutSlot,
+  LayoutSplit,
+  ModuleId,
+  SplitDirection,
+} from '../src/modules/types'
 
 function leaf(id: ModuleId): LayoutLeaf {
   return { type: 'leaf', id }
@@ -34,7 +42,7 @@ function rawLeaf(id: string): LayoutNode {
   return { type: 'leaf', id } as unknown as LayoutNode
 }
 
-function ids(layout: LayoutNode): string[] {
+function ids(layout: Layout): string[] {
   return layoutIds(layout)
 }
 
@@ -80,6 +88,28 @@ describe('normalizeUiPreferences', () => {
     expect(normalized.layout).not.toBe(layout)
     expect(snapshot(layout)).toBe(before)
   })
+  it('preserves explicit empty roots and named snapshots without using the legacy defaults', () => {
+    const empty = { type: 'empty' } as const
+    const preferences = normalizeUiPreferences({
+      layout: empty,
+      modules: [{ id: 'calendar' }],
+      skin: 'jade',
+      savedLayouts: [{ name: '空白', layout: empty }],
+    })
+    expect(preferences.layout).toEqual(empty)
+    expect(preferences.savedLayouts).toEqual([{ name: '空白', layout: empty }])
+    const clone = cloneUiPreferences(preferences)
+    expect(clone).toEqual(preferences)
+    expect(clone.layout).not.toBe(preferences.layout)
+    expect(flattenLayout(clone.layout)).toEqual([])
+    expect(layoutGeometry(clone.layout, 1200, 800, 3.2)).toEqual({ slots: [], gutters: [] })
+    expect(appendLayoutModule(clone.layout, 'editor')).toEqual(leaf('editor'))
+    expect(prependLayoutModule(clone.layout, 'calendar')).toEqual(leaf('calendar'))
+    expect(splitLayout(clone.layout, 'editor', 'calendar', 'left')).toEqual(empty)
+    expect(resizeLayoutLocally(clone.layout, [], 0.5)).toEqual(empty)
+    expect(insertLayoutModuleAtGutter(clone.layout, 'editor', [])).toEqual(empty)
+    expect(moveLayoutModuleToEdge(clone.layout, 'editor', 'left')).toEqual(empty)
+  })
 
   it('clamps split ratios and defaults missing direction/ratio', () => {
     const clamped = normalizeUiPreferences({
@@ -113,6 +143,30 @@ describe('normalizeUiPreferences', () => {
     // 重复的 calendar 被丢弃、父 split 折叠；不再自动补回核心模块。
     expect(ids(normalized.layout)).toEqual(['calendar', 'overview'])
     expect(normalized.layout).toEqual(split('row', 0.5, leaf('calendar'), leaf('overview')))
+  })
+
+  it('merges legacy preview modules into the journal and preserves the original editor position', () => {
+    const layout = split(
+      'row',
+      0.4,
+      leaf('editor'),
+      split('column', 0.5, leaf('editor-7'), split('row', 0.5, leaf('history'), leaf('editor-9'))),
+    )
+    const normalized = normalizeUiPreferences({ layout, savedLayouts: [{ name: '旧布局', layout }] })
+    const expected = split('row', 0.4, leaf('editor'), leaf('history'))
+    expect(normalized.layout).toEqual(expected)
+    expect(normalized.savedLayouts[0]!.layout).toEqual(expected)
+    expect(ids(layout)).toEqual(['editor', 'editor-7', 'history', 'editor-9'])
+    const legacy = normalizeUiPreferences({
+      columns: 1,
+      modules: [{ id: 'editor' }, { id: 'editor-9' }, { id: 'calendar' }, { id: 'editor-7' }],
+    })
+    expect(ids(legacy.layout)).toEqual(['editor', 'calendar'])
+    expect(normalizeUiPreferences({ layout: leaf('editor-9') }).layout).toEqual(leaf('editor'))
+    const reversed = split('column', 0.3, leaf('editor-9'), split('row', 0.7, leaf('calendar'), leaf('editor')))
+    expect(normalizeUiPreferences({ layout: reversed }).layout).toEqual(
+      split('row', 0.7, leaf('calendar'), leaf('editor')),
+    )
   })
 
   it('validates skins and prefers a layout over legacy fields', () => {
@@ -569,7 +623,7 @@ describe('resizeLayoutLocally', () => {
       second: leaf('overview'),
     },
   }
-  function widths(layout: LayoutNode) {
+  function widths(layout: Layout) {
     return layoutGeometry(layout, 1000, 1000, 0).slots.map((slot) => Math.round(slot.width))
   }
 

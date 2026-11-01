@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
-import { flushPromises, mount } from '@vue/test-utils'
+import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import dayjs from 'dayjs'
 
 const { invoke, pickDirectory } = vi.hoisted(() => ({ invoke: vi.fn(), pickDirectory: vi.fn() }))
@@ -16,8 +16,11 @@ import App from '../src/App.vue'
 import ModuleBoard from '../src/components/ModuleBoard.vue'
 import SettingsDialog from '../src/components/SettingsDialog.vue'
 import AiSummaryDialog from '../src/components/AiSummaryDialog.vue'
+import RichMarkdownEditor from '../src/components/RichMarkdownEditor.vue'
+import JournalEditor from '../src/components/JournalEditor.vue'
 import { flattenLayout } from '../src/modules/layout'
 import { DEFAULT_DATABASE_SETTINGS } from '../src/lib/database'
+import { cloneFileSettings, type FileChangesPlan } from '../src/lib/fileSettings'
 import type { WorkspaceSettings } from '../src/lib/settingsDraft'
 import type { Document } from '../src/lib/workspace'
 
@@ -105,115 +108,100 @@ async function openDemoWorkspace() {
   return wrapper
 }
 
+async function replaceRichMarkdown(wrapper: VueWrapper, markdown: string) {
+  const editor = wrapper.getComponent(RichMarkdownEditor)
+  editor.vm.focus()
+  editor.vm.getEditableElement()!.focus()
+  editor.vm.selectAll()
+  editor.vm.replaceSelection(markdown)
+  await flushPromises()
+}
+
 describe('Git journal integration', () => {
-  it('appends each range preview to its own date and refreshes the merged journals without clearing the calendar range', async () => {
-    const first = dayjs().startOf('month').date(10)
-    const middle = first.add(1, 'day')
-    const last = first.add(2, 'day')
-    const firstDate = first.format('YYYYMMDD')
-    const lastDate = last.format('YYYYMMDD')
-    const stored = new Map<string, Document>([
-      [
-        firstDate,
-        {
-          date: firstDate,
-          filename: `${firstDate}.md`,
-          format: 'md',
-          content: '第一天原有会议记录',
-          revision: 'first-v1',
-        },
-      ],
-    ])
+  it('opens the multi-repository workbench by default and appends only the explicitly selected commits', async () => {
+    const date = dayjs().format('YYYYMMDD')
+    const entry = { date, filename: `${date}.txt`, format: 'txt', content: '已有会议记录', revision: 'v1' }
     invoke.mockImplementation(async (command: string, args?: Record<string, unknown>) => {
       if (command === 'load_git_settings')
         return {
           executable: 'git',
           includeMerges: false,
-          repositories: [{ id: 'repo', name: '日报项目', path: '/tmp/project', author: '', branch: '' }],
-        }
-      if (command === 'list_entries') return [...stored.values()]
-      if (command === 'read_entry') return stored.get(args!.date as string)
-      if (command === 'read_git_daily_log')
-        return {
-          date: firstDate,
-          startDate: firstDate,
-          endDate: lastDate,
           repositories: [
-            {
-              id: 'repo',
-              name: '日报项目',
-              error: null,
-              truncated: false,
-              commits: [
-                {
-                  hash: 'first-commit',
-                  author: '作者',
-                  email: 'me@example.test',
-                  committedAt: first.hour(12).toISOString(),
-                  message: '第一天完成实现',
-                },
-                {
-                  hash: 'last-commit',
-                  author: '作者',
-                  email: 'me@example.test',
-                  committedAt: last.hour(12).toISOString(),
-                  message: '第三天完成测试',
-                },
-              ],
-            },
+            { id: 'one', name: '前端项目', path: '/tmp/frontend', author: '', branch: '' },
+            { id: 'two', name: '服务项目', path: '/tmp/backend', author: '', branch: '' },
           ],
         }
-      if (command === 'append_git_reports') {
-        const documents = (args!.reports as { date: string; content: string }[]).map(({ date, content }) => {
-          const existing = stored.get(date)
-          const document: Document = {
-            date,
-            format: existing?.format ?? 'txt',
-            filename: existing?.filename ?? `${date}.txt`,
-            content: existing ? `${existing.content}\n\n${content}` : content,
-            revision: `appended-${date}`,
-          }
-          stored.set(date, document)
-          return document
-        })
-        return { documents, skippedDates: [], failed: [] }
-      }
+      if (command === 'list_entries') return [entry]
+      if (command === 'read_entry') return entry
+      if (command === 'save_entry') return { ...entry, content: args!.content, revision: 'v2' }
+      if (command === 'read_git_repository')
+        return {
+          root: `/tmp/${args!.repositoryId}`,
+          branch: 'main',
+          detached: false,
+          upstream: null,
+          ahead: 0,
+          behind: 0,
+          files: [],
+          branches: [],
+          stashes: [],
+          remotes: [],
+        }
+      if (command === 'read_git_history')
+        return {
+          commits: ['selected', 'excluded'].map((hash) => ({
+            hash,
+            parents: [],
+            author: '开发者',
+            email: 'dev@example.test',
+            committedAt: dayjs().toISOString(),
+            message: `${args!.repositoryId} ${hash} 工作`,
+            refs: '',
+          })),
+          hasMore: false,
+        }
       return commandResult(command)
     })
     const wrapper = await openDemoWorkspace()
     try {
       await wrapper.get('.app-rail [aria-label="Git"]').trigger('click')
       await flushPromises()
-      const day = (value: ReturnType<typeof dayjs>) =>
-        wrapper.get(`.calendar-panel .day-cell[aria-label^="${value.format('YYYY年M月D日 ')}"]`)
-      await day(first).trigger('pointerdown', { button: 0 })
-      await day(last).trigger('pointerenter')
-      window.dispatchEvent(new Event('pointerup'))
+      expect(wrapper.find('.git-views').exists()).toBe(false)
+      expect(wrapper.get('.git-module').text()).not.toContain('提交日报')
+      await wrapper
+        .findAll('.workbench-tabs button')
+        .find((item) => item.text() === '提交历史')!
+        .trigger('click')
       await flushPromises()
-      await wrapper.get('.git-toolbar .git-fetch').trigger('click')
+      await wrapper.get('[aria-label="选择提交 selected"]').setValue(true)
+      await wrapper.get('[aria-label="切换到仓库 服务项目"]').trigger('click')
       await flushPromises()
-      await wrapper.get(`[aria-label="Git 日报预览 ${firstDate}"]`).setValue('第一天确认后的工作记录')
-      await wrapper.get(`[aria-label="Git 日报预览 ${lastDate}"]`).setValue('第三天确认后的工作记录')
-      await wrapper.get('.git-toolbar .git-append').trigger('click')
+      await wrapper.get('[aria-label="选择提交 selected"]').setValue(true)
+      await wrapper
+        .findAll('.commit-selection-bar button')
+        .find((item) => item.text() === '获取提交信息')!
+        .trigger('click')
+      await wrapper
+        .findAll('.collection-modes button')
+        .find((item) => item.text() === '工作记录')!
+        .trigger('click')
+      expect(invoke.mock.calls.some(([command]) => command === 'save_entry')).toBe(false)
+      await wrapper
+        .findAll('.collection-actions button')
+        .find((item) => item.text() === '追加工作记录到日报')!
+        .trigger('click')
       await flushPromises()
-      expect(invoke).toHaveBeenCalledWith('append_git_reports', {
-        workspacePath: DEMO_WORKSPACE,
-        reports: [
-          { date: firstDate, content: '第一天确认后的工作记录' },
-          { date: lastDate, content: '第三天确认后的工作记录' },
-        ],
-      })
-      expect(stored.get(firstDate)?.content).toBe('第一天原有会议记录\n\n第一天确认后的工作记录')
-      expect(stored.get(firstDate)?.format).toBe('md')
-      expect(stored.get(lastDate)?.content).toBe('第三天确认后的工作记录')
-      expect(stored.has(middle.format('YYYYMMDD'))).toBe(false)
-      const range = wrapper.get('.range-overview')
-      expect(range.get('.range-heading').text()).toBe(`${first.format('M 月 D 日')} – ${last.format('D 日')}`)
-      expect(range.text()).toContain('已选择 3 天 · 2 篇日报')
-      expect(range.text()).toContain('第一天确认后的工作记录')
-      expect(range.text()).toContain('第三天确认后的工作记录')
-      expect(wrapper.get('.git-toolbar .git-append').attributes('disabled')).toBeDefined()
-      expect(invoke.mock.calls.filter(([command]) => command === 'append_git_reports')).toHaveLength(1)
+      expect(invoke).toHaveBeenCalledWith(
+        'save_entry',
+        expect.objectContaining({
+          date,
+          content: '已有会议记录\n\n前端项目\n1、one selected 工作\n\n服务项目\n1、two selected 工作',
+          expectedRevision: 'v1',
+        }),
+      )
+      expect(
+        invoke.mock.calls.some(([command]) => command === 'read_git_daily_log' || command === 'git_repository_action'),
+      ).toBe(false)
     } finally {
       wrapper.unmount()
     }
@@ -250,71 +238,6 @@ describe('Git journal integration', () => {
     }
   })
 
-  it('adds the module from the rail and preserves existing content when appending and undoing a report', async () => {
-    const date = dayjs().format('YYYYMMDD')
-    const entry = { date, filename: `${date}.txt`, format: 'txt', content: '已有的会议记录\n', revision: 'v1' }
-    invoke.mockImplementation(async (command: string, args?: Record<string, unknown>) => {
-      if (command === 'load_git_settings')
-        return {
-          executable: 'git',
-          includeMerges: false,
-          repositories: [{ id: 'repo', name: '日报项目', path: '/tmp/project', author: '', branch: '' }],
-        }
-      if (command === 'list_entries') return [entry]
-      if (command === 'read_entry') return entry
-      if (command === 'save_entry') return { ...entry, content: args!.content, revision: 'v2' }
-      if (command === 'read_git_daily_log')
-        return {
-          date,
-          repositories: [
-            {
-              id: 'repo',
-              name: '日报项目',
-              error: null,
-              truncated: false,
-              commits: [
-                {
-                  hash: 'abc123456',
-                  author: '作者',
-                  email: 'me@example.test',
-                  committedAt: dayjs().toISOString(),
-                  message: '完成 Git 日报',
-                },
-              ],
-            },
-          ],
-        }
-      return commandResult(command)
-    })
-    const wrapper = await openDemoWorkspace()
-    try {
-      await wrapper.get('.app-rail [aria-label="Git"]').trigger('click')
-      await flushPromises()
-      expect(savedIds()).toContain('git')
-      await wrapper.get('.git-toolbar .git-fetch').trigger('click')
-      await flushPromises()
-      await wrapper.get('.git-toolbar .git-append').trigger('click')
-      await flushPromises()
-      const editor = wrapper.get<HTMLTextAreaElement>('.markdown-editor')
-      expect(editor.element.value).toBe('已有的会议记录\n\n日报项目\n1、完成 Git 日报')
-      expect(invoke).toHaveBeenCalledWith(
-        'save_entry',
-        expect.objectContaining({
-          date,
-          content: '已有的会议记录\n\n日报项目\n1、完成 Git 日报',
-          expectedRevision: 'v1',
-        }),
-      )
-      editor.element.focus()
-      await editor.trigger('keydown', { key: 'z', ctrlKey: true })
-      await flushPromises()
-      expect(editor.element.value).toBe(entry.content)
-      expect(wrapper.get('.git-toolbar .git-append').attributes('disabled')).toBeUndefined()
-    } finally {
-      wrapper.unmount()
-    }
-  })
-
   it('saves Git configuration in the unified settings transaction and applies it to the module', async () => {
     invoke.mockImplementation(async (command: string, args?: Record<string, unknown>) =>
       command === 'save_workspace_settings' ? args!.settings : commandResult(command),
@@ -328,8 +251,6 @@ describe('Git journal integration', () => {
       const fields = wrapper.findAll('.git-repository-form input')
       await fields[0]!.setValue('项目仓库')
       await fields[1]!.setValue('/tmp/project')
-      await fields[2]!.setValue('me@example.test')
-      await fields[3]!.setValue('main')
       expect(invoke.mock.calls.some(([command]) => command === 'save_workspace_settings')).toBe(false)
       await wrapper.get('.app-rail [aria-label="设置"]').trigger('click')
       await flushPromises()
@@ -341,14 +262,15 @@ describe('Git journal integration', () => {
           git: {
             executable: 'git',
             includeMerges: false,
-            repositories: [{ name: '项目仓库', path: '/tmp/project', author: 'me@example.test', branch: 'main' }],
+            repositories: [{ name: '项目仓库', path: '/tmp/project', author: '', branch: '' }],
           },
         },
       })
       await wrapper.get('.app-rail [aria-label="Git"]').trigger('click')
       await flushPromises()
-      expect(wrapper.get('.git-module').text()).toContain('1 个仓库')
-      expect(wrapper.get('.git-toolbar .git-fetch').attributes('disabled')).toBeUndefined()
+      expect(wrapper.find('.git-views').exists()).toBe(false)
+      expect(wrapper.get('.git-module').text()).not.toContain('提交日报')
+      expect(wrapper.find('.git-workbench').exists()).toBe(true)
     } finally {
       wrapper.unmount()
     }
@@ -685,7 +607,7 @@ describe('modular home integration', () => {
           await wrapper.get('.app-rail [aria-label="数据概览"]').trigger('click')
           await flushPromises()
         }
-        wrapper.get<HTMLTextAreaElement>('.markdown-editor').element.focus()
+        wrapper.get<HTMLElement>('.markdown-editor').element.focus()
         await wrapper.vm.$nextTick()
         expect(activeIds()).toEqual(['editor'])
         const day = wrapper.get<HTMLButtonElement>(
@@ -700,7 +622,7 @@ describe('modular home integration', () => {
         await day.trigger('click')
         await flushPromises()
         expect(invoke).toHaveBeenCalledWith('read_entry', { date: targetDocument.date, format: 'md' })
-        expect(wrapper.get('.markdown-editor').attributes('disabled')).toBeDefined()
+        expect(wrapper.get('.markdown-editor').attributes('contenteditable')).toBe('false')
         expect(activeIds()).toEqual(['calendar'])
 
         if (lastClicked === 'overview') {
@@ -713,8 +635,8 @@ describe('modular home integration', () => {
 
         completeRead(targetDocument)
         await flushPromises()
-        const editor = wrapper.get<HTMLTextAreaElement>('.markdown-editor').element
-        expect(editor.value).toBe(targetDocument.content)
+        const editor = wrapper.get<HTMLElement>('.markdown-editor').element
+        expect(editor.textContent).toBe(targetDocument.content)
         expect(document.activeElement).not.toBe(editor)
         expect(activeIds()).toEqual([lastClicked])
 
@@ -753,45 +675,7 @@ describe('modular home integration', () => {
     }
   })
 
-  it('docks the preview against the editor and chooses the other side after the layout changes', async () => {
-    const date = dayjs().format('YYYYMMDD')
-    const document = { date, filename: `${date}.md`, format: 'md', content: '测试正文', revision: '1' }
-    invoke.mockImplementation(async (command: string) => {
-      if (command === 'list_entries') return [document]
-      if (command === 'read_entry') return document
-      return commandResult(command)
-    })
-    let editorRect = new DOMRect(500, 100, window.innerWidth - 508, 600)
-    const original = HTMLElement.prototype.getBoundingClientRect
-    const rect = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (
-      this: HTMLElement,
-    ) {
-      return this.dataset.moduleId === 'editor' ? editorRect : original.call(this)
-    })
-    const wrapper = await openDemoWorkspace()
-    try {
-      const toggle = wrapper.get('.editor-body-tools [aria-label="日报预览"]')
-      await toggle.trigger('click')
-      await flushPromises()
-      let preview = wrapper.get<HTMLElement>('.journal-preview-window').element
-      expect(parseFloat(preview.style.left)).toBe(8)
-      expect(parseFloat(preview.style.width)).toBe(492)
-      expect(parseFloat(preview.style.top)).toBe(editorRect.y)
-      expect(parseFloat(preview.style.left) + parseFloat(preview.style.width)).toBe(editorRect.x)
-      await toggle.trigger('click')
-      editorRect = new DOMRect(8, 100, 400, 600)
-      await toggle.trigger('click')
-      await flushPromises()
-      preview = wrapper.get<HTMLElement>('.journal-preview-window').element
-      expect(parseFloat(preview.style.left)).toBe(editorRect.right)
-      expect(parseFloat(preview.style.width)).toBe(520)
-    } finally {
-      wrapper.unmount()
-      rect.mockRestore()
-    }
-  })
-
-  it('toggles a floating journal preview from the editor and renders unsaved changes immediately', async () => {
+  it('toggles a split preview inside the journal without adding modules or changing the layout', async () => {
     const date = dayjs().format('YYYYMMDD')
     const document = { date, filename: `${date}.md`, format: 'md', content: '# 初始标题', revision: '1' }
     invoke.mockImplementation(async (command: string) => {
@@ -800,79 +684,215 @@ describe('modular home integration', () => {
       return commandResult(command)
     })
     const wrapper = await openDemoWorkspace()
-    expect(wrapper.find('.app-rail [aria-label="Markdown 预览"]').exists()).toBe(false)
-    const trigger = wrapper.get('.editor-body-tools [aria-label="日报预览"]')
-    expect(trigger.attributes('disabled')).toBeUndefined()
-    await trigger.trigger('click')
-    await flushPromises()
-    const preview = wrapper.get('.markdown-preview-module')
-    expect(preview.get('.journal-prose').text()).toContain('初始标题')
-    expect(wrapper.find('.markdown-editor').isVisible()).toBe(true)
-    expect(wrapper.findAll('.module-panel')).toHaveLength(2)
-    expect(invoke.mock.calls.some(([command]) => command === 'save_ui_preferences')).toBe(false)
-    expect(wrapper.get('.journal-preview-window').attributes('aria-modal')).toBe('false')
+    try {
+      const journal = wrapper.get('[data-module-id="editor"]')
+      expect(wrapper.find('.app-rail [aria-label="日报预览"]').exists()).toBe(false)
+      expect(journal.get('.markdown-editor').isVisible()).toBe(true)
+      expect(journal.get('.markdown-preview').isVisible()).toBe(false)
+      const toggle = journal.get('.editor-body-tools .journal-split-toggle')
+      await toggle.trigger('click')
+      expect(journal.get('.editor-body').classes()).toContain('is-split-preview')
+      expect(journal.get('.markdown-editor').isVisible()).toBe(true)
+      expect(journal.get('.markdown-preview').isVisible()).toBe(true)
+      await replaceRichMarkdown(wrapper, '# 未保存标题\n\n**实时草稿**')
+      expect(journal.get('.markdown-editor h1').text()).toBe('未保存标题')
+      expect(journal.get('.markdown-editor strong').text()).toBe('实时草稿')
+      expect(journal.get('.markdown-preview strong').text()).toBe('实时草稿')
+      expect(invoke.mock.calls.some(([command]) => command === 'save_entry')).toBe(false)
+      for (let index = 0; index < 5; index++) await toggle.trigger('click')
+      expect(journal.get('.markdown-editor').isVisible()).toBe(true)
+      expect(journal.get('.markdown-preview').isVisible()).toBe(false)
+      expect(wrapper.findAll('.module-panel')).toHaveLength(2)
+      expect(invoke.mock.calls.some(([command]) => command === 'save_ui_preferences')).toBe(false)
+      await journal.get('.module-maximize-button').trigger('click')
+      await toggle.trigger('click')
+      expect(journal.classes()).toContain('is-maximized')
+      expect(journal.get('.markdown-preview').isVisible()).toBe(true)
+      expect(wrapper.findAll('.module-panel')).toHaveLength(2)
+    } finally {
+      wrapper.unmount()
+    }
+  })
 
-    await wrapper
-      .get('.markdown-editor')
-      .setValue('# 未保存的标题\n\n**实时草稿**\n\n| 项目 | 状态 |\n| --- | --- |\n| 预览 | 更新 |')
-    expect(preview.get('.journal-prose').text()).toContain('未保存的标题')
-    expect(preview.get('.journal-prose strong').text()).toBe('实时草稿')
-    expect(preview.get('.journal-prose table').text()).toContain('更新')
-    expect(invoke.mock.calls.some(([command]) => command === 'save_entry')).toBe(false)
-
-    const input = wrapper.get<HTMLTextAreaElement>('.markdown-editor')
-    const previewViewport = preview.get<HTMLElement>('.markdown-preview-module-content').element
-    Object.defineProperties(input.element, {
-      clientWidth: { value: 300 },
-      clientHeight: { value: 200 },
-      scrollHeight: { value: 1000 },
+  it('renders editable Markdown tables and saves their edits before switching dates', async () => {
+    const current = dayjs()
+    const other = current.startOf('month').date(current.date() === 5 ? 6 : 5)
+    const date = current.format('YYYYMMDD')
+    const original = '## 工作记录\n\n| 项目 | 内容 |\n| --- | --- |\n| 日报 | 原始内容 |'
+    const documents = new Map<string, Document>([
+      [date, { date, filename: `${date}.md`, format: 'md', content: original, revision: '1' }],
+      [
+        other.format('YYYYMMDD'),
+        {
+          date: other.format('YYYYMMDD'),
+          filename: `${other.format('YYYYMMDD')}.md`,
+          format: 'md',
+          content: '# 另一天',
+          revision: '1',
+        },
+      ],
+    ])
+    invoke.mockImplementation(async (command: string, args?: Record<string, unknown>) => {
+      if (command === 'list_entries') return [...documents.values()]
+      if (command === 'read_entry') return documents.get(String(args!.date))
+      if (command === 'save_entry') {
+        const saved = { ...documents.get(String(args!.date))!, content: String(args!.content), revision: '2' }
+        documents.set(saved.date, saved)
+        return saved
+      }
+      return commandResult(command)
     })
-    Object.defineProperties(previewViewport, { clientHeight: { value: 200 }, scrollHeight: { value: 1600 } })
-    input.element.scrollTop = 400
-    await input.trigger('scroll')
-    expect(previewViewport.scrollTop).toBe(700)
-    input.element.scrollTop = 800
-    await input.trigger('scroll')
-    expect(previewViewport.scrollTop).toBe(1400)
-
-    await trigger.trigger('click')
-    await flushPromises()
-    expect(wrapper.find('.journal-preview-window').exists()).toBe(false)
-    await trigger.trigger('click')
-    await flushPromises()
-    expect(wrapper.findAll('.markdown-preview-module')).toHaveLength(1)
-    await wrapper.get('[aria-label="关闭日报预览"]').trigger('click')
-    await flushPromises()
-    expect(wrapper.find('.journal-preview-window').exists()).toBe(false)
-    expect(trigger.attributes('aria-pressed')).toBe('false')
-    wrapper.unmount()
-  })
-
-  it('enables preview for an empty Markdown draft and disables it again after switching to TXT', async () => {
     const wrapper = await openDemoWorkspace()
-    const trigger = wrapper.get('.editor-body-tools [aria-label="日报预览"]')
-    expect(trigger.attributes('disabled')).toBeDefined()
-    await trigger.trigger('click')
-    expect(wrapper.find('.markdown-preview-module').exists()).toBe(false)
+    try {
+      const journal = wrapper.get('[data-module-id="editor"]')
+      expect(journal.get('.markdown-editor').attributes('contenteditable')).toBe('true')
+      expect(journal.get('.markdown-editor h2').text()).toBe('工作记录')
+      expect(journal.findAll('.markdown-editor th').map((cell) => cell.text())).toEqual(['项目', '内容'])
+      expect(journal.findAll('.markdown-editor td').map((cell) => cell.text())).toEqual(['日报', '原始内容'])
+      expect(invoke.mock.calls.some(([command]) => command === 'save_entry')).toBe(false)
 
-    await wrapper.get('.format-toggle').trigger('click')
-    await flushPromises()
-    expect(wrapper.get('.format-toggle').text()).toBe('MD')
-    expect(trigger.attributes('disabled')).toBeUndefined()
-    await trigger.trigger('click')
-    await flushPromises()
-    expect(wrapper.get('.markdown-preview-module-empty').text()).toContain('编辑内容后')
+      await journal.get('.journal-split-toggle').trigger('click')
+      await replaceRichMarkdown(wrapper, original.replace('原始内容', '更新内容'))
+      expect(journal.findAll('.markdown-editor td').map((cell) => cell.text())).toEqual(['日报', '更新内容'])
+      expect(journal.get('.markdown-preview table').text()).toContain('更新内容')
+      await wrapper.get(`.calendar-panel .day-cell[aria-label^="${other.format('YYYY年M月D日 ')}"]`).trigger('click')
+      await flushPromises()
 
-    await wrapper.get('.format-toggle').trigger('click')
-    await flushPromises()
-    expect(wrapper.get('.format-toggle').text()).toBe('TXT')
-    expect(trigger.attributes('disabled')).toBeDefined()
-    expect(wrapper.find('.journal-preview-window').exists()).toBe(false)
-    expect(invoke.mock.calls.some(([command]) => command === 'create_entry')).toBe(false)
-    wrapper.unmount()
+      expect(invoke).toHaveBeenCalledWith(
+        'save_entry',
+        expect.objectContaining({ date, format: 'md', content: expect.stringContaining('更新内容') }),
+      )
+      const saved = documents.get(date)!.content
+      expect(saved).toContain('## 工作记录')
+      expect(saved).toMatch(/\|\s*项目\s*\|\s*内容\s*\|/)
+      expect(saved).not.toContain('<table')
+      expect(journal.get('.markdown-editor h1').text()).toBe('另一天')
+
+      await wrapper.get(`.calendar-panel .day-cell[aria-label^="${current.format('YYYY年M月D日 ')}"]`).trigger('click')
+      await flushPromises()
+      expect(journal.findAll('.markdown-editor td').map((cell) => cell.text())).toEqual(['日报', '更新内容'])
+      expect(journal.get('.markdown-preview table').text()).toContain('更新内容')
+    } finally {
+      wrapper.unmount()
+    }
   })
 
-  it('follows the editor when switching dates and displays the selected range in the floating window', async () => {
+  it.each(['md', 'txt'] as const)(
+    'synchronizes the two %s panes in both directions without scroll echoes',
+    async (format) => {
+      const current = dayjs()
+      const other = current.startOf('month').date(current.date() === 5 ? 6 : 5)
+      const documents = [current, other].map((date) => ({
+        date: date.format('YYYYMMDD'),
+        filename: `${date.format('YYYYMMDD')}.${format}`,
+        format,
+        content: '# 标题\n\n' + Array.from({ length: 80 }, (_, index) => `第 ${index} 段`).join('\n\n'),
+        revision: '1',
+      }))
+      invoke.mockImplementation(async (command: string, args?: { date: string }) => {
+        if (command === 'list_entries') return documents
+        if (command === 'read_entry') return documents.find((document) => document.date === args?.date)
+        return commandResult(command)
+      })
+      const wrapper = await openDemoWorkspace()
+      try {
+        const journal = wrapper.get('[data-module-id="editor"]')
+        await journal.get('.journal-split-toggle').trigger('click')
+        const scrollSelector = format === 'md' ? '.rich-markdown-scroll' : '.markdown-editor'
+        const input = journal.get<HTMLElement>(scrollSelector)
+        const preview = journal.get<HTMLElement>('.markdown-preview')
+        Object.defineProperties(input.element, {
+          clientWidth: { value: 300 },
+          clientHeight: { value: 200 },
+          scrollHeight: { value: 1000 },
+        })
+        Object.defineProperties(preview.element, { clientHeight: { value: 200 }, scrollHeight: { value: 1600 } })
+        input.element.scrollTop = 400
+        await input.trigger('scroll')
+        expect(preview.element.scrollTop).toBe(700)
+        await preview.trigger('scroll')
+        await preview.trigger('scroll')
+        expect(input.element.scrollTop).toBe(400)
+        preview.element.scrollTop = 1050
+        await preview.trigger('scroll')
+        expect(input.element.scrollTop).toBe(600)
+        await input.trigger('scroll')
+        expect(preview.element.scrollTop).toBe(1050)
+        input.element.scrollTop = 800
+        await input.trigger('scroll')
+        expect(preview.element.scrollTop).toBe(1400)
+        preview.element.scrollTop = 0
+        await preview.trigger('scroll')
+        expect(journal.get<HTMLElement>(scrollSelector).element.scrollTop).toBe(0)
+        preview.element.scrollTop = 700
+        await preview.trigger('scroll')
+        await wrapper.get(`.calendar-panel .day-cell[aria-label^="${other.format('YYYY年M月D日 ')}"]`).trigger('click')
+        await flushPromises()
+        expect(journal.get<HTMLElement>(scrollSelector).element.scrollTop).toBe(0)
+        expect(preview.element.scrollTop).toBe(0)
+        expect(journal.get('.markdown-editor').isVisible()).toBe(true)
+        expect(journal.get('.markdown-preview').isVisible()).toBe(true)
+        expect(wrapper.findAll('.module-panel')).toHaveLength(2)
+      } finally {
+        wrapper.unmount()
+      }
+    },
+  )
+
+  it.each([true, false])(
+    'merges old standalone previews into one journal when an editor exists=%s',
+    async (editorExists) => {
+      invoke.mockImplementation(async (command: string) =>
+        command === 'load_ui_preferences'
+          ? {
+              layout: {
+                type: 'split',
+                direction: 'row',
+                ratio: 0.5,
+                first: leaf('editor-9'),
+                second: editorExists ? initialLayout.layout : leaf('calendar'),
+              },
+            }
+          : commandResult(command),
+      )
+      const wrapper = await openDemoWorkspace()
+      try {
+        expect(wrapper.findAll('.module-panel')).toHaveLength(2)
+        expect(wrapper.find('[data-module-id="editor-9"]').exists()).toBe(false)
+        expect(wrapper.get('[data-module-id="editor"] .markdown-editor').isVisible()).toBe(true)
+        expect(wrapper.find('.app-rail [aria-label="日报预览"]').exists()).toBe(false)
+        await wrapper.get('[data-module-id="editor"] .journal-split-toggle').trigger('click')
+        expect(wrapper.get('[data-module-id="editor"] .markdown-preview').isVisible()).toBe(true)
+      } finally {
+        wrapper.unmount()
+      }
+    },
+  )
+
+  it('keeps empty and TXT drafts editable while previewing and preserves the split when switching formats', async () => {
+    const wrapper = await openDemoWorkspace()
+    try {
+      const journal = wrapper.get('[data-module-id="editor"]')
+      await journal.get('.journal-split-toggle').trigger('click')
+      expect(journal.get('.markdown-editor').isVisible()).toBe(true)
+      expect(journal.get('.markdown-preview').isVisible()).toBe(true)
+      await journal.get('.format-toggle').trigger('click')
+      await flushPromises()
+      expect(journal.get('.format-toggle').text()).toBe('MD')
+      await journal.get('.format-toggle').trigger('click')
+      await flushPromises()
+      expect(journal.get('.format-toggle').text()).toBe('TXT')
+      expect(journal.get('.journal-split-toggle').attributes('aria-pressed')).toBe('true')
+      await journal.get('.markdown-editor').setValue('# 纯文本 <b>标签</b>')
+      expect(journal.get('.markdown-preview .range-text').text()).toBe('# 纯文本 <b>标签</b>')
+      expect(journal.find('.markdown-preview b').exists()).toBe(false)
+      expect(invoke.mock.calls.some(([command]) => command === 'create_entry')).toBe(false)
+    } finally {
+      wrapper.unmount()
+    }
+  })
+
+  it('keeps a split range inside the journal and synchronizes its original and rendered contents', async () => {
     const current = dayjs()
     const first = current.startOf('month').date(current.date() === 5 ? 6 : 5)
     const last = first.add(1, 'day')
@@ -886,39 +906,40 @@ describe('modular home integration', () => {
       return commandResult(command)
     })
     const wrapper = await openDemoWorkspace()
-    const trigger = wrapper.get('.editor-body-tools [aria-label="日报预览"]')
-    await trigger.trigger('click')
-    await flushPromises()
-    expect(wrapper.get('.markdown-preview-module-content').text()).toContain('当前日期')
-
-    const cells = wrapper.findAll('.calendar-panel .day-cell')
-    const start = cells.find((cell) => cell.attributes('aria-label')?.startsWith(first.format('YYYY年M月D日 ')))!
-    const end = cells.find((cell) => cell.attributes('aria-label')?.startsWith(last.format('YYYY年M月D日 ')))!
-    await start.trigger('click')
-    await flushPromises()
-    expect(wrapper.get('.markdown-preview-module-content').text()).toContain('另一天的内容')
-    expect(wrapper.get('.markdown-preview-module-heading').text()).toContain(`${first.format('YYYYMMDD')}.md`)
-
-    await start.trigger('pointerdown', { button: 0 })
-    await end.trigger('pointerenter')
-    window.dispatchEvent(new Event('pointerup'))
-    await flushPromises()
-    expect(wrapper.get('.range-overview [aria-label="日报预览"]').attributes('disabled')).toBeUndefined()
-    expect(wrapper.get('.markdown-preview-module-content').text()).toContain('另一天的内容')
-    expect(wrapper.get('.markdown-preview-module-heading').text()).toContain('2 天 · 1 篇日报')
-    const rangeBody = wrapper.get<HTMLElement>('.range-overview-body')
-    const previewViewport = wrapper.get<HTMLElement>('.markdown-preview-module-content').element
-    Object.defineProperties(rangeBody.element, { clientHeight: { value: 200 }, scrollHeight: { value: 1000 } })
-    Object.defineProperties(previewViewport, { clientHeight: { value: 200 }, scrollHeight: { value: 1600 } })
-    rangeBody.element.scrollTop = 400
-    await rangeBody.trigger('scroll')
-    expect(previewViewport.scrollTop).toBe(700)
-
-    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
-    await flushPromises()
-    expect(wrapper.get('.editor-body-tools [aria-label="日报预览"]').attributes('disabled')).toBeUndefined()
-    expect(wrapper.get('.markdown-preview-module-content').text()).toContain('另一天的内容')
-    wrapper.unmount()
+    try {
+      const journal = wrapper.get('[data-module-id="editor"]')
+      await journal.get('.journal-split-toggle').trigger('click')
+      const start = wrapper.get(`.calendar-panel .day-cell[aria-label^="${first.format('YYYY年M月D日 ')}"]`)
+      const end = wrapper.get(`.calendar-panel .day-cell[aria-label^="${last.format('YYYY年M月D日 ')}"]`)
+      await start.trigger('click')
+      await flushPromises()
+      expect(journal.get('.markdown-preview').text()).toContain('另一天的内容')
+      await start.trigger('pointerdown', { button: 0 })
+      await end.trigger('pointerenter')
+      window.dispatchEvent(new Event('pointerup'))
+      await flushPromises()
+      const raw = journal.get<HTMLElement>('.range-overview-body:not(.range-preview-pane)')
+      const rendered = journal.get<HTMLElement>('.range-preview-pane')
+      expect(raw.get('.range-text').text()).toContain('# 另一天的内容')
+      expect(rendered.get('.journal-prose').text()).toContain('另一天的内容')
+      Object.defineProperties(raw.element, { clientHeight: { value: 200 }, scrollHeight: { value: 1000 } })
+      Object.defineProperties(rendered.element, { clientHeight: { value: 200 }, scrollHeight: { value: 1600 } })
+      raw.element.scrollTop = 400
+      await raw.trigger('scroll')
+      expect(rendered.element.scrollTop).toBe(700)
+      rendered.element.scrollTop = 350
+      await rendered.trigger('scroll')
+      expect(raw.element.scrollTop).toBe(200)
+      await raw.trigger('scroll')
+      expect(rendered.element.scrollTop).toBe(350)
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
+      await flushPromises()
+      expect(journal.get('.markdown-editor').isVisible()).toBe(true)
+      expect(journal.get('.markdown-preview').isVisible()).toBe(true)
+      expect(wrapper.findAll('.module-panel')).toHaveLength(2)
+    } finally {
+      wrapper.unmount()
+    }
   })
 
   it.each(['missing', 'blank'])('silently disables summary actions for %s journal content', async (kind) => {
@@ -1093,7 +1114,7 @@ describe('modular home integration', () => {
     expect(wrapper.findAll('.module-panel')).toHaveLength(2)
     // 恢复的是保存的单列顺序，而不是默认的 calendar/editor。
     const titles = wrapper.findAll('.module-panel-title').map((title) => title.text())
-    expect(titles).toEqual(['日报编辑', '日历'])
+    expect(titles).toEqual(['编辑', '日历'])
     expect(wrapper.find('.module-gutter.is-column').exists()).toBe(true)
     expect(wrapper.find('.app-rail [aria-label="布局"]').exists()).toBe(true)
     wrapper.unmount()
@@ -1112,6 +1133,70 @@ describe('modular home integration', () => {
     expect(wrapper.find('.excel-module').exists()).toBe(true)
     expect(wrapper.find('.app-rail [aria-label="总结"]').attributes('aria-pressed')).toBe('true')
     wrapper.unmount()
+  })
+
+  it('flushes edits before tree rename and clears the active journal after confirmed file deletion', async () => {
+    const date = dayjs().format('YYYYMMDD')
+    const year = date.slice(0, 4)
+    let filename = `${date}.md`
+    let content = '# original\n'
+    let deleted = false
+    const events: string[] = []
+    invoke.mockImplementation(async (command: string, args?: Record<string, unknown>) => {
+      if (command === 'load_ui_preferences')
+        return {
+          skin: 'default',
+          layout: { type: 'split', direction: 'row', ratio: 0.5, first: leaf('directory'), second: leaf('editor') },
+        }
+      if (command === 'list_entries') return deleted ? [] : [{ date, filename, format: 'md' }]
+      if (command === 'list_workspace_files')
+        return [
+          { path: year, name: year, isDir: true, size: 0 },
+          ...(deleted
+            ? []
+            : [{ path: `${year}/${filename}`, name: filename, isDir: false, size: 20, journalDate: date }]),
+        ]
+      if (command === 'read_entry') return { date, filename, format: 'md', content, revision: content }
+      if (command === 'save_entry') {
+        events.push('save')
+        content = String(args!.content)
+        return { date, filename, format: 'md', content, revision: content }
+      }
+      if (command === 'preview_workspace_file_change') {
+        events.push('preview')
+        return { token: 'files-snapshot', fileCount: 1, directoryCount: 0, journalCount: 1, settingsChanged: false }
+      }
+      if (command === 'apply_workspace_file_change') {
+        events.push('apply')
+        const request = args!.request as { action: string; name: string }
+        if (request.action === 'rename') filename = request.name
+        else if (request.action === 'delete') deleted = true
+        return { files: cloneFileSettings(), path: `${year}/${filename}` }
+      }
+      return commandResult(command)
+    })
+    const wrapper = await openDemoWorkspace()
+    try {
+      await replaceRichMarkdown(wrapper, '# edited before rename')
+      await wrapper.get(`[data-file-path="${year}/${filename}"]`).trigger('keydown', { key: 'F2' })
+      await wrapper.get('.directory-new-node-name').setValue('重命名.md')
+      await wrapper.get('.directory-new-node-name').trigger('keydown', { key: 'Enter' })
+      await flushPromises()
+      expect(events.slice(0, 3)).toEqual(['save', 'preview', 'apply'])
+      expect(content).toContain('edited before rename')
+      expect(wrapper.get('.directory-item.is-current .directory-item-name').text()).toBe('重命名.md')
+      expect(wrapper.getComponent(RichMarkdownEditor).props('content')).toContain('edited before rename')
+      await wrapper.get(`[data-file-path="${year}/重命名.md"]`).trigger('keydown', { key: 'Delete' })
+      await flushPromises()
+      await wrapper.get('.directory-delete-confirm').trigger('click')
+      await flushPromises()
+      expect(deleted).toBe(true)
+      expect(wrapper.getComponent(JournalEditor).props('content')).toBe('')
+      expect(wrapper.findAll('.directory-item')).toHaveLength(0)
+      expect(invoke.mock.calls.some(([command]) => command === 'create_entry')).toBe(false)
+    } finally {
+      wrapper.unmount()
+    }
   })
 
   it('adds the directory module and switches dates from the file tree', async () => {
@@ -1258,12 +1343,12 @@ describe('modular home integration', () => {
 
       const range = wrapper.find('.range-overview')
       expect(range.find('.range-heading').text()).toBe(`${first.format('M 月 D 日')} – ${last.format('D 日')}`)
-      expect(range.findAll('button').map((button) => button.attributes('aria-label'))).toEqual(['预览', '日报预览'])
-      const preview = range.find('.editor-body-tools .preview-toggle')
+      expect(range.findAll('button').map((button) => button.attributes('aria-label'))).toEqual(['左右分栏预览'])
+      const preview = range.find('.editor-body-tools .journal-split-toggle')
       expect(preview.text()).toBe('')
       await preview.trigger('click')
       expect(preview.attributes('aria-pressed')).toBe('true')
-      expect(preview.attributes('aria-label')).toBe('查看原文')
+      expect(preview.attributes('aria-label')).toBe('收起日报预览')
       expect(range.findAll('.journal-prose')).toHaveLength(2)
       await preview.trigger('click')
       expect(preview.attributes('aria-pressed')).toBe('false')
@@ -1403,6 +1488,129 @@ describe('modular home integration', () => {
     }
   })
 
+  it('applies loaded file rules after slow feature settings finish without invalidating the load', async () => {
+    let excelLoads = 0
+    let fileLoads = 0
+    let finishExcel!: () => void
+    const custom = cloneFileSettings()
+    custom.journal.filenameTemplate = '加载_{date}'
+    custom.excel.directory = '报表'
+    invoke.mockImplementation(async (command: string, args?: { settings: WorkspaceSettings }) => {
+      if (command === 'load_excel_settings' && ++excelLoads === 3) {
+        return new Promise((resolve) => {
+          finishExcel = () => resolve(commandResult(command))
+        })
+      }
+      if (command === 'load_file_settings') return ++fileLoads === 1 ? cloneFileSettings() : custom
+      if (command === 'save_workspace_settings') return args!.settings
+      return commandResult(command)
+    })
+    const wrapper = await openDemoWorkspace()
+    try {
+      await wrapper.get('.app-rail [aria-label="设置"]').trigger('click')
+      await flushPromises()
+      expect(finishExcel).toBeTypeOf('function')
+      finishExcel()
+      await flushPromises()
+      expect(wrapper.find('.settings-save-error').exists()).toBe(false)
+      await wrapper.get('[aria-controls="settings-panel-appearance"]').trigger('click')
+      await wrapper.get('#settings-panel-appearance [aria-label="放大字体"]').trigger('click')
+      await wrapper.get('.settings-savebar .settings-save-button').trigger('click')
+      await flushPromises()
+      expect(invoke).toHaveBeenCalledWith('save_workspace_settings', {
+        workspacePath: DEMO_WORKSPACE,
+        settings: expect.objectContaining({ files: custom }),
+      })
+      expect(wrapper.find('.settings-save-error').exists()).toBe(false)
+    } finally {
+      wrapper.unmount()
+    }
+  })
+
+  it.each([false, true])(
+    'asks whether existing filenames should change and saves the chosen decision: %s',
+    async (rename) => {
+      const plan: FileChangesPlan = {
+        token: 'approved-snapshot',
+        directories: [],
+        warnings: [],
+        filenames: [
+          { feature: 'journal', label: '日报', from: '{date}', to: '工作_{date}', fileCount: 2, unrecognizedCount: 0 },
+        ],
+      }
+      invoke.mockImplementation(async (command: string, args?: { settings: WorkspaceSettings }) => {
+        if (command === 'load_file_settings') return cloneFileSettings()
+        if (command === 'preview_file_settings') return plan
+        if (command === 'save_workspace_settings') return args!.settings
+        return commandResult(command)
+      })
+      const wrapper = await openDemoWorkspace()
+      try {
+        await wrapper.get('.app-rail [aria-label="设置"]').trigger('click')
+        await flushPromises()
+        await wrapper.get('[aria-controls="settings-panel-directories"]').trigger('click')
+        await wrapper.get('#journal-filename-template').setValue('工作_{date}')
+        expect(wrapper.get<HTMLButtonElement>('.settings-savebar .settings-save-button').element.disabled).toBe(false)
+        await wrapper.get('.settings-savebar .settings-save-button').trigger('click')
+        await flushPromises()
+        expect(invoke.mock.calls.map(([command]) => command)).toContain('preview_file_settings')
+        expect(wrapper.get<HTMLDialogElement>('.file-changes-dialog').element.open).toBe(true)
+        expect(invoke.mock.calls.some(([command]) => command === 'save_workspace_settings')).toBe(false)
+        if (rename) await wrapper.findAll('.file-change-choices input')[1]!.setValue(true)
+        await wrapper.get('.file-changes-dialog md-filled-button').trigger('click')
+        await flushPromises()
+        expect(invoke).toHaveBeenCalledWith('save_workspace_settings', {
+          workspacePath: DEMO_WORKSPACE,
+          settings: expect.objectContaining({
+            files: expect.objectContaining({ journal: { directory: '', filenameTemplate: '工作_{date}' } }),
+          }),
+          fileChanges: {
+            token: 'approved-snapshot',
+            renameExisting: { journal: rename, excel: false, summary: false },
+          },
+        })
+        expect(wrapper.get<HTMLDialogElement>('.file-changes-dialog').element.open).toBe(false)
+        expect(wrapper.find('.settings-save-error').exists()).toBe(false)
+      } finally {
+        wrapper.unmount()
+      }
+    },
+  )
+
+  it('cancels a populated-directory change without saving or reporting an error, and preserves the draft', async () => {
+    invoke.mockImplementation(async (command: string) => {
+      if (command === 'load_file_settings') return cloneFileSettings()
+      if (command === 'preview_file_settings')
+        return {
+          token: 'directory-snapshot',
+          filenames: [],
+          warnings: [],
+          directories: [
+            { feature: 'excel', label: 'Excel 报告', from: 'excel', to: '表格', fileCount: 0, targetFileCount: 3 },
+          ],
+        }
+      return commandResult(command)
+    })
+    const wrapper = await openDemoWorkspace()
+    try {
+      await wrapper.get('.app-rail [aria-label="设置"]').trigger('click')
+      await flushPromises()
+      await wrapper.get('[aria-controls="settings-panel-directories"]').trigger('click')
+      await wrapper.get('#excel-save-directory').setValue('表格')
+      await wrapper.get('.settings-savebar .settings-save-button').trigger('click')
+      await flushPromises()
+      expect(wrapper.get('.file-changes-dialog').text()).toContain('目标目录已有 3 个文件')
+      await wrapper.get('.file-changes-dialog md-text-button').trigger('click')
+      await flushPromises()
+      expect(invoke.mock.calls.some(([command]) => command === 'save_workspace_settings')).toBe(false)
+      expect(wrapper.get<HTMLInputElement>('#excel-save-directory').element.value).toBe('表格')
+      expect(wrapper.find('.settings-save-error').exists()).toBe(false)
+      expect(wrapper.get<HTMLButtonElement>('.settings-savebar .settings-save-button').element.disabled).toBe(false)
+    } finally {
+      wrapper.unmount()
+    }
+  })
+
   it('saves the settings draft once and waits for success before returning home from the rail', async () => {
     let finishSave!: () => void
     invoke.mockImplementation(async (command: string, args?: { settings: WorkspaceSettings }) => {
@@ -1424,7 +1632,9 @@ describe('modular home integration', () => {
     await flushPromises()
     expect(invoke).toHaveBeenCalledWith('save_workspace_settings', {
       workspacePath: DEMO_WORKSPACE,
-      settings: expect.objectContaining({ appearance: { scale: 110, rail: 'right' } }),
+      settings: expect.objectContaining({
+        appearance: { scale: 110, rail: 'right', railHoldDelayMs: 2000, railHoldDurationMs: 2000 },
+      }),
     })
     expect(wrapper.find('.settings-viewport').attributes('inert')).toBeUndefined()
     expect((settings.element as HTMLButtonElement).disabled).toBe(true)
@@ -1474,7 +1684,63 @@ describe('modular home integration', () => {
     wrapper.unmount()
   })
 
-  it('allows closing every module except the last one', async () => {
+  it('closes modules from the rail menu, including the last module, and reopens from an empty layout', async () => {
+    const wrapper = await openDemoWorkspace()
+    try {
+      const calendar = wrapper.get('.app-rail [aria-label="日历"]')
+      await calendar.trigger('contextmenu', { clientX: 100, clientY: 200 })
+      await flushPromises()
+      expect(wrapper.findAll('.module-panel')).toHaveLength(2)
+      expect(invoke.mock.calls.some(([command]) => command === 'save_ui_preferences')).toBe(false)
+      await wrapper.get('.module-context-menu [role="menuitem"]').trigger('click')
+      await flushPromises()
+      expect(wrapper.find('[data-module-id="calendar"]').exists()).toBe(false)
+      expect(savedIds()).toEqual(['editor'])
+      expect(calendar.attributes('aria-pressed')).toBe('false')
+      expect(wrapper.find('.module-context-menu').exists()).toBe(false)
+
+      await calendar.trigger('contextmenu')
+      await flushPromises()
+      expect(wrapper.get('.module-context-menu [role="menuitem"]').attributes('disabled')).toBeDefined()
+      await wrapper.get('.module-context-menu').trigger('keydown', { key: 'Escape' })
+      await wrapper.get('.app-rail [aria-label="编辑"]').trigger('contextmenu')
+      await flushPromises()
+      const lastItem = wrapper.get('.module-context-menu [role="menuitem"]')
+      expect(lastItem.attributes('disabled')).toBeUndefined()
+      await lastItem.trigger('click')
+      await flushPromises()
+      expect(savedIds()).toEqual([])
+      expect(savedPreferences().layout).toEqual({ type: 'empty' })
+      expect(wrapper.findAll('.module-panel')).toHaveLength(0)
+      expect(wrapper.get('.module-board-empty').text()).toContain('暂无打开的模块')
+      await wrapper.get('.app-rail [aria-label="编辑"]').trigger('click')
+      await flushPromises()
+      expect(savedIds()).toEqual(['editor'])
+
+      await calendar.trigger('click')
+      await flushPromises()
+      expect(savedIds()).toEqual(['editor', 'calendar'])
+      expect(wrapper.get('.module-panel.is-active').attributes('data-module-id')).toBe('calendar')
+
+      await wrapper.get('[data-module-id="calendar"] .module-maximize-button').trigger('click')
+      await calendar.trigger('contextmenu')
+      await flushPromises()
+      await wrapper.get('.module-context-menu').trigger('keydown', { key: 'Escape' })
+      expect(wrapper.find('.module-context-menu').exists()).toBe(false)
+      expect(wrapper.find('.module-panel.is-maximized').exists()).toBe(true)
+      await calendar.trigger('contextmenu')
+      await flushPromises()
+      await wrapper.get('.module-context-menu [role="menuitem"]').trigger('click')
+      await flushPromises()
+      expect(savedIds()).toEqual(['editor'])
+      expect(wrapper.find('.module-maximize-backdrop').exists()).toBe(false)
+      expect(document.body.classList.contains('is-module-maximized')).toBe(false)
+    } finally {
+      wrapper.unmount()
+    }
+  })
+
+  it('allows closing every module with the title bar buttons', async () => {
     const wrapper = await openDemoWorkspace()
     const calendarPanel = wrapper.findAll('.module-panel').find((panel) => panel.text().includes('日历'))!
     await calendarPanel.find('.module-panel-remove').trigger('click')
@@ -1482,9 +1748,67 @@ describe('modular home integration', () => {
 
     expect(wrapper.findAll('.module-panel')).toHaveLength(1)
     expect(savedIds()).toEqual(['editor'])
-    // 只剩一个模块时关闭按钮消失，不允许把首页清空。
-    expect(wrapper.find('.module-panel-remove').exists()).toBe(false)
+    await wrapper.get('.module-panel-remove').trigger('click')
+    await flushPromises()
+    expect(wrapper.findAll('.module-panel')).toHaveLength(0)
+    expect(savedIds()).toEqual([])
+    expect(wrapper.get('.app-rail [aria-label="编辑"]').attributes('aria-pressed')).toBe('false')
     wrapper.unmount()
+  })
+  it('restores an empty workspace layout and opens the editor from the rail', async () => {
+    invoke.mockImplementation(async (command) =>
+      command === 'load_ui_preferences'
+        ? { layout: { type: 'empty' }, skin: 'default', savedLayouts: [] }
+        : commandResult(command),
+    )
+    const wrapper = await openDemoWorkspace()
+    try {
+      expect(wrapper.findAll('.module-panel')).toHaveLength(0)
+      expect(wrapper.get('.module-board').attributes('data-module-count')).toBe('0')
+      await wrapper.get('.app-rail [aria-label="编辑"]').trigger('click')
+      await flushPromises()
+      expect(savedIds()).toEqual(['editor'])
+      expect(wrapper.find('.module-board-empty').exists()).toBe(false)
+    } finally {
+      wrapper.unmount()
+    }
+  })
+  it('keeps autosaving the current draft after all modules are closed', async () => {
+    invoke.mockImplementation(async (command, args) => {
+      if (command === 'create_entry' || command === 'save_entry')
+        return {
+          date: args!.date,
+          filename: `${args!.date}.md`,
+          format: 'md',
+          content: args!.content,
+          revision: 'saved',
+        }
+      if (command === 'load_database_settings') return { ...DEFAULT_DATABASE_SETTINGS, defaultFormat: 'md' }
+      return commandResult(command)
+    })
+    const wrapper = await openDemoWorkspace()
+    try {
+      await replaceRichMarkdown(wrapper, '关闭模块后继续保存的草稿')
+      for (const button of wrapper.findAll('.module-panel-remove')) {
+        await button.trigger('click')
+        await flushPromises()
+      }
+      expect(wrapper.findAll('.module-panel')).toHaveLength(0)
+      await vi.waitFor(
+        () =>
+          expect(
+            invoke.mock.calls.some(
+              ([command, args]) => command === 'create_entry' && String(args?.content).includes('关闭模块后继续保存'),
+            ),
+          ).toBe(true),
+        { timeout: 1500 },
+      )
+      await wrapper.get('.app-rail [aria-label="编辑"]').trigger('click')
+      await flushPromises()
+      expect(wrapper.getComponent(JournalEditor).props('content')).toContain('关闭模块后继续保存的草稿')
+    } finally {
+      wrapper.unmount()
+    }
   })
 
   it('adds and removes modules and resets the split layout from the right rail', async () => {
@@ -1530,6 +1854,40 @@ describe('modular home integration', () => {
 })
 
 describe('rail side preference', () => {
+  it('edits the two hold sliders as a draft and applies both only after saving', async () => {
+    invoke.mockImplementation(async (command: string, args?: { settings: WorkspaceSettings }) =>
+      command === 'save_workspace_settings' ? args!.settings : commandResult(command),
+    )
+    const wrapper = await openDemoWorkspace()
+    try {
+      await wrapper.get('.app-rail [aria-label="设置"]').trigger('click')
+      await flushPromises()
+      await wrapper.get('[aria-controls="settings-panel-appearance"]').trigger('click')
+      const delay = wrapper.get<HTMLInputElement>('#railHoldDelayMs')
+      const duration = wrapper.get<HTMLInputElement>('#railHoldDurationMs')
+      expect(delay.element.type).toBe('range')
+      expect(delay.element.value).toBe('2')
+      expect(duration.element.value).toBe('2')
+      await delay.setValue('0.7')
+      await duration.setValue('3.8')
+      expect(wrapper.findAll('.rail-hold-slider output').map((output) => output.text())).toEqual(['0.7 秒', '3.8 秒'])
+      expect(wrapper.getComponent({ name: 'AppRail' }).props('holdDelayMs')).toBe(2000)
+      expect(invoke.mock.calls.some(([command]) => command === 'save_workspace_settings')).toBe(false)
+      await wrapper.get('.settings-savebar .settings-save-button').trigger('click')
+      await flushPromises()
+      expect(invoke).toHaveBeenCalledWith('save_workspace_settings', {
+        workspacePath: DEMO_WORKSPACE,
+        settings: expect.objectContaining({
+          appearance: { scale: 100, rail: 'right', railHoldDelayMs: 700, railHoldDurationMs: 3800 },
+        }),
+      })
+      expect(wrapper.getComponent({ name: 'AppRail' }).props('holdDelayMs')).toBe(700)
+      expect(wrapper.getComponent({ name: 'AppRail' }).props('holdDurationMs')).toBe(3800)
+    } finally {
+      wrapper.unmount()
+    }
+  })
+
   it('keeps the rail on the right by default', async () => {
     const wrapper = await openDemoWorkspace()
     expect(wrapper.find('.app-shell').classes()).not.toContain('rail-left')

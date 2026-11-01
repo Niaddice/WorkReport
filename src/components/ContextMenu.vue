@@ -7,7 +7,7 @@ const props = withDefaults(
     x: number
     y: number
     items: ContextMenuItem[]
-    kind?: 'git' | 'text'
+    kind?: 'git' | 'text' | 'module' | 'directory'
     teleportTo?: HTMLElement | string
   }>(),
   { kind: 'text', teleportTo: 'body' },
@@ -17,6 +17,7 @@ const panel = ref<HTMLElement>()
 const left = ref(props.x)
 const top = ref(props.y)
 const ready = ref(false)
+const menuLabels = { git: 'Git 操作', text: '文本操作', module: '模块操作', directory: '文件与目录操作' }
 
 watch(
   () => [props.x, props.y, props.items],
@@ -31,7 +32,8 @@ watch(
     ready.value = true
     await nextTick()
     if (panel.value !== element || !element.isConnected) return
-    element.querySelector<HTMLButtonElement>('button:not(:disabled)')?.focus({ preventScroll: true })
+    const focusTarget = element.querySelector<HTMLButtonElement>('button:not(:disabled)') ?? element
+    focusTarget.focus({ preventScroll: true })
   },
   { immediate: true, flush: 'post' },
 )
@@ -84,9 +86,10 @@ onBeforeUnmount(() => {
     <div
       ref="panel"
       class="app-context-menu"
-      :class="kind === 'git' ? 'git-context-menu' : 'text-context-menu'"
+      :class="`${kind}-context-menu`"
       role="menu"
-      :aria-label="kind === 'git' ? 'Git 操作' : '文本操作'"
+      tabindex="-1"
+      :aria-label="menuLabels[kind]"
       :style="{ left: `${left}px`, top: `${top}px`, visibility: ready ? 'visible' : 'hidden' }"
       @keydown="onKeydown"
       @contextmenu.prevent

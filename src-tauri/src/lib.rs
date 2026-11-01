@@ -12,6 +12,10 @@ mod summary;
 mod ui;
 mod updates;
 mod workspace;
+mod file_rules;
+mod directory_ops;
+mod workspace_document;
+mod file_migration;
 
 use std::{fs, io::Write, sync::{Arc, Mutex}};
 use tauri::{Emitter, Manager, State};
@@ -98,6 +102,7 @@ fn stored_settings_at(
     }
     let legacy = legacy_config_dir(app)?;
     Ok(settings::StoredSettings {
+        files: None,
         // 旧版应用配置目录里没有界面布局，首次保存时留空，由界面回退默认布局。
         ui: None,
         appearance: appearance::load(&legacy)?,
@@ -185,6 +190,38 @@ async fn list_entries(state: State<'_, AppState>) -> Result<Vec<Entry>, String> 
 #[tauri::command]
 async fn list_workspace_files(state: State<'_, AppState>) -> Result<Vec<FileNode>, String> {
     run_workspace(state.0.clone(), Workspace::list_workspace_files).await
+}
+
+#[tauri::command]
+async fn preview_workspace_file_change(state: State<'_, AppState>, workspace_path: String, request: directory_ops::Request) -> Result<directory_ops::Plan, String> {
+    run_workspace(state.0.clone(), move |workspace| {
+        summary::validate_workspace(workspace.root(), &workspace_path)?;
+        directory_ops::preview(workspace, &request)
+    }).await
+}
+#[tauri::command]
+async fn apply_workspace_file_change(state: State<'_, AppState>, workspace_path: String, request: directory_ops::Request, token: String) -> Result<directory_ops::ChangeResult, String> {
+    run_workspace(state.0.clone(), move |workspace| {
+        summary::validate_workspace(workspace.root(), &workspace_path)?;
+        directory_ops::apply(workspace, &request, &token)
+    }).await
+}
+#[tauri::command]
+async fn list_workspace_trash(state: State<'_, AppState>, workspace_path: String) -> Result<Vec<directory_ops::TrashEntry>, String> {
+    run_workspace(state.0.clone(), move |workspace| {
+        summary::validate_workspace(workspace.root(), &workspace_path)?;
+        directory_ops::list_trash(workspace.root())
+    }).await
+}
+#[tauri::command]
+async fn open_workspace_item(app: tauri::AppHandle, state: State<'_, AppState>, workspace_path: String, path: String, parent: bool) -> Result<(), String> {
+    let target = with_workspace(&state, |workspace| {
+        summary::validate_workspace(workspace.root(), &workspace_path)?;
+        let target = directory_ops::visible_path(workspace.root(), &path, true)?;
+        if !target.exists() { return Err("文件或目录已不存在，请刷新后重试".into()); }
+        if parent && !path.is_empty() { Ok(target.parent().ok_or("上级目录不存在")?.to_path_buf()) } else { Ok(target) }
+    })?;
+    app.opener().open_path(target.to_string_lossy().into_owned(), None::<&str>).map_err(|error| format!("无法打开文件或目录：{error}"))
 }
 
 #[tauri::command]
@@ -326,7 +363,8 @@ async fn load_summary_settings(state: State<'_, AppState>) -> Result<summary::Se
     run_optional_workspace(state.0.clone(), |workspace| {
         let Some(workspace) = workspace else { return Ok(summary::Settings::default()); };
         let stored = settings::load(&workspace.root().join(settings::FILE_NAME))?.unwrap_or_default();
-        summary::normalize_settings(workspace.root(), &stored.summary)
+        if let Some(files) = stored.files { Ok(summary::Settings { output_directory: files.summary.directory }) }
+        else { summary::normalize_settings(workspace.root(), &stored.summary) }
     }).await
 }
 
@@ -415,10 +453,43 @@ async fn save_ui_preferences(
     })
 }
 
-fn save_workspace_settings_at(
+fn effective_file_settings(root: &std::path::Path, stored: &settings::StoredSettings) -> Result<file_rules::Settings, String> {
+    let mut files = file_rules::effective(stored);
+    if stored.files.is_none() {
+        files.summary.directory = summary::normalize_settings(root, &stored.summary)?.output_directory;
+    }
+    Ok(files)
+}
+
+#[tauri::command]
+async fn load_file_settings(state: State<'_, AppState>) -> Result<file_rules::Settings, String> {
+    run_optional_workspace(state.0.clone(), |workspace| {
+        let Some(workspace) = workspace else { return Ok(file_rules::Settings::default()); };
+        let stored = settings::load(&workspace.root().join(settings::FILE_NAME))?.unwrap_or_default();
+        effective_file_settings(workspace.root(), &stored)
+    }).await
+}
+
+#[tauri::command]
+async fn preview_file_settings(state: State<'_, AppState>, workspace_path: String, files: file_rules::Settings) -> Result<file_migration::Plan, String> {
+    run_workspace(state.0.clone(), move |workspace| {
+        summary::validate_workspace(workspace.root(), &workspace_path)?;
+        let stored = settings::load(&workspace.root().join(settings::FILE_NAME))?.unwrap_or_default();
+        file_migration::preview(workspace.root(), &effective_file_settings(workspace.root(), &stored)?, &files)
+    }).await
+}
+
+#[cfg(test)]
+fn save_workspace_settings_at(workspace: &mut Workspace, workspace_path: &str, stored: settings::StoredSettings) -> Result<settings::StoredSettings, String> {
+    save_workspace_settings_confirmed(workspace, workspace_path, stored, None, true)
+}
+
+fn save_workspace_settings_confirmed(
     workspace: &mut Workspace,
     workspace_path: &str,
     mut stored: settings::StoredSettings,
+    confirmation: Option<&file_migration::Confirmation>,
+    migrate_files: bool,
 ) -> Result<settings::StoredSettings, String> {
     summary::validate_workspace(workspace.root(), workspace_path)
         .map_err(|_| "工作空间已切换，请重新打开设置后重试".to_string())?;
@@ -428,7 +499,6 @@ fn save_workspace_settings_at(
     // Validate the dependency against this same save, so enabling Excel and
     // configuring its AI provider succeeds or fails as one transaction.
     validate_excel_settings(&stored.excel, &stored.ai)?;
-    stored.summary = summary::normalize_settings(workspace.root(), &stored.summary)?;
     let path = workspace.root().join(settings::FILE_NAME);
     let current = settings::load(&path)?;
     // Match section saves: a damaged existing file must not be silently replaced.
@@ -440,11 +510,27 @@ fn save_workspace_settings_at(
     // 统一设置保存的载荷通常不带 ui 字段（反序列化为 None），此时沿用磁盘上已有的布局，
     // 避免“保存一次设置就把首页拖放结果清空”。只有从未保存过布局时才保持 None。
     if stored.ui.is_none() {
-        stored.ui = current.and_then(|current| current.ui);
+        stored.ui = current.as_ref().and_then(|current| current.ui.clone());
     }
+    if stored.files.is_none() {
+        stored.files = current.as_ref().and_then(|current| current.files.clone());
+    }
+    let before = current.as_ref().map(|current| effective_file_settings(workspace.root(), current)).transpose()?.unwrap_or_default();
+    if let Some(files) = &stored.files {
+        stored.files = Some(file_rules::normalize(workspace.root(), files)?);
+        stored.summary.output_directory = stored.files.as_ref().unwrap().summary.directory.clone();
+    } else {
+        stored.summary = summary::normalize_settings(workspace.root(), &stored.summary)?;
+    }
+    let after = effective_file_settings(workspace.root(), &stored)?;
     let (database_settings, connection) = workspace.prepare_database_settings(&stored.database)?;
     stored.database = database_settings;
-    settings::save(&path, &stored)?;
+    if stored.files.is_some() && migrate_files {
+        file_migration::apply(workspace.root(), &before, &after, confirmation, || settings::save(&path, &stored))?;
+    } else {
+        settings::save(&path, &stored)?;
+    }
+    workspace.accept_file_settings(after);
     workspace.accept_database(stored.database.clone(), connection);
     // 上限调小后立即整理历史版本，不必等到下一次写日报。
     crate::history::enforce(workspace.root(), stored.database.history_limit_bytes);
@@ -460,7 +546,7 @@ fn sync_workspace_settings_at(
     stored.database.workspace_id = workspace.database_settings().workspace_id.clone();
     stored.ui = Some(ui::normalize(stored.ui.unwrap_or_default()));
     let path = workspace.root().to_string_lossy().into_owned();
-    save_workspace_settings_at(workspace, &path, stored)
+    save_workspace_settings_confirmed(workspace, &path, stored, None, false)
 }
 
 #[tauri::command]
@@ -468,6 +554,7 @@ async fn save_workspace_settings(
     state: State<'_, AppState>,
     workspace_path: String,
     settings: settings::StoredSettings,
+    file_changes: Option<file_migration::Confirmation>,
 ) -> Result<settings::StoredSettings, String> {
     let expected_path = workspace_path.clone();
     let git_settings = settings.git.clone();
@@ -479,7 +566,7 @@ async fn save_workspace_settings(
     }).await?;
     if changed_git { git::validate_repositories(&settings.git).await?; }
     run_workspace(state.0.clone(), move |workspace| {
-        save_workspace_settings_at(workspace, &workspace_path, settings)
+        save_workspace_settings_confirmed(workspace, &workspace_path, settings, file_changes.as_ref(), true)
     }).await
 }
 
@@ -677,6 +764,7 @@ async fn open_excel_output_directory(
 }
 
 struct ExcelSnapshot {
+    file_rule: file_rules::Rule,
     settings: excel::Settings,
     provider: ai::Provider,
     content: String,
@@ -743,6 +831,7 @@ fn excel_snapshot(
         return Err("所选日报内容超过 500 KB，请缩小范围后重试".into());
     }
     Ok(ExcelSnapshot {
+        file_rule: file_rules::effective(&stored).excel,
         settings: stored.excel,
         provider,
         content,
@@ -811,6 +900,7 @@ async fn prepare_excel(
             return Err("已取消 Excel 预览".into());
         }
         let provenance = excel::Provenance {
+            file_rule: snapshot.file_rule,
             workspace_path, dates, settings: saved_settings, prompt: Some(snapshot.settings.prompt),
             source_revision: snapshot.source_revision, template_fingerprint,
         };
@@ -888,7 +978,16 @@ async fn list_excel_exports(
     run_workspace(workspace_state.0.clone(), move |workspace| {
         summary::validate_workspace(workspace.root(), &workspace_path)?;
         let directory = excel::prepare_directory(workspace.root())?;
-        excel::list_exports(&directory)
+        let mut exports = excel::list_exports(&directory)?;
+        let records = file_rules::catalog(workspace.root())?;
+        for export in &mut exports {
+            let relative = file_rules::relative_path(workspace.root(), std::path::Path::new(&export.path))?;
+            if let Some(record) = records.iter().find(|record| record.feature == file_rules::Feature::Excel && record.relative_path == relative) {
+                export.start_date = Some(record.start_date.clone());
+                export.end_date = Some(record.end_date.clone());
+            }
+        }
+        Ok(exports)
     })
     .await
 }
@@ -918,6 +1017,21 @@ async fn read_excel_export(
     })
     .await
 }
+#[tauri::command]
+async fn read_workspace_document(state: State<'_, AppState>, workspace_path: String, path: String) -> Result<workspace_document::Document, String> {
+    run_workspace(state.0.clone(), move |workspace| {
+        summary::validate_workspace(workspace.root(), &workspace_path)?;
+        workspace_document::read(workspace, &path)
+    }).await
+}
+#[tauri::command]
+async fn save_workspace_document(state: State<'_, AppState>, workspace_path: String, path: String, content: String, expected_revision: String) -> Result<workspace_document::Document, String> {
+    run_workspace(state.0.clone(), move |workspace| {
+        summary::validate_workspace(workspace.root(), &workspace_path)?;
+        workspace_document::save(workspace, &path, &content, &expected_revision)
+    }).await
+}
+
 #[tauri::command]
 async fn read_workspace_excel(
     workspace_state: State<'_, AppState>,
@@ -1093,6 +1207,10 @@ pub fn run() {
             open_workspace_directory,
             list_entries,
             list_workspace_files,
+            preview_workspace_file_change,
+            apply_workspace_file_change,
+            list_workspace_trash,
+            open_workspace_item,
             list_previews,
             read_entry,
             create_entry,
@@ -1106,6 +1224,8 @@ pub fn run() {
             load_ai_settings,
             load_appearance_settings,
             load_summary_settings,
+            load_file_settings,
+            preview_file_settings,
             open_summary_output_directory,
             export_summary,
             load_excel_settings,
@@ -1132,6 +1252,8 @@ pub fn run() {
             list_excel_exports,
             read_excel_export,
             read_workspace_excel,
+            read_workspace_document,
+            save_workspace_document,
             detect_ai_clis,
             list_ai_models,
             list_cli_models,
@@ -1281,6 +1403,43 @@ mod excel_integration_tests {
             },
             ..settings::StoredSettings::default()
         }
+    }
+
+    #[test]
+    fn unified_file_settings_require_confirmation_and_preserve_old_names_when_declined() {
+        let root = tempfile::tempdir().unwrap();
+        fs::create_dir(root.path().join("2026")).unwrap();
+        fs::write(root.path().join("2026/20261031.md"), "original content").unwrap();
+        let path = root.path().join(settings::FILE_NAME);
+        settings::save(&path, &settings::StoredSettings::default()).unwrap();
+        let mut workspace = Workspace::open(root.path().to_str().unwrap()).unwrap();
+        let old = file_rules::Settings::default();
+        let mut files = old.clone();
+        files.journal.directory = "日报".into();
+        files.journal.filename_template = "工作_{date}".into();
+        files.summary.directory = "总结".into();
+        let mut proposed = settings::StoredSettings::default();
+        proposed.files = Some(files.clone());
+        assert!(save_workspace_settings_at(&mut workspace, root.path().to_str().unwrap(), proposed.clone()).err().unwrap().contains("确认"));
+        assert!(root.path().join("2026/20261031.md").is_file());
+        let plan = file_migration::preview(workspace.root(), &old, &files).unwrap();
+        let decision = file_migration::Confirmation { token: plan.token, rename_existing: Default::default() };
+        let saved = save_workspace_settings_confirmed(&mut workspace, root.path().to_str().unwrap(), proposed, Some(&decision), true).unwrap();
+        assert_eq!(saved.summary.output_directory, "总结");
+        assert_eq!(workspace.file_settings(), &files);
+        assert_eq!(workspace.read("20261031", Format::Md).unwrap().filename, "20261031.md");
+        assert!(root.path().join("日报/2026/20261031.md").is_file());
+        assert_eq!(workspace.create_with_content("20261101", Format::Md, "new content").unwrap().filename, "工作_20261101.md");
+        let mut reopened = Workspace::open(root.path().to_str().unwrap()).unwrap();
+        assert_eq!(reopened.list().unwrap().len(), 2);
+        let old_document = reopened.read("20261031", Format::Md).unwrap();
+        reopened.save("20261031", Format::Md, "edited", &old_document.revision).unwrap();
+        assert_eq!(fs::read_to_string(root.path().join("日报/2026/20261031.md")).unwrap(), "edited");
+        let mut legacy_payload = settings::load(&path).unwrap().unwrap();
+        legacy_payload.files = None;
+        legacy_payload.appearance.scale = 110;
+        let saved = save_workspace_settings_at(&mut reopened, root.path().to_str().unwrap(), legacy_payload).unwrap();
+        assert_eq!(saved.files, Some(files));
     }
 
     #[test]
@@ -1586,6 +1745,7 @@ mod excel_integration_tests {
         let snapshot = excel_snapshot(workspace, stored.clone(), &dates, &workspace_path).unwrap();
         let template = excel::read_template(std::path::Path::new(&stored.excel.template_path)).unwrap();
         let provenance = excel::Provenance {
+            file_rule: snapshot.file_rule,
             workspace_path, dates,
             prompt: None,
             settings: stored.excel.clone(), source_revision: snapshot.source_revision,
@@ -1614,6 +1774,7 @@ mod excel_integration_tests {
         assert_eq!(saved_settings, stored.excel);
         let template = excel::read_template(std::path::Path::new(&snapshot.settings.template_path)).unwrap();
         let provenance = excel::Provenance {
+            file_rule: snapshot.file_rule,
             workspace_path: workspace_path.clone(), dates: dates.clone(), settings: saved_settings,
             prompt: Some(snapshot.settings.prompt), source_revision: snapshot.source_revision,
             template_fingerprint: template.fingerprint().into(),

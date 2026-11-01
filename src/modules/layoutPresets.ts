@@ -4,7 +4,7 @@ export const LAYOUT_PRESETS: { id: string; name: string; description: string; la
   {
     id: 'compact-writing',
     name: '紧凑月历',
-    description: '左侧月历与概览，右侧留给日报编辑。',
+    description: '左侧月历与概览，右侧留给编辑。',
     layout: {
       type: 'split',
       direction: 'row',

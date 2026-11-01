@@ -5,6 +5,7 @@ import TextContextMenu from '../src/components/TextContextMenu.vue'
 import { installContextMenuGuard, registerContextEditor } from '../src/lib/contextMenus'
 import { textMenuSession, type TextClipboard } from '../src/lib/textContextMenu'
 import JournalEditor from '../src/components/JournalEditor.vue'
+import RichMarkdownEditor from '../src/components/RichMarkdownEditor.vue'
 
 const cleanup: (() => void)[] = []
 afterEach(() => {
@@ -154,6 +155,84 @@ describe('contextual text actions', () => {
 })
 
 describe('text context menu integration', () => {
+  async function richJournal(content = '原有文本') {
+    const wrapper = mount(JournalEditor, {
+      attachTo: document.body,
+      props: {
+        date: '20261029',
+        document: { date: '20261029', filename: '20261029.md', format: 'md', content, revision: 'v1' },
+        isNew: false,
+        content,
+        dirty: false,
+        saving: false,
+        disabled: false,
+        error: '',
+        savedAt: null,
+        canRestore: false,
+        canUndo: true,
+        canRedo: true,
+        preview: false,
+      },
+    })
+    cleanup.push(() => wrapper.unmount())
+    await flushPromises()
+    const editor = wrapper.getComponent(RichMarkdownEditor).vm
+    editor.focus()
+    editor.selectAll()
+    await flushPromises()
+    return { wrapper, editor, element: editor.getEditableElement()! }
+  }
+
+  it('pastes and cuts through the rich editor state and routes history to the journal', async () => {
+    const { wrapper, editor, element } = await richJournal()
+    const io = clipboard()
+    io.read.mockResolvedValueOnce('## 可视化标题')
+    await textMenuSession(element, io)!
+      .items.find((item) => item.id === 'paste')!
+      .run()
+    await flushPromises()
+    expect(element.querySelector('h2')?.textContent).toBe('可视化标题')
+    expect(editor.getMarkdown().trimEnd()).toBe('## 可视化标题')
+    expect(wrapper.emitted('edit')).toEqual([[editor.getMarkdown(), true]])
+
+    await textMenuSession(element, io)!
+      .items.find((item) => item.id === 'undo')!
+      .run()
+    await textMenuSession(element, io)!
+      .items.find((item) => item.id === 'redo')!
+      .run()
+    expect(wrapper.emitted('undo')).toHaveLength(1)
+    expect(wrapper.emitted('redo')).toHaveLength(1)
+    editor.selectAll()
+    await flushPromises()
+    const selectedMarkdown = editor.getSelectedMarkdown()
+    await textMenuSession(element, io)!
+      .items.find((item) => item.id === 'cut')!
+      .run()
+    await flushPromises()
+    expect(io.write).toHaveBeenCalledWith(selectedMarkdown)
+    expect(editor.getMarkdown()).toBe('')
+    expect(wrapper.emitted('edit')?.at(-1)).toEqual(['', true])
+  })
+
+  it('discards delayed rich paste after a document transaction even when visible text is unchanged', async () => {
+    const { editor, element } = await richJournal()
+    const io = clipboard()
+    let resolve!: (value: string) => void
+    io.read.mockReturnValueOnce(
+      new Promise<string>((done) => {
+        resolve = done
+      }),
+    )
+    const pending = textMenuSession(element, io)!
+      .items.find((item) => item.id === 'paste')!
+      .run()
+    editor.apply('bold')
+    resolve('旧剪贴板')
+    await expect(pending).rejects.toThrow('内容或光标位置已变化')
+    expect(editor.getMarkdown()).toBe('**原有文本**')
+  })
+
   it('renders the edit whitelist in a teleported dialog and lets Git handlers own their menu', async () => {
     const controller = mount(TextContextMenu, { props: { scope: 'first' } })
     cleanup.push(() => controller.unmount(), installContextMenuGuard())

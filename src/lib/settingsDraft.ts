@@ -4,32 +4,39 @@ import { cloneAiSettings, type AiSettings } from './ai'
 import { cloneExcelSettings, type ExcelSettings } from './useExcel'
 import type { SummaryOutputSettings } from './useSummaryOutput'
 import { cloneDatabaseSettings, type DatabaseSettings } from './database'
-import type { RailSide } from './useAppearance'
+import { normalizeAppearanceSettings, type AppearanceSettings } from './useAppearance'
 import { cloneGitSettings, type GitSettings } from './useGit'
+import { FileChangesCancelled, cloneFileSettings, type FileSettings, type FileChangesDecision } from './fileSettings'
 
 export interface WorkspaceSettings {
-  appearance: { scale: number; rail: RailSide }
+  appearance: AppearanceSettings
   ai: AiSettings
   excel: ExcelSettings
   summary: SummaryOutputSettings
   database: DatabaseSettings
   git: GitSettings
+  files?: FileSettings
 }
 
 export function cloneWorkspaceSettings(value: WorkspaceSettings): WorkspaceSettings {
   return {
-    appearance: { scale: value.appearance.scale, rail: value.appearance.rail },
+    appearance: normalizeAppearanceSettings(value.appearance),
     ai: cloneAiSettings(value.ai),
     excel: cloneExcelSettings(value.excel),
     summary: { outputDirectory: value.summary.outputDirectory },
     database: cloneDatabaseSettings(value.database),
     git: cloneGitSettings(value.git),
+    files: cloneFileSettings(value.files, value.summary.outputDirectory),
   }
 }
 
 export const settingsApi = {
-  save: (workspacePath: string, settings: WorkspaceSettings) =>
-    invoke<WorkspaceSettings>('save_workspace_settings', { workspacePath, settings: cloneWorkspaceSettings(settings) }),
+  save: (workspacePath: string, settings: WorkspaceSettings, fileChanges?: FileChangesDecision) =>
+    invoke<WorkspaceSettings>('save_workspace_settings', {
+      workspacePath,
+      settings: cloneWorkspaceSettings(settings),
+      ...(fileChanges ? { fileChanges } : {}),
+    }),
 }
 
 /** Editing never persists; only save() submits the complete draft. */
@@ -96,6 +103,7 @@ export function useSettingsDraft(
         if (!unchanged.value) error.value = '还有未保存的修改，请再次保存。'
         return unchanged.value
       } catch (cause) {
+        if (cause instanceof FileChangesCancelled) return false
         if (scope === currentScope) error.value = `保存设置失败：${String(cause)}`
         return false
       } finally {

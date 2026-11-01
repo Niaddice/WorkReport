@@ -13,10 +13,10 @@ import {
   layoutGeometry,
   resizeLayoutLocally,
 } from '../modules/layout'
-import type { DropSide, LayoutGutter, LayoutMetrics, LayoutNode, LayoutSlot, ModuleId, Rect } from '../modules/types'
+import type { DropSide, Layout, LayoutGutter, LayoutMetrics, LayoutSlot, ModuleId, Rect } from '../modules/types'
 
 const props = defineProps<{
-  layout: LayoutNode
+  layout: Layout
   /** 工作空间变化时关闭最大化浮层，避免把旧窗口状态带到新空间。 */
   workspacePath?: string
 }>()
@@ -36,7 +36,7 @@ const board = ref<HTMLElement>()
 const boardSize = ref({ width: 0, height: 0 })
 const resizeMetrics = computed(() => ({ ...boardSize.value, gap: boardGap.value }))
 /** 拖动分栏间隙时只在本组件内预览新布局，松手后才写回。 */
-const previewLayout = ref<LayoutNode | null>(null)
+const previewLayout = ref<Layout | null>(null)
 const activeLayout = computed(() => previewLayout.value ?? props.layout)
 const items = computed(() => flattenLayout(activeLayout.value))
 const geometry = computed(() =>
@@ -210,7 +210,9 @@ async function animateLayoutChange(previous: Map<ModuleId, DOMRect>, immediate =
   }
 }
 /** 右侧功能栏添加/定位模块时，聚焦模块外壳，不进入内容编辑。 */
-function revealModule(id: ModuleId) {
+function revealModule(id: ModuleId, options: { focus?: boolean } = {}) {
+  if (maximized.value && maximized.value !== id) void restoreMaximized(true)
+  if (options.focus === false) return
   activateModule(id)
   panelElement(id)?.focus({ preventScroll: true })
 }
@@ -531,7 +533,7 @@ function onWindowKeydown(event: KeyboardEvent) {
   if (event.key !== 'Escape') return
   if (
     event.target instanceof Element &&
-    event.target.closest('.module-help-popover, .module-help-button[aria-expanded="true"]')
+    event.target.closest('.app-context-menu, .module-help-popover, .module-help-button[aria-expanded="true"]')
   )
     return
   if (maximized.value) {
@@ -620,6 +622,9 @@ onBeforeUnmount(() => {
     :class="{ 'is-dragging': !!drag, 'is-resizing': !!gutterDrag }"
     :data-module-count="items.length"
   >
+    <p v-if="!items.length" class="module-board-empty" role="status">
+      暂无打开的模块<span>点击侧边功能栏中的模块按钮即可打开。</span>
+    </p>
     <div v-if="maximized" class="module-maximize-backdrop" aria-hidden="true" @click="restoreMaximized()"></div>
     <div
       v-for="slot in slots"
@@ -633,7 +638,7 @@ onBeforeUnmount(() => {
         :title="moduleById(slot.id).title"
         :icon="moduleById(slot.id).icon"
         :help="moduleById(slot.id).help"
-        :can-remove="items.length > 1"
+        :can-remove="true"
         :dragging="drag?.id === slot.id"
         :active="activeModule === slot.id"
         :maximized="maximized === slot.id"

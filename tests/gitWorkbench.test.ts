@@ -95,6 +95,171 @@ beforeEach(() => {
   desktop.value = true
 })
 
+describe('multi-repository workbench', () => {
+  async function historyView() {
+    const wrapper = await mountReady()
+    invoke.mockImplementation(
+      async (command: string, args?: { repositoryId?: string; skip?: number; query?: string }) => {
+        if (command === 'read_git_repository')
+          return state({
+            root: `/tmp/project-${args?.repositoryId}`,
+            branch: args?.repositoryId === 'two' ? 'develop' : 'main',
+          })
+        if (command === 'read_git_history')
+          return {
+            commits: args?.query
+              ? [commit('filtered')]
+              : args?.skip
+                ? [commit('next')]
+                : [commit('abc1234'), commit('second'), commit('third')],
+            hasMore: !args?.skip && !args?.query,
+          }
+        if (command === 'read_git_diff') return { text: '+selected diff', truncated: false }
+        return undefined
+      },
+    )
+    await button(wrapper, '提交历史').trigger('click')
+    await flushPromises()
+    return wrapper
+  }
+
+  it('collects multiple commits across repositories without issuing any Git mutations', async () => {
+    const wrapper = await historyView()
+    try {
+      await wrapper.get('[aria-label="选择提交 abc1234"]').setValue(true)
+      await wrapper.get('[aria-label="选择提交 second"]').setValue(true)
+      expect(invoke.mock.calls.filter(([command]) => command === 'read_git_diff')).toHaveLength(0)
+      await wrapper.get('[aria-label="切换到仓库 项目二"]').trigger('click')
+      await flushPromises()
+      await wrapper.get('[aria-label="选择提交 abc1234"]').setValue(true)
+      expect(wrapper.get('.commit-selection-bar').text()).toContain('已选 3 条 · 2 个仓库')
+      await button(wrapper, '获取提交信息').trigger('click')
+      const information = wrapper.get<HTMLTextAreaElement>('[aria-label="完整提交信息"]').element.value
+      expect(information).toContain('项目一')
+      expect(information).toContain('项目二')
+      expect(information.match(/提交：abc1234/g)).toHaveLength(2)
+      expect(information).toContain('developer@example.test')
+      await button(wrapper, '复制').trigger('click')
+      await flushPromises()
+      expect(invoke).toHaveBeenCalledWith('copy_content', { content: information })
+      expect(actionCalls()).toHaveLength(0)
+      await button(wrapper, '清空选择').trigger('click')
+      expect(wrapper.find('[aria-label="完整提交信息"]').exists()).toBe(false)
+    } finally {
+      wrapper.unmount()
+    }
+  })
+
+  it('supports modifier toggles, range selection and single-click diff independently', async () => {
+    const wrapper = await historyView()
+    try {
+      const rows = wrapper.findAll('.history-entry')
+      await rows[0]!.trigger('click', { ctrlKey: true })
+      await rows[2]!.trigger('click', { shiftKey: true })
+      expect(wrapper.findAll<HTMLInputElement>('.history-row input').every((input) => input.element.checked)).toBe(true)
+      await rows[1]!.trigger('click', { metaKey: true })
+      expect(wrapper.get('.commit-selection-bar').text()).toContain('已选 2 条')
+      await rows[1]!.trigger('click')
+      await flushPromises()
+      expect(invoke).toHaveBeenCalledWith('read_git_diff', expect.objectContaining({ commit: 'second' }))
+      expect(wrapper.get('.commit-selection-bar').text()).toContain('已选 2 条')
+    } finally {
+      wrapper.unmount()
+    }
+  })
+
+  it('retains selected commits across pagination and filtered select-all operations', async () => {
+    const wrapper = await historyView()
+    try {
+      await wrapper.get('[aria-label="选择提交 abc1234"]').setValue(true)
+      await button(wrapper, '加载更多提交').trigger('click')
+      await flushPromises()
+      expect(wrapper.get<HTMLInputElement>('[aria-label="选择提交 abc1234"]').element.checked).toBe(true)
+      await wrapper.get('[aria-label="搜索提交说明"]').setValue('过滤')
+      await button(wrapper, '搜索').trigger('click')
+      await flushPromises()
+      await wrapper.get('[aria-label="全选当前列表提交"]').setValue(true)
+      expect(wrapper.get('.commit-selection-bar').text()).toContain('已选 2 条')
+      await wrapper.get('[aria-label="全选当前列表提交"]').setValue(false)
+      expect(wrapper.get('.commit-selection-bar').text()).toContain('已选 1 条')
+      await button(wrapper, '获取提交信息').trigger('click')
+      expect(wrapper.get<HTMLTextAreaElement>('[aria-label="完整提交信息"]').element.value).toContain('abc1234')
+      expect(wrapper.get<HTMLTextAreaElement>('[aria-label="完整提交信息"]').element.value).not.toContain('filtered')
+    } finally {
+      wrapper.unmount()
+    }
+  })
+
+  it('keeps separate commit drafts for each repository and clears them across workspaces', async () => {
+    const wrapper = await mountReady()
+    try {
+      await wrapper.get('[aria-label="提交说明"]').setValue('项目一的草稿')
+      await wrapper.get('[aria-label="切换到仓库 项目二"]').trigger('click')
+      await flushPromises()
+      expect(wrapper.get<HTMLTextAreaElement>('[aria-label="提交说明"]').element.value).toBe('')
+      await wrapper.get('[aria-label="提交说明"]').setValue('项目二的草稿')
+      await wrapper.get('[aria-label="切换到仓库 项目一"]').trigger('click')
+      await flushPromises()
+      expect(wrapper.get<HTMLTextAreaElement>('[aria-label="提交说明"]').element.value).toBe('项目一的草稿')
+      await wrapper.setProps({ workspacePath: '/other-workspace' })
+      await flushPromises()
+      expect(wrapper.get<HTMLTextAreaElement>('[aria-label="提交说明"]').element.value).toBe('')
+    } finally {
+      wrapper.unmount()
+    }
+  })
+
+  it('clears collected information when the workspace or repository configuration changes', async () => {
+    const wrapper = await historyView()
+    try {
+      await wrapper.get('[aria-label="全选当前列表提交"]').setValue(true)
+      await button(wrapper, '获取提交信息').trigger('click')
+      await wrapper.setProps({ workspacePath: '/other-workspace' })
+      await flushPromises()
+      expect(wrapper.get('.commit-selection-bar').text()).toContain('已选 0 条')
+      expect(wrapper.find('[aria-label="完整提交信息"]').exists()).toBe(false)
+      await wrapper.get('[aria-label="选择提交 abc1234"]').setValue(true)
+      await wrapper.setProps({ repositories: repositories.map((repo) => ({ ...repo, path: `${repo.path}-moved` })) })
+      await flushPromises()
+      expect(wrapper.get('.commit-selection-bar').text()).toContain('已选 0 条')
+    } finally {
+      wrapper.unmount()
+    }
+  })
+
+  it('edits the selected work record and appends only after an explicit action', async () => {
+    const wrapper = await historyView()
+    const appendReport = vi.fn().mockResolvedValue(true)
+    try {
+      await wrapper.setProps({ appendDateLabel: '2026年11月1日', appendReport })
+      await wrapper.get('[aria-label="选择提交 abc1234"]').setValue(true)
+      await button(wrapper, '获取提交信息').trigger('click')
+      await button(wrapper, '工作记录').trigger('click')
+      await wrapper.get('[aria-label="选中提交的工作记录"]').setValue('人工确认的工作记录')
+      expect(appendReport).not.toHaveBeenCalled()
+      await button(wrapper, '追加工作记录到日报').trigger('click')
+      await flushPromises()
+      expect(appendReport).toHaveBeenCalledExactlyOnceWith('人工确认的工作记录')
+      expect(wrapper.text()).toContain('工作记录已追加到日报')
+      await wrapper.setProps({ appendDateLabel: undefined })
+      expect(button(wrapper, '追加工作记录到日报').attributes('disabled')).toBeDefined()
+    } finally {
+      wrapper.unmount()
+    }
+  })
+
+  it('provides repository management even before any repositories are configured', async () => {
+    const wrapper = mount(GitWorkbench, { props: { workspacePath: '/workspace', repositories: [], disabled: false } })
+    try {
+      await button(wrapper, '添加 Git 仓库').trigger('click')
+      expect(wrapper.emitted('configureRepositories')).toHaveLength(1)
+      expect(invoke).not.toHaveBeenCalled()
+    } finally {
+      wrapper.unmount()
+    }
+  })
+})
+
 describe('AI commit messages', () => {
   it('explains missing models and staging requirements, and opens model configuration', async () => {
     const wrapper = await mountReady()

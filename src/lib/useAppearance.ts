@@ -1,5 +1,6 @@
 import { invoke, isTauri } from '@tauri-apps/api/core'
 import { ref } from 'vue'
+import { DEFAULT_RAIL_HOLD_MS, normalizeRailHoldMs } from './railHoldSettings'
 
 export const APPEARANCE_SCALES = [80, 90, 100, 110, 120] as const
 export const DEFAULT_APPEARANCE_SCALE = 100
@@ -13,6 +14,18 @@ export const DEFAULT_RAIL_SIDE: RailSide = 'right'
 export interface AppearanceSettings {
   scale: number
   rail: RailSide
+  railHoldDelayMs?: number
+  railHoldDurationMs?: number
+}
+
+export function normalizeAppearanceSettings(value: unknown): Required<AppearanceSettings> {
+  const settings = value && typeof value === 'object' ? (value as Partial<AppearanceSettings>) : {}
+  return {
+    scale: readScale(settings),
+    rail: readRail(settings),
+    railHoldDelayMs: normalizeRailHoldMs(settings.railHoldDelayMs),
+    railHoldDurationMs: normalizeRailHoldMs(settings.railHoldDurationMs),
+  }
 }
 
 function validScale(value: unknown): value is number {
@@ -39,7 +52,7 @@ async function readSettings(): Promise<AppearanceSettings> {
   if (!saved) return { scale: DEFAULT_APPEARANCE_SCALE, rail: DEFAULT_RAIL_SIDE }
   try {
     const parsed: unknown = JSON.parse(saved)
-    return { scale: readScale(parsed), rail: readRail(parsed) }
+    return normalizeAppearanceSettings(parsed)
   } catch {
     return { scale: DEFAULT_APPEARANCE_SCALE, rail: DEFAULT_RAIL_SIDE }
   }
@@ -48,6 +61,8 @@ async function readSettings(): Promise<AppearanceSettings> {
 export function useAppearance() {
   const scale = ref<number>(DEFAULT_APPEARANCE_SCALE)
   const rail = ref<RailSide>(DEFAULT_RAIL_SIDE)
+  const railHoldDelayMs = ref(DEFAULT_RAIL_HOLD_MS)
+  const railHoldDurationMs = ref(DEFAULT_RAIL_HOLD_MS)
   const loading = ref(false)
   const error = ref('')
   let loadTask: Promise<boolean> | undefined
@@ -60,10 +75,12 @@ export function useAppearance() {
     error.value = ''
     loadTask = (async () => {
       try {
-        const settings = await readSettings()
+        const settings = normalizeAppearanceSettings(await readSettings())
         if (scope === currentScope) {
           scale.value = readScale(settings)
           rail.value = readRail(settings)
+          railHoldDelayMs.value = settings.railHoldDelayMs
+          railHoldDurationMs.value = settings.railHoldDurationMs
         }
         return scope === currentScope
       } catch (cause) {
@@ -85,19 +102,24 @@ export function useAppearance() {
     loadTask = undefined
     scale.value = DEFAULT_APPEARANCE_SCALE
     rail.value = DEFAULT_RAIL_SIDE
+    railHoldDelayMs.value = DEFAULT_RAIL_HOLD_MS
+    railHoldDurationMs.value = DEFAULT_RAIL_HOLD_MS
     error.value = ''
     return load()
   }
 
   /** Adopt the values that the unified save just persisted. */
   function acceptSaved(value: AppearanceSettings) {
+    const settings = normalizeAppearanceSettings(value)
     scope++
     loadTask = undefined
     scale.value = readScale(value)
     rail.value = readRail(value)
+    railHoldDelayMs.value = settings.railHoldDelayMs
+    railHoldDurationMs.value = settings.railHoldDurationMs
     loading.value = false
     error.value = ''
   }
 
-  return { scale, rail, loading, error, load, reload, acceptSaved }
+  return { scale, rail, railHoldDelayMs, railHoldDurationMs, loading, error, load, reload, acceptSaved }
 }

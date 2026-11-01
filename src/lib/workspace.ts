@@ -16,6 +16,9 @@ export interface FileNode {
   name: string
   isDir: boolean
   size: number
+  /** 由后端文件索引提供，普通文件为 null；兼容旧版接口时可缺省。 */
+  journalDate?: string | null
+  protected?: boolean
 }
 export interface Preview {
   date: string
