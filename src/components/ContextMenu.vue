@@ -7,7 +7,7 @@ const props = withDefaults(
     x: number
     y: number
     items: ContextMenuItem[]
-    kind?: 'git' | 'text' | 'module' | 'directory'
+    kind?: 'git' | 'text' | 'module' | 'directory' | 'history'
     teleportTo?: HTMLElement | string
   }>(),
   { kind: 'text', teleportTo: 'body' },
@@ -17,7 +17,13 @@ const panel = ref<HTMLElement>()
 const left = ref(props.x)
 const top = ref(props.y)
 const ready = ref(false)
-const menuLabels = { git: 'Git 操作', text: '文本操作', module: '模块操作', directory: '文件与目录操作' }
+const menuLabels = {
+  git: 'Git 操作',
+  text: '文本操作',
+  module: '模块操作',
+  directory: '文件与目录操作',
+  history: '历史版本操作',
+}
 
 watch(
   () => [props.x, props.y, props.items],

@@ -59,12 +59,13 @@ export const MODULE_REGISTRY: readonly ModuleDefinition[] = [
   {
     id: 'overview',
     title: '数据概览',
-    description: '本月、本年与连续记录统计，今日记录状态一目了然。',
+    description: '日报统计、连续记录天数与每日热力图。',
     icon: PhChartLine,
     component: OverviewModule,
     help: [
       '统计本月与本年已记录的日报数量、字数与连续记录天数。',
       '顶部显示今天是否已经写过日报，方便快速确认状态。',
+      '每日热力图展示近 365 天的记录情况，颜色越深表示日报字数越多；悬停查看日期和字数，窄面板可左右滚动。',
       '统计数据随日报保存自动更新，无需手动刷新。',
     ],
     defaultEnabled: false,
@@ -77,8 +78,8 @@ export const MODULE_REGISTRY: readonly ModuleDefinition[] = [
     component: HistoryModule,
     help: [
       '每次保存都会为当天日报生成一个历史版本，按日期分组展示。',
-      '点击某个版本可查看全文，确认后能把内容恢复到编辑区。',
-      '恢复前会先保存当前内容，避免误覆盖。',
+      '鼠标指向或键盘聚焦某个版本可预览全文，右侧复制图标可复制该版本原文。',
+      '右键历史版本可预览、复制内容、查看当日日报或刷新；空白处右键可刷新，也支持 Shift + F10 打开菜单。',
     ],
     defaultEnabled: false,
   },

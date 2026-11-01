@@ -59,6 +59,13 @@ pub struct Preview {
 }
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct DailyActivity {
+    pub date: String,
+    /// None means the existing report could not be read, rather than an empty report.
+    pub word_count: Option<usize>,
+}
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Document {
     pub date: String,
     pub filename: String,
@@ -95,6 +102,7 @@ struct CachedEntry {
     modified: Option<SystemTime>,
     size: u64,
     preview: Option<String>,
+    word_count: Option<usize>,
 }
 struct FoundFile {
     path: PathBuf,
@@ -164,6 +172,10 @@ fn valid_date(date: &str) -> Result<NaiveDate, String> {
 }
 fn revision(content: &str) -> String {
     format!("{:x}", Sha256::digest(content.as_bytes()))
+}
+fn word_count(content: &str) -> usize {
+    // Match the editor's character count, excluding whitespace.
+    content.chars().filter(|c| (!c.is_whitespace() || *c == '\u{0085}') && *c != '\u{feff}').map(char::len_utf16).sum()
 }
 fn preview_text(content: &str) -> String {
     content
@@ -345,6 +357,7 @@ impl Workspace {
                         modified: file.modified,
                         size: file.size,
                         preview: None,
+                        word_count: None,
                     },
                 );
             }
@@ -391,6 +404,7 @@ impl Workspace {
                             modified,
                             size,
                             preview: Some(preview.clone()),
+                            word_count: if cached.modified == modified && cached.size == size { cached.word_count } else { None },
                         },
                     );
                     preview
@@ -561,6 +575,7 @@ impl Workspace {
                 modified: metadata.modified().ok(),
                 size: metadata.len(),
                 preview: Some(preview_text(&document.content)),
+                word_count: Some(word_count(&document.content)),
             },
         );
     }
@@ -639,6 +654,27 @@ impl Workspace {
             }
             Ok(previews)
         })
+    }
+
+    pub fn daily_activity(&mut self, dates: &[String]) -> Result<Vec<DailyActivity>, String> {
+        if dates.len() > 370 { return Err("每天的记录统计最多查询 370 天".into()); }
+        for date in dates { valid_date(date)?; }
+        let requested: std::collections::HashSet<_> = dates.iter().map(String::as_str).collect();
+        if self.database_only() {
+            let database = self.connected_database()?;
+            let records = database::run_blocking(|| database.list())?;
+            return Ok(records.into_iter().filter(|record| requested.contains(record.date.as_str()))
+                .map(|record| DailyActivity { date: record.date, word_count: Some(word_count(&record.content)) }).collect());
+        }
+        let entries = self.list_files()?;
+        let mut activity = Vec::new();
+        for entry in entries.into_iter().filter(|entry| requested.contains(entry.date.as_str())) {
+            let count = self.index.get(&entry.date).and_then(|cached| cached.word_count)
+                .or_else(|| self.read_file(&entry.date, entry.format).ok().map(|document| word_count(&document.content)));
+            if let Some(cached) = self.index.get_mut(&entry.date) { cached.word_count = count; }
+            activity.push(DailyActivity { date: entry.date, word_count: count });
+        }
+        Ok(activity)
     }
 
     pub fn read(&self, date: &str, format: Format) -> Result<Document, String> {
@@ -1575,6 +1611,42 @@ mod tests {
         let (settings, connection) = workspace.prepare_database_settings(&proposed).unwrap();
         persist_database_settings(workspace, settings.clone(), connection);
         settings
+    }
+
+    #[test]
+    fn daily_activity_counts_full_reports_and_refreshes_cached_file_changes() {
+        let (dir, mut workspace) = setup();
+        custom_journal_settings(&mut workspace, "日报", "工作_{date}");
+        let content = format!("中 文\nabc\t😀{}", "字".repeat(17000));
+        let original = workspace.create_with_content("20261030", Format::Md, &content).unwrap();
+        workspace.create_with_content("20261029", Format::Txt, "").unwrap();
+        let dates: Vec<String> = ["20261029", "20261030", "20261031"].iter().map(|date| date.to_string()).collect();
+        let counts = workspace.daily_activity(&dates).unwrap();
+        assert_eq!(counts.len(), 2);
+        assert_eq!(counts[0].word_count, Some(0));
+        assert_eq!(counts[1].word_count, Some(17007));
+        workspace.save("20261030", Format::Md, "1234567890", &original.revision).unwrap();
+        assert_eq!(workspace.daily_activity(&dates).unwrap()[1].word_count, Some(10));
+        let path = workspace.entry_path("20261030", Format::Md).unwrap();
+        fs::write(&path, "新的正文").unwrap();
+        assert_eq!(workspace.daily_activity(&dates).unwrap()[1].word_count, Some(4));
+        fs::write(&path, [0xff, 0xfe]).unwrap();
+        assert_eq!(workspace.daily_activity(&dates).unwrap()[1].word_count, None);
+        assert!(dir.path().join("日报/2026").is_dir());
+        assert!(workspace.daily_activity(&["20260230".into()]).is_err());
+        assert!(workspace.daily_activity(&vec!["20261030".into(); 371]).is_err());
+    }
+
+    #[test]
+    fn daily_activity_uses_database_primary_without_reading_stale_files() {
+        let (_dir, mut workspace) = setup();
+        workspace.create_with_content("20261030", Format::Txt, "文件旧内容").unwrap();
+        enable_database(&mut workspace, Mode::Database);
+        let original = workspace.read("20261030", Format::Txt).unwrap();
+        workspace.save("20261030", Format::Txt, "数据库 新正文", &original.revision).unwrap();
+        let counts = workspace.daily_activity(&["20261030".into(), "20261031".into()]).unwrap();
+        assert_eq!(counts.len(), 1);
+        assert_eq!(counts[0].word_count, Some(6));
     }
 
     #[test]

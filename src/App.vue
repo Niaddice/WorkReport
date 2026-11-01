@@ -287,7 +287,7 @@ function openSkinDialog() {
 function closeSkinDialog() {
   void skinDialog.value?.close()
 }
-/** 目录模块里点单篇表示聚焦这一天：先解除框选，避免总结 / Excel 仍按旧范围统计。 */
+/** 目录或历史记录里选择单篇表示聚焦这一天：先解除框选，避免总结 / Excel 仍按旧范围统计。 */
 async function selectReport(date: string) {
   if (journal.appendingGit.value) return
   if (date === selectedDate.value && !workspaceDocument.path.value && !rangeDates.value.length) return

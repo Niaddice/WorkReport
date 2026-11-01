@@ -36,6 +36,7 @@ const dragAnchor = ref('')
 const dragCurrent = ref('')
 let suppressClick = false
 let suppressTimer: ReturnType<typeof setTimeout> | undefined
+let pendingOutsideSelection = ''
 const title = computed(() => current.value.format(view.value === 'year' ? 'YYYY 年' : 'YYYY 年 M 月'))
 const days = computed(() => (view.value === 'week' ? weekDays(current.value) : monthDays(current.value)))
 const months = computed(() => Array.from({ length: 12 }, (_, index) => current.value.startOf('year').month(index)))
@@ -54,7 +55,7 @@ const range = computed(() => {
 })
 const rangeSet = computed(() => new Set(range.value.dates))
 const meta = (day: Dayjs) => getChinaDayMeta(day.format('YYYY-MM-DD'))
-/** 月视图里补位的相邻月份日期只作参考，不参与点击与框选。 */
+/** 月视图的相邻月份日期可点击，拖拽框选仍限于当月。 */
 function isOutsideDate(date: string) {
   return view.value === 'month' && !dayjs(date).isSame(current.value, 'month')
 }
@@ -63,27 +64,31 @@ function isOutsideDay(day: Dayjs) {
 }
 function move(step: number) {
   if (props.disabled) return
+  pendingOutsideSelection = ''
   clearSelection()
   current.value = movePeriod(current.value, view.value, step)
 }
 function setView(mode: ViewMode) {
   if (props.disabled || view.value === mode) return
+  pendingOutsideSelection = ''
   view.value = mode
 }
 function goToday() {
   if (props.disabled) return
+  pendingOutsideSelection = ''
   clearSelection()
   current.value = dayjs()
   emit('select', dateKey(current.value))
 }
 function openMonth(month: Dayjs) {
   if (props.disabled) return
+  pendingOutsideSelection = ''
   current.value = month
   view.value = 'month'
 }
 function dayLabel(day: Dayjs) {
   const summary = `${day.format('YYYY年M月D日 dddd')}${entryMap.value.has(dateKey(day)) ? '，已有日报' : '，暂无日报'}`
-  return isOutsideDay(day) ? `${summary}，非本月，不可选择` : `${summary}，点击打开或开始记录`
+  return `${summary}${isOutsideDay(day) ? '，非本月' : ''}，点击打开或开始记录`
 }
 function isRangeDate(date: string) {
   return rangeSet.value.has(date)
@@ -126,13 +131,14 @@ function finishDrag() {
   publishRange()
 }
 function onDayClick(date: string) {
-  if (props.disabled || isOutsideDate(date)) return
+  if (props.disabled) return
   if (suppressClick) {
     suppressClick = false
     return
   }
   selection.value = []
   publishRange()
+  pendingOutsideSelection = isOutsideDate(date) && date !== props.selected ? date : ''
   emit('select', date)
 }
 function clearSelection() {
@@ -158,7 +164,9 @@ onBeforeUnmount(() => {
 watch(
   () => props.selected,
   (value) => {
-    current.value = dayjs(value)
+    // 相邻月份日期的点击只更新选中项；外部选择仍会定位日历。
+    if (value !== pendingOutsideSelection) current.value = dayjs(value)
+    pendingOutsideSelection = ''
     if (!dragging.value) clearSelection()
   },
 )
@@ -243,7 +251,7 @@ watch(
                 weekend: isWeekend(day.format('YYYY-MM-DD')),
                 'has-entry': entryMap.has(dateKey(day)),
               }"
-              :disabled="disabled || isOutsideDay(day)"
+              :disabled="disabled"
               :aria-label="dayLabel(day)"
               :aria-pressed="isSingleSelected(dateKey(day)) || isRangeDate(dateKey(day))"
               @pointerdown="startDrag(dateKey(day), $event)"

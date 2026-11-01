@@ -24,6 +24,10 @@ export interface Preview {
   date: string
   preview: string
 }
+export interface DailyActivity {
+  date: string
+  wordCount: number | null
+}
 export interface Document {
   date: string
   filename: string
@@ -51,6 +55,8 @@ export const api = {
   backupWarning: () => invoke<string | null>('database_backup_warning'),
   retryBackup: (workspacePath: string) => invoke<unknown>('retry_database_backup', { workspacePath }),
   previews: (dates: string[]) => invoke<Preview[]>('list_previews', { dates }),
+  dailyActivity: (workspacePath: string, dates: string[]) =>
+    invoke<DailyActivity[]>('list_daily_activity', { workspacePath, dates }),
   read: (date: string, format: FileFormat = 'md') => invoke<Document>('read_entry', { date, format }),
   create: (date: string, format: FileFormat, content: string) =>
     invoke<Document>('create_entry', { date, format, content }),

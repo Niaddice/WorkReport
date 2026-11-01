@@ -34,7 +34,7 @@ export interface ModuleActions {
   showJournal?: () => Promise<void>
   changeWorkspaceFiles?: (workspacePath: string, request: FileRequest, token?: string) => Promise<FileChangeResult>
   selectDate(date: string): Promise<void>
-  /** 目录模块专用：先解除框选再聚焦单日，保证各模块同步到同一篇日报。 */
+  /** 目录与历史记录选择单篇时，先解除框选再聚焦单日，保证各模块同步到同一篇日报。 */
   selectReport(date: string): Promise<void>
   loadRange(dates: string[]): Promise<void>
   requestSummary(dates: string[]): Promise<void>
