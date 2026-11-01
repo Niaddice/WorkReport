@@ -298,19 +298,28 @@ describe('calendar month cells', () => {
     })
   }
 
-  it('makes the adjacent-month cells inert in month view', async () => {
+  it('allows adjacent-month dates to be opened without changing the displayed month', async () => {
     const wrapper = mountCalendar()
     const cells = wrapper.findAll('.day-cell')
     const outside = cells.filter((cell) => cell.classes('outside'))
+    const title = wrapper.get('.period-heading h2').text()
+    const dates = cells.map((cell) => cell.attributes('aria-label'))
 
     expect(outside.length).toBeGreaterThan(0)
     for (const cell of outside) {
-      expect(cell.attributes('disabled')).toBeDefined()
+      expect(cell.attributes('disabled')).toBeUndefined()
       expect(cell.attributes('aria-label')).toContain('非本月')
-    }
+      expect(cell.attributes('aria-label')).toContain('点击打开或开始记录')
 
-    await outside[0]!.trigger('click')
-    expect(wrapper.emitted('select')).toBeUndefined()
+      await cell.trigger('click')
+      const selected = wrapper.emitted('select')!.at(-1)![0] as string
+      await wrapper.setProps({ selected })
+
+      expect(wrapper.get('.period-heading h2').text()).toBe(title)
+      expect(wrapper.findAll('.day-cell').map((item) => item.attributes('aria-label'))).toEqual(dates)
+      expect(cell.classes()).toContain('selected')
+      expect(cell.attributes('aria-pressed')).toBe('true')
+    }
 
     wrapper.unmount()
   })

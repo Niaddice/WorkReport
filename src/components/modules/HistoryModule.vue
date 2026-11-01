@@ -1,8 +1,10 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, useId, watch } from 'vue'
 import dayjs from 'dayjs'
 import { isTauri } from '@tauri-apps/api/core'
-import { PhArrowClockwise, PhCheck, PhCircleNotch, PhCopy } from '@phosphor-icons/vue'
+import { PhArrowClockwise, PhCheck, PhCircleNotch, PhCopy, PhX } from '@phosphor-icons/vue'
+import ContextMenu from '../ContextMenu.vue'
+import type { ContextMenuItem } from '../../lib/contextMenus'
 import { historyApi, type HistoryVersion } from '../../lib/history'
 import { pushMessage } from '../../lib/messages'
 import { api } from '../../lib/workspace'
@@ -51,13 +53,24 @@ const copyingKey = ref('')
 const copiedKey = ref('')
 let copiedTimer: ReturnType<typeof setTimeout> | undefined
 let hoverTask = 0
+const menu = ref<{
+  version: HistoryVersion | null
+  anchor: HTMLElement
+  x: number
+  y: number
+  workspacePath: string
+  datesKey: string
+} | null>(null)
+let restoringMenuFocus = false
 
 interface TooltipState {
   version: HistoryVersion
   content: string
   loading: boolean
   error: string
+  pinned: boolean
 }
+const tooltipId = `history-version-tooltip-${useId()}`
 const tooltip = ref<TooltipState | null>(null)
 const tooltipPosition = ref({ left: 0, top: 0 })
 const tooltipElement = ref<HTMLElement>()
@@ -89,6 +102,97 @@ function copyLabel(version: HistoryVersion) {
   return `复制 ${versionDate(version)} ${versionTime(version)} 保存的 ${badgeOf(version)} 版本`
 }
 
+function closeMenu(restoreFocus = false) {
+  const anchor = menu.value?.anchor
+  menu.value = null
+  if (restoreFocus && anchor?.isConnected) {
+    restoringMenuFocus = true
+    anchor.focus({ preventScroll: true })
+    restoringMenuFocus = false
+  }
+}
+function openMenu(event: MouseEvent | KeyboardEvent, version: HistoryVersion | null = null) {
+  if (event instanceof KeyboardEvent && event.key !== 'ContextMenu' && !(event.shiftKey && event.key === 'F10')) return
+  event.preventDefault()
+  event.stopPropagation()
+  const workspacePath = journal.workspace.value?.path
+  if (!workspacePath) return
+  hideTooltip()
+  const row = event.currentTarget as HTMLElement
+  const anchor = version
+    ? ((event.target as Element).closest<HTMLElement>('button') ??
+      row.querySelector<HTMLElement>('.history-module-item') ??
+      row)
+    : row
+  const rect = anchor.getBoundingClientRect()
+  const mouse = event instanceof MouseEvent && (event.clientX !== 0 || event.clientY !== 0)
+  menu.value = {
+    version,
+    anchor,
+    x: mouse ? event.clientX : rect.left,
+    y: mouse ? event.clientY : rect.bottom,
+    workspacePath,
+    datesKey: selectedDates.value.join(','),
+  }
+}
+const menuItems = computed<ContextMenuItem[]>(() => {
+  const session = menu.value
+  const version = session?.version
+  const items: ContextMenuItem[] = []
+  if (version && session) {
+    items.push(
+      {
+        id: 'preview',
+        label: '预览版本内容',
+        disabled: listLoading.value,
+        run: () => {
+          const rect = session.anchor.getBoundingClientRect()
+          return showTooltip(version, rect.left + rect.width / 2, rect.bottom, true)
+        },
+      },
+      {
+        id: 'copy',
+        label: '复制版本内容',
+        disabled: listLoading.value || !!copyingKey.value,
+        run: () => copyVersion(version),
+      },
+      {
+        id: 'open',
+        label: '查看当日日报',
+        disabled:
+          listLoading.value || !!context.disabled?.value || !!journal.busy?.value || !context.actions?.selectReport,
+        run: () => context.actions.selectReport(version.date),
+      },
+    )
+  }
+  items.push({
+    id: 'refresh',
+    label: '刷新历史版本',
+    disabled: listLoading.value,
+    run: () => {
+      refresher.value++
+    },
+  })
+  return items
+})
+async function chooseMenu(id: string) {
+  const session = menu.value
+  const item = menuItems.value.find((item) => item.id === id)
+  if (!session || !item || item.disabled) return
+  if (session.workspacePath !== journal.workspace.value?.path || session.datesKey !== selectedDates.value.join(',')) {
+    closeMenu()
+    return
+  }
+  closeMenu(true)
+  try {
+    await item.run()
+  } catch (cause) {
+    if (session.workspacePath === journal.workspace.value?.path) {
+      pushMessage({ tone: 'error', text: `${item.label}失败：${String(cause)}` })
+    }
+  }
+}
+
 function readContent(version: HistoryVersion): Promise<string> {
   const key = versionKey(version)
   const cached = contentCache.get(key)
@@ -110,6 +214,7 @@ function readContent(version: HistoryVersion): Promise<string> {
 }
 
 function resetContent() {
+  closeMenu()
   contentRevision++
   contentCache.clear()
   contentReads.clear()
@@ -169,6 +274,22 @@ function hideTooltip() {
   tooltip.value = null
   latestPointer = { x: 0, y: 0 }
 }
+function hideHoverTooltip() {
+  if (!tooltip.value?.pinned) hideTooltip()
+}
+function onOutsidePointerDown(event: PointerEvent) {
+  if (tooltip.value?.pinned && (!(event.target instanceof Node) || !tooltipElement.value?.contains(event.target)))
+    hideTooltip()
+}
+function onPinnedPreviewKeydown(event: KeyboardEvent) {
+  if (event.key !== 'Escape' || !tooltip.value?.pinned) return
+  event.preventDefault()
+  event.stopPropagation()
+  hideTooltip()
+}
+function onWindowScroll(event: Event) {
+  if (!(event.target instanceof Node) || !tooltipElement.value?.contains(event.target)) hideTooltip()
+}
 
 function positionTooltip() {
   const element = tooltipElement.value
@@ -194,34 +315,36 @@ function schedulePosition() {
   })
 }
 
-async function showTooltip(version: HistoryVersion, clientX: number, clientY: number) {
+async function showTooltip(version: HistoryVersion, clientX: number, clientY: number, pinned = false) {
   latestPointer = { x: clientX, y: clientY }
   const task = ++hoverTask
-  tooltip.value = { version, content: '', loading: true, error: '' }
+  tooltip.value = { version, content: '', loading: true, error: '', pinned }
   await nextTick()
   if (task !== hoverTask) return
   schedulePosition()
   try {
     const content = await readContent(version)
     if (task !== hoverTask) return
-    tooltip.value = { version, content, loading: false, error: '' }
+    tooltip.value = { version, content, loading: false, error: '', pinned }
     await nextTick()
     schedulePosition()
   } catch (cause) {
     if (task !== hoverTask) return
-    tooltip.value = { version, content: '', loading: false, error: `读取版本内容失败：${String(cause)}` }
+    tooltip.value = { version, content: '', loading: false, error: `读取版本内容失败：${String(cause)}`, pinned }
   }
 }
 
 function onVersionEnter(version: HistoryVersion, event: MouseEvent) {
+  if (menu.value || tooltip.value?.pinned) return
   void showTooltip(version, event.clientX, event.clientY)
 }
 function onVersionMove(event: MouseEvent) {
-  if (!tooltip.value) return
+  if (!tooltip.value || tooltip.value.pinned) return
   latestPointer = { x: event.clientX, y: event.clientY }
   schedulePosition()
 }
 function onVersionFocus(version: HistoryVersion, event: FocusEvent) {
+  if (menu.value || restoringMenuFocus || tooltip.value?.pinned) return
   const element = event.currentTarget as HTMLElement
   const rect = element.getBoundingClientRect()
   void showTooltip(version, rect.left + rect.width / 2, rect.top + rect.height / 2)
@@ -242,8 +365,15 @@ function resetAndReload() {
 }
 
 watch(
-  [rangeMode, selectedDates, selectedDate, waitingForRange, () => journal.workspace.value?.path],
-  () => {
+  [
+    rangeMode,
+    selectedDates,
+    selectedDate,
+    waitingForRange,
+    () => journal.workspace.value?.path,
+    () => journal.entries?.value,
+  ],
+  (values, previous) => {
     if (rangeMode.value && selectedDates.value.length === 0) return
     // 框选会先保存当前草稿，等合并范围准备完成再读取最新历史版本。
     if (waitingForRange.value) {
@@ -255,12 +385,33 @@ watch(
       resetContent()
       return
     }
-    resetAndReload()
+    // 保存或后台刷新索引时保留现有行，避免首次右键落到闪空的列表上。
+    const scopeChanged = values.slice(0, -1).some((value, index) => value !== previous?.[index])
+    if (scopeChanged) resetAndReload()
+    else void load()
   },
   { immediate: true },
 )
 watch(refresher, resetAndReload)
+watch(
+  () => context.disabled?.value || journal.busy?.value,
+  (busy) => {
+    if (busy) closeMenu()
+  },
+)
+onMounted(() => {
+  window.addEventListener('pointerdown', onOutsidePointerDown, true)
+  window.addEventListener('keydown', onPinnedPreviewKeydown, true)
+  window.addEventListener('scroll', onWindowScroll, true)
+  window.addEventListener('resize', hideTooltip)
+  window.addEventListener('blur', hideTooltip)
+})
 onBeforeUnmount(() => {
+  window.removeEventListener('pointerdown', onOutsidePointerDown, true)
+  window.removeEventListener('keydown', onPinnedPreviewKeydown, true)
+  window.removeEventListener('scroll', onWindowScroll, true)
+  window.removeEventListener('resize', hideTooltip)
+  window.removeEventListener('blur', hideTooltip)
   if (tooltipFrame) cancelAnimationFrame(tooltipFrame)
   hideTooltip()
   resetContent()
@@ -268,7 +419,13 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="history-module" :aria-busy="listLoading">
+  <div
+    class="history-module"
+    :aria-busy="listLoading"
+    tabindex="-1"
+    @contextmenu="openMenu($event)"
+    @keydown.self="openMenu($event)"
+  >
     <div class="history-module-toolbar">
       <span class="history-module-date" :title="rangeLabel">{{ rangeLabel }}</span>
       <button
@@ -306,17 +463,24 @@ onBeforeUnmount(() => {
           <span class="history-module-group-count">{{ group.versions.length }} 个版本</span>
         </h3>
         <p v-if="!group.versions.length" class="history-module-group-empty">暂无历史版本</p>
-        <div v-for="version in group.versions" :key="versionKey(version)" class="history-module-row">
+        <div
+          v-for="version in group.versions"
+          :key="versionKey(version)"
+          class="history-module-row"
+          :class="{ 'is-context-target': menu?.version && versionKey(menu.version) === versionKey(version) }"
+          @contextmenu.stop="openMenu($event, version)"
+          @keydown="openMenu($event, version)"
+        >
           <button
             type="button"
             class="history-module-item"
             :aria-label="itemLabel(version)"
-            :aria-describedby="tooltip?.version.id === version.id ? 'history-version-tooltip' : undefined"
+            :aria-describedby="tooltip && versionKey(tooltip.version) === versionKey(version) ? tooltipId : undefined"
             @mouseenter="onVersionEnter(version, $event)"
             @mousemove="onVersionMove"
-            @mouseleave="hideTooltip"
+            @mouseleave="hideHoverTooltip"
             @focus="onVersionFocus(version, $event)"
-            @blur="hideTooltip"
+            @blur="hideHoverTooltip"
             @keydown="onKeydown"
           >
             <span class="history-module-time">{{ versionTime(version) }}</span>
@@ -341,18 +505,39 @@ onBeforeUnmount(() => {
       </section>
     </div>
 
+    <ContextMenu
+      v-if="menu"
+      kind="history"
+      :x="menu.x"
+      :y="menu.y"
+      :items="menuItems"
+      @close="closeMenu"
+      @choose="chooseMenu"
+    />
+
     <Teleport to="body">
       <div
         v-if="tooltip"
-        id="history-version-tooltip"
+        :id="tooltipId"
         ref="tooltipElement"
         class="history-tooltip"
-        role="tooltip"
+        :class="{ 'is-pinned': tooltip.pinned }"
+        :role="tooltip.pinned ? 'dialog' : 'tooltip'"
+        :aria-label="tooltip.pinned ? '历史版本预览' : undefined"
         :style="{ left: `${tooltipPosition.left}px`, top: `${tooltipPosition.top}px` }"
       >
         <div class="history-tooltip-head">
           <strong>{{ versionDate(tooltip.version) }} {{ versionTime(tooltip.version) }}</strong>
           <span>{{ badgeOf(tooltip.version) }} · {{ formatBytes(tooltip.version.bytes) }}</span>
+          <button
+            v-if="tooltip.pinned"
+            type="button"
+            class="history-preview-close"
+            aria-label="关闭历史版本预览"
+            @click="hideTooltip"
+          >
+            <PhX :size="14" aria-hidden="true" />
+          </button>
         </div>
         <p v-if="tooltip.loading" class="history-tooltip-note">正在读取版本内容…</p>
         <p v-else-if="tooltip.error" class="history-tooltip-note history-tooltip-error">{{ tooltip.error }}</p>

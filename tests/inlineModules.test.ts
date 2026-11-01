@@ -163,6 +163,7 @@ describe('inline modules', () => {
   it('waits for range preparation so a newly saved history version is included', async () => {
     list.mockResolvedValue([])
     const value = context()
+    value.journal.entries = ref([])
     const wrapper = mountWithContext(HistoryModule, value)
     await flushPromises()
     list.mockClear()
@@ -172,6 +173,9 @@ describe('inline modules', () => {
     await flushPromises()
     expect(list).not.toHaveBeenCalled()
     expect(wrapper.attributes('aria-busy')).toBe('true')
+    value.journal.entries.value = [{ date: '20261025', filename: '20261025.md', format: 'md' }]
+    await flushPromises()
+    expect(list).not.toHaveBeenCalled()
 
     list.mockResolvedValue([{ id: 'new', date: '20261025', savedAt: Date.now(), format: 'md', bytes: 300 }])
     value.rangeLoading.value = false

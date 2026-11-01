@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ref } from 'vue'
-import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
+import { DOMWrapper, flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 
 const { list, read, copy, isTauri } = vi.hoisted(() => ({
   list: vi.fn(),
@@ -24,7 +24,11 @@ function mountHistory() {
     journal: {
       selectedDate: ref('20261025'),
       workspace: ref({ path: '/tmp/history-copy', name: 'history-copy' }),
+      busy: ref(false),
+      entries: ref([]),
     },
+    disabled: ref(false),
+    actions: { selectReport: vi.fn(async () => {}) },
     rangeDates: ref<string[]>([]),
     rangeLoading: ref(false),
   } as unknown as ModuleContext
@@ -174,5 +178,193 @@ describe('history version copy', () => {
     await flushPromises()
     expect(read).toHaveBeenCalledExactlyOnceWith('20261025', 'v2')
     expect(copy).toHaveBeenCalledExactlyOnceWith('# 新版原文')
+  })
+})
+
+function historyMenu() {
+  return new DOMWrapper(document.body.querySelector<HTMLElement>('.history-context-menu')!)
+}
+function menuItem(label: string) {
+  return historyMenu()
+    .findAll<HTMLButtonElement>('[role="menuitem"]')
+    .find((item) => item.text() === label)!
+}
+
+describe('history version context menu', () => {
+  it('copies the exact right-clicked version and clears the hover preview while the menu is open', async () => {
+    const { wrapper } = mountHistory()
+    await flushPromises()
+    const items = wrapper.findAll('.history-module-item')
+    await items[1]!.trigger('mouseenter', { clientX: 120, clientY: 180 })
+    await flushPromises()
+    expect(document.body.querySelector('.history-tooltip')).not.toBeNull()
+
+    await items[1]!.trigger('contextmenu', { clientX: 120, clientY: 180 })
+    await flushPromises()
+    expect(historyMenu().attributes('aria-label')).toBe('历史版本操作')
+    expect(
+      historyMenu()
+        .findAll('[role="menuitem"]')
+        .map((item) => item.text()),
+    ).toEqual(['预览版本内容', '复制版本内容', '查看当日日报', '刷新历史版本'])
+    expect(document.body.querySelector('.history-tooltip')).toBeNull()
+    expect(wrapper.findAll('.history-module-row')[1]!.classes()).toContain('is-context-target')
+
+    await menuItem('复制版本内容').trigger('click')
+    await flushPromises()
+    expect(copy).toHaveBeenCalledExactlyOnceWith('旧版原文\n第二行')
+    expect(read).toHaveBeenCalledExactlyOnceWith('20261025', 'v1')
+    expect(wrapper.findAll('.history-copy-button')[1]!.classes()).toContain('is-copied')
+    expect(document.body.querySelector('.history-context-menu')).toBeNull()
+    expect(document.body.querySelector('.history-tooltip')).toBeNull()
+  })
+
+  it('keeps the chosen menu preview when closing the menu moves the pointer over another version', async () => {
+    const { wrapper } = mountHistory()
+    await flushPromises()
+    await wrapper.findAll('.history-module-item')[1]!.trigger('contextmenu')
+    await flushPromises()
+    await menuItem('预览版本内容').trigger('click')
+    await flushPromises()
+    expect(document.body.querySelector('.history-tooltip')?.textContent).toContain('旧版原文\n第二行')
+    expect(read).toHaveBeenCalledExactlyOnceWith('20261025', 'v1')
+    expect(copy).not.toHaveBeenCalled()
+    expect(document.body.querySelector('.history-context-menu')).toBeNull()
+
+    await wrapper.findAll('.history-module-item')[1]!.trigger('mouseleave')
+    await wrapper.get('.history-module-item').trigger('mouseenter', { clientX: 200, clientY: 230 })
+    await flushPromises()
+    expect(document.body.querySelector('.history-tooltip')?.textContent).toContain('旧版原文\n第二行')
+    expect(read).toHaveBeenCalledExactlyOnceWith('20261025', 'v1')
+    expect(document.body.querySelector('[aria-label="关闭历史版本预览"]')).not.toBeNull()
+  })
+
+  it('updates the history list after a successful journal save changes its index', async () => {
+    const { wrapper, context } = mountHistory()
+    await flushPromises()
+    expect(wrapper.findAll('.history-module-item')).toHaveLength(2)
+    const oldVersions = await list.mock.results[0]!.value
+    const updatedVersions = [
+      { id: 'v3', date: '20261025', savedAt: 1792886460000, format: 'md', bytes: 300 },
+      ...oldVersions,
+    ]
+    let finishList!: (versions: typeof updatedVersions) => void
+    list.mockReturnValueOnce(
+      new Promise((resolve) => {
+        finishList = resolve
+      }),
+    )
+    context.journal.entries.value = [{ date: '20261025', filename: '20261025.md', format: 'md' }]
+    await flushPromises()
+    expect(wrapper.findAll('.history-module-item')).toHaveLength(2)
+    expect(wrapper.attributes('aria-busy')).toBe('true')
+    finishList(updatedVersions)
+    await flushPromises()
+    expect(wrapper.findAll('.history-module-item')).toHaveLength(3)
+    expect(list).toHaveBeenCalledTimes(2)
+  })
+
+  it.each(['close', 'Escape', 'outside'])(
+    'dismisses a menu preview via %s while allowing its content to scroll',
+    async (action) => {
+      const { wrapper } = mountHistory()
+      await flushPromises()
+      await wrapper.get('.history-module-item').trigger('contextmenu')
+      await flushPromises()
+      await menuItem('预览版本内容').trigger('click')
+      await flushPromises()
+      const preview = new DOMWrapper(document.body.querySelector<HTMLElement>('.history-tooltip')!)
+      expect(preview.attributes('role')).toBe('dialog')
+      await preview.get('.history-tooltip-content').trigger('scroll')
+      expect(document.body.querySelector('.history-tooltip')).not.toBeNull()
+      if (action === 'close') await preview.get('[aria-label="关闭历史版本预览"]').trigger('click')
+      else if (action === 'Escape') window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
+      else document.body.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }))
+      await flushPromises()
+      expect(document.body.querySelector('.history-tooltip')).toBeNull()
+    },
+  )
+
+  it('opens with Shift+F10, supports keyboard navigation and restores focus without reopening the tooltip', async () => {
+    const { wrapper } = mountHistory()
+    await flushPromises()
+    const item = wrapper.get<HTMLButtonElement>('.history-module-item')
+    item.element.focus()
+    await item.trigger('keydown', { key: 'F10', shiftKey: true })
+    await flushPromises()
+    expect(document.activeElement?.textContent).toBe('预览版本内容')
+    await historyMenu().trigger('keydown', { key: 'ArrowDown' })
+    expect(document.activeElement?.textContent).toBe('复制版本内容')
+    await historyMenu().trigger('keydown', { key: 'Escape' })
+    await flushPromises()
+    expect(document.body.querySelector('.history-context-menu')).toBeNull()
+    expect(document.activeElement).toBe(item.element)
+    expect(document.body.querySelector('.history-tooltip')).toBeNull()
+  })
+
+  it('routes a version in a selected date range to its own report date', async () => {
+    list.mockResolvedValue([
+      { id: 'v2', date: '20261025', savedAt: 1792886400000, format: 'md', bytes: 200 },
+      { id: 'v1', date: '20261024', savedAt: 1792800000000, format: 'txt', bytes: 100 },
+    ])
+    const { wrapper, context } = mountHistory()
+    context.rangeDates.value = ['20261024', '20261025']
+    await flushPromises()
+    await wrapper.findAll('.history-module-item')[1]!.trigger('contextmenu')
+    await flushPromises()
+    await menuItem('查看当日日报').trigger('click')
+    await flushPromises()
+    expect(context.actions.selectReport).toHaveBeenCalledExactlyOnceWith('20261024')
+    expect(copy).not.toHaveBeenCalled()
+  })
+
+  it('offers refresh on empty space and invalidates cached version content', async () => {
+    const { wrapper } = mountHistory()
+    await flushPromises()
+    await wrapper.get('.history-copy-button').trigger('click')
+    await flushPromises()
+    await wrapper.get('.history-module').trigger('contextmenu', { clientX: 50, clientY: 60 })
+    await flushPromises()
+    expect(
+      historyMenu()
+        .findAll('[role="menuitem"]')
+        .map((item) => item.text()),
+    ).toEqual(['刷新历史版本'])
+    await menuItem('刷新历史版本').trigger('click')
+    await flushPromises()
+    expect(list).toHaveBeenCalledTimes(2)
+    read.mockResolvedValueOnce('刷新后的版本原文')
+    await wrapper.get('.history-copy-button').trigger('click')
+    await flushPromises()
+    expect(read).toHaveBeenCalledTimes(2)
+    expect(copy).toHaveBeenLastCalledWith('刷新后的版本原文')
+  })
+
+  it.each(['outside', 'scroll', 'workspace', 'date', 'busy'])('dismisses the menu on %s', async (action) => {
+    const { wrapper, context } = mountHistory()
+    await flushPromises()
+    await wrapper.get('.history-module-item').trigger('contextmenu')
+    await flushPromises()
+    expect(document.body.querySelector('.history-context-menu')).not.toBeNull()
+    if (action === 'outside') document.body.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }))
+    else if (action === 'scroll') await wrapper.get('.history-module-scroll').trigger('scroll')
+    else if (action === 'workspace') context.journal.workspace.value = { path: '/tmp/other-history', name: 'other' }
+    else if (action === 'date') context.journal.selectedDate.value = '20261024'
+    else context.journal.busy.value = true
+    await flushPromises()
+    expect(document.body.querySelector('.history-context-menu')).toBeNull()
+  })
+
+  it('does not execute an old workspace menu even before its close watcher has run', async () => {
+    const { wrapper, context } = mountHistory()
+    await flushPromises()
+    await wrapper.get('.history-module-item').trigger('contextmenu')
+    await flushPromises()
+    const button = menuItem('复制版本内容')
+    context.journal.workspace.value = { path: '/tmp/other-history', name: 'other' }
+    button.element.click()
+    await flushPromises()
+    expect(copy).not.toHaveBeenCalled()
+    expect(read).not.toHaveBeenCalled()
   })
 })

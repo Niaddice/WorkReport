@@ -20,7 +20,7 @@ mod file_migration;
 use std::{fs, io::Write, sync::{Arc, Mutex}};
 use tauri::{Emitter, Manager, State};
 use tauri_plugin_opener::OpenerExt;
-use workspace::{Document, Entry, FileNode, Format, Preview, Workspace, WorkspaceInfo};
+use workspace::{DailyActivity, Document, Entry, FileNode, Format, Preview, Workspace, WorkspaceInfo};
 
 #[derive(Default)]
 struct AppState(Arc<Mutex<Option<Workspace>>>);
@@ -227,6 +227,14 @@ async fn open_workspace_item(app: tauri::AppHandle, state: State<'_, AppState>, 
 #[tauri::command]
 async fn list_previews(state: State<'_, AppState>, dates: Vec<String>) -> Result<Vec<Preview>, String> {
     run_workspace(state.0.clone(), move |workspace| workspace.previews(&dates)).await
+}
+
+#[tauri::command]
+async fn list_daily_activity(state: State<'_, AppState>, workspace_path: String, dates: Vec<String>) -> Result<Vec<DailyActivity>, String> {
+    run_workspace(state.0.clone(), move |workspace| {
+        summary::validate_workspace(workspace.root(), &workspace_path)?;
+        workspace.daily_activity(&dates)
+    }).await
 }
 
 #[tauri::command]
@@ -1212,6 +1220,7 @@ pub fn run() {
             list_workspace_trash,
             open_workspace_item,
             list_previews,
+            list_daily_activity,
             read_entry,
             create_entry,
             append_git_reports,

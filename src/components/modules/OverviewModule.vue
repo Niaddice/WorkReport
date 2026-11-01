@@ -2,6 +2,7 @@
 import { computed } from 'vue'
 import dayjs from 'dayjs'
 import { PhCircleNotch } from '@phosphor-icons/vue'
+import DailyHeatmap from '../DailyHeatmap.vue'
 import { getChinaDayMeta } from '../../lib/chinaHolidays'
 import { useModuleContext } from '../../modules/context'
 
@@ -80,5 +81,11 @@ const loading = computed(() => journalBusy.value && !entries.value.length)
         <span class="overview-metric-label">{{ metric.label }}</span>
       </div>
     </div>
+    <DailyHeatmap
+      v-if="!loading"
+      :today="context.today.value"
+      :entries="entries"
+      :workspace-path="journal.workspace.value?.path ?? ''"
+    />
   </div>
 </template>
