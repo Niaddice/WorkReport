@@ -36,6 +36,7 @@ import {
 import { api } from '../lib/workspace'
 import { cloneSelectedCommit, useGitCommitSelection, type SelectedGitCommit } from '../lib/gitCommitSelection'
 import GitCommitCollection from './GitCommitCollection.vue'
+import GitAuthenticationForm from './GitAuthenticationForm.vue'
 
 const props = withDefaults(
   defineProps<{
@@ -64,8 +65,19 @@ const repositoryDrafts = new Map<string, string>()
 let draftKey = ''
 let draftWorkspace = props.workspacePath
 const client = useGitWorkbench(() => ({ workspacePath: props.workspacePath, repositoryId: repositoryId.value }))
-const { repository, history, diff, loading, historyLoading, diffLoading, busy, error, notice, generatingMessage } =
-  client
+const {
+  repository,
+  history,
+  diff,
+  loading,
+  historyLoading,
+  diffLoading,
+  busy,
+  error,
+  notice,
+  authentication,
+  generatingMessage,
+} = client
 const tab = ref<'changes' | 'history' | 'branches' | 'stashes' | 'collection'>('changes')
 const tabs = [
   { id: 'changes', label: '本地更改' },
@@ -94,10 +106,16 @@ const confirmationPanel = ref<HTMLElement>()
 const contextMenu = ref<{ x: number; y: number; anchor: HTMLElement; items: ContextMenuItem[] } | null>(null)
 let copyRevision = 0
 const lock = computed(
-  () => props.disabled || busy.value || loading.value || generatingMessage.value || !!confirmation.value,
+  () =>
+    props.disabled ||
+    busy.value ||
+    loading.value ||
+    generatingMessage.value ||
+    !!confirmation.value ||
+    !!authentication.value,
 )
 const repositorySwitchLocked = computed(
-  () => props.disabled || busy.value || generatingMessage.value || !!confirmation.value,
+  () => props.disabled || busy.value || generatingMessage.value || !!confirmation.value || !!authentication.value,
 )
 const currentSelectionCount = computed(
   () => selectedEntries.value.filter((entry) => entry.repository.id === repositoryId.value).length,
@@ -154,7 +172,10 @@ watch(
 watch(
   () => [props.active, props.disabled],
   () => {
-    if (!props.active || props.disabled) client.cancelCommitMessage()
+    if (!props.active || props.disabled) {
+      client.cancelCommitMessage()
+      authentication.value = null
+    }
   },
 )
 watch(
@@ -450,8 +471,16 @@ async function commit(push = false) {
   if (!(await act({ operation: 'commit', message: commitMessage.value.trim() }))) return
   commitMessage.value = ''
   if (push && !(await act({ operation: 'push' }))) {
-    error.value = `提交已保留在本地，推送失败；可直接点击“Push 推送”重试。${error.value ? `\n${error.value}` : ''}`
+    const retry = authentication.value ? '请在下方完成远程认证后重试推送。' : '可直接点击“Push 推送”重试。'
+    error.value = `提交已保留在本地，推送失败；${retry}${error.value ? `\n${error.value}` : ''}`
   }
+}
+
+async function authenticate(value: { username: string; password: string; save?: boolean }) {
+  const pending = authentication.value
+  if (!pending || props.disabled || busy.value) return
+  authentication.value = null
+  await act({ operation: pending.operation, credentials: { url: pending.url, ...value } })
 }
 
 async function generateMessage() {
@@ -816,6 +845,13 @@ function statusLabel(file: GitFileChange, staged: boolean) {
       </nav>
       <p v-if="error" class="workbench-message workbench-error" role="alert">{{ error }}</p>
       <p v-if="notice" class="workbench-message workbench-notice" role="status">{{ notice }}</p>
+      <GitAuthenticationForm
+        v-if="authentication"
+        :url="authentication.url"
+        :operation="authentication.operation"
+        @confirm="authenticate"
+        @cancel="authentication = null"
+      />
       <section
         v-if="confirmation"
         ref="confirmationPanel"

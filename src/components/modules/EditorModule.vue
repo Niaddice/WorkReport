@@ -25,6 +25,7 @@ const {
   redo,
   flush,
   reportError,
+  readPreviousReport,
 } = journal
 const editor = ref<InstanceType<typeof JournalEditor> | InstanceType<typeof WorkspaceDocumentView>>()
 
@@ -84,6 +85,7 @@ onBeforeUnmount(() => {
         :can-undo="canUndo"
         :can-redo="canRedo"
         :scroll-source-key="scrollSourceKey"
+        :load-previous-report="readPreviousReport"
         @edit="edit"
         @undo="undo"
         @redo="redo"

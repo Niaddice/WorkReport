@@ -3,6 +3,8 @@ mod appearance;
 mod database;
 mod excel;
 mod git;
+mod git_auth;
+mod git_credentials;
 mod git_client;
 mod history;
 mod holidays;
@@ -649,12 +651,35 @@ async fn read_git_diff(state: State<'_, AppState>, workspace_path: String, repos
 }
 
 #[tauri::command]
-async fn git_repository_action(state: State<'_, AppState>, workspace_path: String, repository_id: String, request: git_client::Action) -> Result<String, String> {
+async fn git_repository_action(app: tauri::AppHandle, state: State<'_, AppState>, workspace_path: String, repository_id: String, request: git_client::Action) -> Result<String, String> {
     let configuration = git_configuration(state.0.clone(), workspace_path.clone()).await?;
     let _guard = git_client::repository_lock(&configuration, &repository_id).await?;
-    // Revalidate after waiting for another operation: never act on a stale workspace.
-    validate_git_configuration(state.0.clone(), workspace_path, configuration.clone()).await?;
-    git_client::action(&configuration, &repository_id, request).await
+    let storage = Arc::new(git_credentials::LocalStore(legacy_config_dir(&app)));
+    git_credentials::execute(request, storage, |request| {
+        let state = state.0.clone();
+        let workspace_path = workspace_path.clone();
+        let configuration = configuration.clone();
+        let repository_id = repository_id.clone();
+        async move {
+            // Revalidate after waiting for the lock or decrypting a saved credential.
+            validate_git_configuration(state, workspace_path, configuration.clone()).await?;
+            git_client::action(&configuration, &repository_id, request).await
+        }
+    }).await
+}
+
+#[tauri::command]
+async fn list_git_credentials(app: tauri::AppHandle) -> Result<Vec<git_credentials::Metadata>, String> {
+    let directory = legacy_config_dir(&app)?;
+    tauri::async_runtime::spawn_blocking(move || git_credentials::list(&directory))
+        .await.map_err(|_| "读取本机 Git 凭据失败")?
+}
+
+#[tauri::command]
+async fn forget_git_credential(app: tauri::AppHandle, origin: Option<String>) -> Result<(), String> {
+    let directory = legacy_config_dir(&app)?;
+    tauri::async_runtime::spawn_blocking(move || git_credentials::forget(&directory, origin.as_deref()))
+        .await.map_err(|_| "清除本机 Git 凭据失败")?
 }
 
 #[tauri::command]
@@ -1244,6 +1269,8 @@ pub fn run() {
             read_git_history,
             read_git_diff,
             git_repository_action,
+            list_git_credentials,
+            forget_git_credential,
             generate_git_commit_message,
             cancel_git_commit_message,
             load_ui_preferences,

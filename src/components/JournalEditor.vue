@@ -42,6 +42,7 @@ import { selectMenuPosition } from '../lib/select'
 import { useSplitPreviewScroll } from '../lib/useSplitPreviewScroll'
 import { markdownWithSourceLines } from '../lib/markdownScroll'
 import RichMarkdownEditor from './RichMarkdownEditor.vue'
+import PreviousJournalButton from './PreviousJournalButton.vue'
 
 const props = defineProps<{
   date: string
@@ -60,6 +61,7 @@ const props = defineProps<{
   scrollSourceKey?: string
   filePath?: string
   storageMode?: 'files' | 'dual' | 'database'
+  loadPreviousReport?: () => Promise<Document | null>
 }>()
 const emit = defineEmits<{
   edit: [content: string, forceHistory?: boolean]
@@ -674,6 +676,12 @@ async function copyDraft() {
     emit('error', '复制失败，请重试或选中文本后手动复制。')
   }
 }
+function importPreviousReport(content: string) {
+  if (props.disabled || props.filePath || !props.document) return
+  closePopovers()
+  emit('edit', content, true)
+  focus()
+}
 function focus() {
   void nextTick(() => {
     if (richEditor.value) richEditor.value.focus()
@@ -791,6 +799,14 @@ defineExpose({ focus })
               ><PhFileText :size="14" />{{ document?.filename ?? `${date}.md` }}</span
             >
             <div class="editor-body-tools">
+              <PreviousJournalButton
+                v-if="!filePath && loadPreviousReport"
+                :disabled="disabled"
+                :has-content="hasContent"
+                :source-key="`${scrollKey}\0${document.format}`"
+                :load="loadPreviousReport"
+                @confirm="importPreviousReport"
+              />
               <button
                 v-if="document && !filePath"
                 type="button"

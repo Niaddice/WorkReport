@@ -191,6 +191,29 @@ describe('journal scroll synchronization', () => {
 })
 
 describe('journal Markdown tools', () => {
+  it.each(['md', 'txt'] as const)('adds confirmed previous content as one undoable edit in %s mode', async (format) => {
+    const wrapper = await mountEditor('当前草稿', format)
+    const previous = {
+      date: '20261023',
+      filename: '20261023.md',
+      format: 'md' as const,
+      content: '# 上次日报\n\n原始内容\n',
+      revision: 'r1',
+    }
+    await wrapper.setProps({ loadPreviousReport: vi.fn().mockResolvedValue(previous) })
+    await wrapper.get('.editor-body-tools .previous-journal-trigger').trigger('click')
+    await flushPromises()
+    expect(wrapper.emitted('edit')).toBeUndefined()
+    await popupButton(popover('dialog', '带入上次日报'), '确认带入').trigger('click')
+    await flushPromises()
+    expect(wrapper.emitted('edit')).toEqual([[previous.content, true]])
+    expect(wrapper.props('document')?.format).toBe(format)
+    expect(wrapper.emitted('format')).toBeUndefined()
+    expect(document.activeElement).toBe(wrapper.get(format === 'md' ? '.rich-markdown-document' : 'textarea').element)
+    await wrapper.setProps({ filePath: 'notes/readme.md' })
+    expect(wrapper.find('.previous-journal-trigger').exists()).toBe(false)
+  })
+
   it('uses layout button widths while module animations scale their painted rectangles', async () => {
     const wrapper = await mountEditor()
     const button = wrapper.get<HTMLElement>('md-icon-button').element

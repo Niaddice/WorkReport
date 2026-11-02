@@ -903,6 +903,102 @@ describe('Git workbench controls', () => {
     wrapper.unmount()
   })
 
+  it('requests HTTP credentials and retries only the failed push after a successful commit', async () => {
+    const wrapper = await mountReady()
+    let pushes = 0
+    invoke.mockImplementation(async (command: string, args: { request?: { operation: string } }) => {
+      if (command === 'git_repository_action') {
+        if (args.request?.operation === 'push' && pushes++ === 0)
+          throw "Git 操作失败：fatal: could not read Username for 'http://106.75.23.137:13000': terminal prompts disabled"
+        return '操作完成'
+      }
+      return state({ files: [] })
+    })
+    await wrapper.get('[aria-label="提交说明"]').setValue('先保留本地提交')
+    await button(wrapper, '提交并推送').trigger('click')
+    await flushPromises()
+    expect(wrapper.text()).toContain('提交已保留在本地')
+    expect(wrapper.get('[aria-label="Git 远程认证"]').text()).toContain('http://106.75.23.137:13000')
+    expect(wrapper.get<HTMLInputElement>('[aria-label="保存 Git 凭据到本机"]').element.checked).toBe(false)
+    await wrapper.get('[aria-label="Git 用户名"]').setValue('developer')
+    await wrapper.get('[aria-label="Git 密码或访问令牌"]').setValue('dummy-test-token')
+    await wrapper.get('[aria-label="Git 远程认证"]').trigger('submit')
+    await flushPromises()
+    expect(actionCalls().map(([, args]) => args.request.operation)).toEqual(['commit', 'push', 'push'])
+    expect(actionCalls().at(-1)![1].request.credentials).toEqual({
+      url: 'http://106.75.23.137:13000',
+      username: 'developer',
+      password: 'dummy-test-token',
+    })
+    expect(wrapper.find('[aria-label="Git 远程认证"]').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('dummy-test-token')
+    wrapper.unmount()
+  })
+
+  it('passes the explicit save choice only after the user selects encrypted local storage', async () => {
+    const wrapper = await mountReady()
+    let calls = 0
+    invoke.mockImplementation(async (command: string) => {
+      if (command === 'git_repository_action') {
+        if (calls++ === 0) throw "fatal: could not read Username for 'https://example.test': terminal prompts disabled"
+        return '推送完成，Git 凭据已加密保存到本机。'
+      }
+      return state()
+    })
+    await button(wrapper, 'Push 推送').trigger('click')
+    await flushPromises()
+    await wrapper.get('[aria-label="Git 用户名"]').setValue('saved-user')
+    await wrapper.get('[aria-label="Git 密码或访问令牌"]').setValue('saved-test-token')
+    await wrapper.get('[aria-label="保存 Git 凭据到本机"]').setValue(true)
+    expect(wrapper.get('[aria-label="Git 远程认证"]').text()).toContain('认证成功后加密保存')
+    await wrapper.get('[aria-label="Git 远程认证"]').trigger('submit')
+    await flushPromises()
+    expect(actionCalls().at(-1)![1].request.credentials).toEqual({
+      url: 'https://example.test',
+      username: 'saved-user',
+      password: 'saved-test-token',
+      save: true,
+    })
+    expect(wrapper.text()).not.toContain('saved-test-token')
+    expect(wrapper.text()).toContain('已加密保存到本机')
+    wrapper.unmount()
+  })
+
+  it('does not repeat a network operation when authentication is canceled', async () => {
+    const wrapper = await mountReady()
+    invoke.mockImplementation(async (command: string) => {
+      if (command === 'git_repository_action')
+        throw "Git 操作失败：fatal: Authentication failed for 'https://example.test/repo.git/'"
+      return state()
+    })
+    await button(wrapper, 'Push 推送').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[aria-label="Git 远程认证"]').exists()).toBe(true)
+    await wrapper.get('[aria-label="Git 密码或访问令牌"]').setValue('discard-this-token')
+    await wrapper.get('[aria-label="Git 远程认证"] button[type="button"]').trigger('click')
+    await flushPromises()
+    expect(actionCalls()).toHaveLength(1)
+    expect(wrapper.find('[aria-label="Git 远程认证"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('clears an authentication prompt and its password when the workspace changes', async () => {
+    const wrapper = await mountReady()
+    invoke.mockImplementation(async (command: string) => {
+      if (command === 'git_repository_action')
+        throw "fatal: could not read Username for 'https://example.test': terminal prompts disabled"
+      return state()
+    })
+    await button(wrapper, 'Push 推送').trigger('click')
+    await flushPromises()
+    await wrapper.get('[aria-label="Git 密码或访问令牌"]').setValue('old-workspace-token')
+    await wrapper.setProps({ workspacePath: '/other-workspace' })
+    await flushPromises()
+    expect(wrapper.find('[aria-label="Git 远程认证"]').exists()).toBe(false)
+    expect(actionCalls()).toHaveLength(1)
+    wrapper.unmount()
+  })
+
   it('requires confirmation for branch and stash deletion and blocks unrelated actions while reviewing', async () => {
     const wrapper = await mountReady()
     await button(wrapper, '分支').trigger('click')

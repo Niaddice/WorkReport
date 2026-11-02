@@ -161,17 +161,29 @@ pub(super) async fn run(
     path: &Path,
     args: &[String],
 ) -> Result<std::process::Output, String> {
+    run_with_credentials(settings, path, args, None).await
+}
+
+pub(super) async fn run_with_credentials(
+    settings: &Settings,
+    path: &Path,
+    args: &[String],
+    credentials: Option<&crate::git_auth::Credentials>,
+) -> Result<std::process::Output, String> {
     let mut command = Command::new(settings.executable.trim());
     command
         .current_dir(path)
         .args(["--no-pager", "--no-optional-locks"])
-        .args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .env("GIT_TERMINAL_PROMPT", "0")
         .env("GIT_PAGER", "cat")
         .kill_on_drop(true);
+    if let Some(credentials) = credentials {
+        credentials.configure(&mut command)?;
+    }
+    command.args(args);
     // GUI apps may inherit a minimal PATH. Preserve the user's search order.
     let mut paths: Vec<_> =
         std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()).collect();
@@ -196,7 +208,7 @@ pub(super) async fn run(
         .map_err(|error| format!("无法启动 Git，请检查 Git 程序和仓库目录：{error}"))?;
     let stdout = child.stdout.take().ok_or("无法读取 Git 输出")?;
     let stderr = child.stderr.take().ok_or("无法读取 Git 错误信息")?;
-    let (stdout, stderr, status) = timeout(Duration::from_secs(30), async {
+    let (mut stdout, mut stderr, status) = timeout(Duration::from_secs(30), async {
         tokio::try_join!(read_limited(stdout), read_limited(stderr), async {
             child
                 .wait()
@@ -206,6 +218,10 @@ pub(super) async fn run(
     })
     .await
     .map_err(|_| "读取 Git 超时，请检查仓库后重试".to_string())??;
+    if let Some(credentials) = credentials {
+        credentials.redact(&mut stdout);
+        credentials.redact_error(&mut stderr);
+    }
     Ok(std::process::Output {
         stdout,
         stderr,

@@ -66,26 +66,28 @@ const loading = computed(() => journalBusy.value && !entries.value.length)
 
 <template>
   <div class="overview-module" :aria-busy="loading">
-    <div class="overview-hero">
-      <span class="overview-today">今日日报</span>
-      <span class="overview-today-state" :class="{ 'is-recorded': !!todayEntry }">{{ todayState }}</span>
-      <span v-if="todayHoliday" class="overview-holiday">{{ holidayLabel }}</span>
-    </div>
-    <div v-if="loading" class="overview-loading" role="status" aria-live="polite">
-      <PhCircleNotch class="spin" :size="16" aria-hidden="true" />正在读取日报…
-    </div>
-    <div v-else-if="!entries.length" class="overview-empty">从今天的第一篇日报开始</div>
-    <div v-else class="overview-metrics">
-      <div v-for="metric in metrics" :key="metric.label" class="overview-metric">
-        <strong class="overview-metric-value">{{ metric.value }}</strong>
-        <span class="overview-metric-label">{{ metric.label }}</span>
+    <div class="overview-content" :class="{ 'is-loading': loading }">
+      <div class="overview-hero">
+        <span class="overview-today">今日日报</span>
+        <span class="overview-today-state" :class="{ 'is-recorded': !!todayEntry }">{{ todayState }}</span>
+        <span v-if="todayHoliday" class="overview-holiday">{{ holidayLabel }}</span>
       </div>
+      <div v-if="loading" class="overview-loading" role="status" aria-live="polite">
+        <PhCircleNotch class="spin" :size="16" aria-hidden="true" />正在读取日报…
+      </div>
+      <div v-else-if="!entries.length" class="overview-empty">从今天的第一篇日报开始</div>
+      <div v-else class="overview-metrics">
+        <div v-for="metric in metrics" :key="metric.label" class="overview-metric">
+          <strong class="overview-metric-value">{{ metric.value }}</strong>
+          <span class="overview-metric-label">{{ metric.label }}</span>
+        </div>
+      </div>
+      <DailyHeatmap
+        v-if="!loading"
+        :today="context.today.value"
+        :entries="entries"
+        :workspace-path="journal.workspace.value?.path ?? ''"
+      />
     </div>
-    <DailyHeatmap
-      v-if="!loading"
-      :today="context.today.value"
-      :entries="entries"
-      :workspace-path="journal.workspace.value?.path ?? ''"
-    />
   </div>
 </template>

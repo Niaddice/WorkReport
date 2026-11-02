@@ -117,6 +117,67 @@ async function replaceRichMarkdown(wrapper: VueWrapper, markdown: string) {
   await flushPromises()
 }
 
+describe('previous journal integration', () => {
+  it.each(['md', 'txt'] as const)(
+    'confirms, autosaves and undoes previous content in a new %s journal',
+    async (format) => {
+      const date = dayjs().format('YYYYMMDD')
+      const previous: Document = {
+        date: dayjs().subtract(3, 'day').format('YYYYMMDD'),
+        filename: 'previous.md',
+        format: 'md',
+        content: '# 上次工作\n\n- 完成接口联调\n',
+        revision: 'old',
+      }
+      let saved: Document | null = null
+      invoke.mockImplementation(async (command: string, args?: Record<string, unknown>) => {
+        if (command === 'load_database_settings') return { ...DEFAULT_DATABASE_SETTINGS, defaultFormat: format }
+        if (command === 'list_entries') return saved ? [previous, saved] : [previous]
+        if (command === 'read_entry') return previous
+        if (command === 'create_entry' || command === 'save_entry') {
+          saved = { date, filename: `${date}.${format}`, format, content: args!.content as string, revision: 'saved' }
+          return saved
+        }
+        return commandResult(command)
+      })
+      const wrapper = await openDemoWorkspace()
+      try {
+        const editor = wrapper.getComponent(JournalEditor)
+        expect(editor.props('document')?.format).toBe(format)
+        await wrapper.get('.editor-body-tools .previous-journal-trigger').trigger('click')
+        await flushPromises()
+        expect(editor.props('content')).toBe('')
+        expect(invoke.mock.calls.some(([command]) => command === 'create_entry')).toBe(false)
+        const confirm = wrapper
+          .get('.previous-journal-popover')
+          .findAll('button')
+          .find((button) => button.text() === '确认带入')!
+        await confirm.trigger('click')
+        await flushPromises()
+        expect(editor.props('content')).toBe(previous.content)
+        expect(editor.props('canUndo')).toBe(true)
+        // Wait for the normal debounce, rather than forcing a manual save.
+        await vi.waitFor(
+          () => expect(invoke).toHaveBeenCalledWith('create_entry', { date, format, content: previous.content }),
+          { timeout: 2000 },
+        )
+        await flushPromises()
+        expect(editor.props('dirty')).toBe(false)
+        editor.vm.$emit('undo')
+        await flushPromises()
+        expect(editor.props('content')).toBe('')
+        expect(editor.props('canRedo')).toBe(true)
+        editor.vm.$emit('save')
+        await flushPromises()
+        expect(invoke).toHaveBeenCalledWith('save_entry', { date, content: '', expectedRevision: 'saved', format })
+        expect(invoke.mock.calls.some(([command]) => command === 'switch_entry_format')).toBe(false)
+      } finally {
+        wrapper.unmount()
+      }
+    },
+  )
+})
+
 describe('Git journal integration', () => {
   it('opens the multi-repository workbench by default and appends only the explicitly selected commits', async () => {
     const date = dayjs().format('YYYYMMDD')
