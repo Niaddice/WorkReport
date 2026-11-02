@@ -6360,14 +6360,27 @@ body.is-module-maximized * {
 }
 /* ===== 辅助模块：数据概览 ===== */
 .overview-module {
+  container: overview / size;
   flex: 1;
   min-width: 0;
   min-height: 0;
-  overflow-y: auto;
+  overflow: hidden;
   display: flex;
-  flex-direction: column;
-  gap: 14px;
-  padding: 18px 20px;
+}
+.overview-content {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  display: grid;
+  grid-template-rows: auto auto minmax(140px, 1fr);
+  align-content: start;
+  gap: clamp(6px, 2.5cqh, 14px);
+  padding: clamp(8px, 3cqh, 18px) clamp(8px, 3cqw, 20px);
+}
+.overview-content.is-loading {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr);
 }
 .overview-hero {
   display: flex;
@@ -6401,19 +6414,21 @@ body.is-module-maximized * {
 .overview-metrics {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
+  align-content: start;
+  gap: clamp(6px, 1.8cqh, 10px);
 }
 .overview-metric {
+  min-width: 0;
   display: flex;
   flex-direction: column;
   gap: 2px;
-  padding: 12px 14px;
-  border-radius: 14px;
+  padding: clamp(6px, 2cqh, 12px) clamp(8px, 2.5cqw, 14px);
+  border-radius: clamp(8px, 2.5cqh, 14px);
   background: var(--skin-canvas);
 }
 .overview-metric-value {
   color: var(--skin-text);
-  font-size: var(--text-display-lg);
+  font-size: clamp(18px, 7cqh, var(--text-display-lg));
   font-weight: 600;
   font-variant-numeric: tabular-nums;
   line-height: 1.2;
@@ -6421,6 +6436,7 @@ body.is-module-maximized * {
 .overview-metric-label {
   color: var(--skin-text-muted);
   font-size: var(--text-small);
+  overflow-wrap: anywhere;
 }
 .overview-loading,
 .overview-empty {
@@ -6431,12 +6447,15 @@ body.is-module-maximized * {
   line-height: 1.8;
 }
 .daily-heatmap {
-  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
   min-width: 0;
-  padding-top: 14px;
+  min-height: 0;
+  padding-top: clamp(6px, 2.5cqh, 14px);
   border-top: 1px solid var(--skin-border);
 }
 .heatmap-heading {
+  flex: 0 0 auto;
   display: flex;
   flex-wrap: wrap;
   align-items: baseline;
@@ -6460,12 +6479,24 @@ body.is-module-maximized * {
   color: var(--skin-accent);
   font-weight: 600;
 }
+.heatmap-heading > span {
+  width: 160px;
+  max-width: 100%;
+  flex-shrink: 0;
+  overflow: hidden;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .heatmap-range {
+  flex: 0 0 auto;
   margin: 5px 0 10px;
 }
 .heatmap-scroller {
+  flex: 1;
   min-width: 0;
-  overflow-x: auto;
+  min-height: 0;
+  overflow: auto;
   padding: 2px 1px 6px;
   border-radius: 4px;
 }
@@ -6474,10 +6505,12 @@ body.is-module-maximized * {
   outline-offset: 2px;
 }
 .heatmap-table {
-  width: 100%;
-  min-width: calc(var(--heatmap-weeks) * 13px + 24px);
+  width: calc(
+    var(--heatmap-columns) * (var(--heatmap-cell-size, 10px) + var(--heatmap-gap, 3px)) +
+      var(--heatmap-row-label-width, 18px) + var(--heatmap-edge-gaps, 2) * var(--heatmap-gap, 3px)
+  );
   table-layout: fixed;
-  border-spacing: 3px;
+  border-spacing: var(--heatmap-gap, 3px);
   color: var(--skin-text-muted);
   font-size: var(--text-caption);
   line-height: 1;
@@ -6489,7 +6522,7 @@ body.is-module-maximized * {
 }
 .heatmap-table thead th {
   position: relative;
-  height: 18px;
+  height: var(--heatmap-month-height, 18px);
   vertical-align: top;
   text-align: left;
 }
@@ -6507,6 +6540,9 @@ body.is-module-maximized * {
   width: 18px;
   background: var(--skin-surface);
   text-align: left;
+}
+.heatmap-table tbody .heatmap-weekday {
+  font-size: min(var(--text-caption), var(--heatmap-cell-size, 10px));
 }
 .heatmap-day {
   display: block;
@@ -6533,7 +6569,12 @@ body.is-module-maximized * {
   outline: 1px solid var(--skin-text-secondary);
   outline-offset: 1px;
 }
+.heatmap-table .heatmap-day {
+  width: var(--heatmap-cell-size, 10px);
+  height: var(--heatmap-cell-size, 10px);
+}
 .heatmap-footer {
+  flex: 0 0 auto;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -6556,6 +6597,93 @@ body.is-module-maximized * {
 }
 .heatmap-legend > span:last-child {
   margin-left: 3px;
+}
+@container overview (min-width: 560px) {
+  .overview-metrics {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+@container overview (max-width: 240px) {
+  .overview-metrics {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .overview-metric {
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 6px 8px;
+    border-radius: 8px;
+  }
+  .overview-metric-value {
+    order: 1;
+    font-size: var(--text-title);
+  }
+}
+@container overview (max-height: 420px) {
+  .overview-content {
+    gap: 8px;
+    padding: 10px;
+  }
+  .overview-metric {
+    padding: 6px 8px;
+    border-radius: 8px;
+  }
+  .overview-metric-value {
+    font-size: var(--text-title);
+  }
+  .heatmap-heading {
+    gap: 4px 8px;
+  }
+  .heatmap-heading h3 {
+    font-size: var(--text-body);
+  }
+  .heatmap-heading > span,
+  .overview-metric-label {
+    font-size: var(--text-caption);
+  }
+}
+@container overview (min-width: 360px) and (max-height: 340px) {
+  .overview-metrics {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+@container overview (max-height: 260px) {
+  .overview-content {
+    grid-template-rows: auto auto minmax(80px, 1fr);
+  }
+  .heatmap-range {
+    display: none;
+  }
+  .heatmap-footer {
+    font-size: var(--text-caption);
+    gap: 4px;
+    margin-top: 4px;
+  }
+}
+@container overview (min-width: 600px) and (max-height: 320px) {
+  .overview-content {
+    grid-template-columns: minmax(0, 2fr) minmax(0, 3fr);
+    grid-template-rows: auto minmax(80px, 1fr);
+    column-gap: 14px;
+  }
+  .overview-hero {
+    grid-column: 1 / -1;
+  }
+  .overview-metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    align-self: stretch;
+    align-content: stretch;
+  }
+  .overview-metric {
+    justify-content: center;
+  }
+  .daily-heatmap {
+    padding-top: 0;
+    padding-left: 14px;
+    border-top: 0;
+    border-left: 1px solid var(--skin-border);
+  }
 }
 
 /* ===== 顶部 Message 提示 ===== */

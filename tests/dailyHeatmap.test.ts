@@ -17,6 +17,7 @@ beforeEach(() => {
 })
 afterEach(() => {
   wrappers.splice(0).forEach((wrapper) => wrapper.unmount())
+  vi.unstubAllGlobals()
 })
 
 function heatmap(entries: Entry[] = [], today = '20261101') {
@@ -29,6 +30,119 @@ function heatmap(entries: Entry[] = [], today = '20261101') {
 const cell = (wrapper: VueWrapper, date: string) => wrapper.get(`[data-date="${date}"]`)
 
 describe('daily report heatmap', () => {
+  it('contracts the displayed period to quarter, month and week while keeping today and cached counts', async () => {
+    let resize!: () => void
+    const disconnect = vi.fn()
+    vi.stubGlobal(
+      'ResizeObserver',
+      class {
+        constructor(callback: () => void) {
+          resize = callback
+        }
+        observe() {}
+        disconnect = disconnect
+      },
+    )
+    const wrapper = heatmap([entry('20261101')])
+    await flushPromises()
+    const scroller = wrapper.get<HTMLElement>('.heatmap-scroller').element
+    const table = wrapper.get<HTMLElement>('.heatmap-table').element
+    const size = () => Number.parseInt(table.style.getPropertyValue('--heatmap-cell-size'))
+    let width = 900
+    let height = 190
+    Object.defineProperties(scroller, {
+      clientWidth: { get: () => width },
+      clientHeight: { get: () => height },
+      offsetWidth: { get: () => width },
+      offsetHeight: { get: () => height },
+    })
+    for (const [nextWidth, nextHeight, days] of [
+      [900, 190, 365],
+      [320, 190, 90],
+      [140, 190, 30],
+      [140, 60, 7],
+      [50, 40, 1],
+      [900, 190, 365],
+    ]) {
+      width = nextWidth!
+      height = nextHeight!
+      resize()
+      await flushPromises()
+      expect(wrapper.findAll('.heatmap-table [data-date]')).toHaveLength(days!)
+      expect(cell(wrapper, '20261101').classes()).toContain('is-today')
+      expect(size()).toBeGreaterThanOrEqual(8)
+      expect(size()).toBeLessThanOrEqual(16)
+      expect(wrapper.get('.heatmap-heading').text()).toContain(days === 1 ? '今天' : `近 ${days} 天`)
+      expect(wrapper.get('.heatmap-heading').text()).toContain('已记录 1 天')
+    }
+    expect(api.dailyActivity).toHaveBeenCalledTimes(1)
+    wrapper.unmount()
+    wrappers.splice(wrappers.indexOf(wrapper), 1)
+    expect(disconnect).toHaveBeenCalledOnce()
+  })
+
+  it('keeps today visible on both axes after scrolling, resizing and midnight', async () => {
+    let resize!: () => void
+    vi.stubGlobal(
+      'ResizeObserver',
+      class {
+        constructor(callback: () => void) {
+          resize = callback
+        }
+        observe() {}
+        disconnect() {}
+      },
+    )
+    const wrapper = heatmap()
+    const scroller = wrapper.get<HTMLElement>('.heatmap-scroller').element
+    let width = 100
+    Object.defineProperties(scroller, {
+      clientWidth: { get: () => width },
+      clientHeight: { get: () => 60 },
+      offsetWidth: { get: () => width },
+      offsetHeight: { get: () => 60 },
+    })
+    vi.spyOn(scroller, 'getBoundingClientRect').mockImplementation(() => new DOMRect(100, 200, width, 60))
+    resize()
+    await flushPromises()
+    const mockTodayPosition = () => {
+      const today = wrapper.get<HTMLElement>('.is-today').element
+      vi.spyOn(today, 'getBoundingClientRect').mockImplementation(
+        () => new DOMRect(195 - scroller.scrollLeft, 290 - scroller.scrollTop, 14, 14),
+      )
+      return today
+    }
+    let today = mockTodayPosition()
+    scroller.scrollLeft = 0
+    scroller.scrollTop = 0
+    await wrapper.get('.heatmap-scroller').trigger('scroll')
+    expect(scroller.scrollLeft).toBe(11)
+    expect(scroller.scrollTop).toBe(46)
+    scroller.scrollLeft = 120
+    scroller.scrollTop = 120
+    await wrapper.get('.heatmap-scroller').trigger('scroll')
+    expect(today.getBoundingClientRect().left).toBe(102)
+    expect(today.getBoundingClientRect().top).toBe(202)
+
+    scroller.scrollLeft = 0
+    scroller.scrollTop = 0
+    width = 90
+    resize()
+    await flushPromises()
+    expect(today.getBoundingClientRect().right).toBeLessThanOrEqual(188)
+    expect(today.getBoundingClientRect().bottom).toBeLessThanOrEqual(258)
+
+    await wrapper.setProps({ today: '20261102' })
+    today = mockTodayPosition()
+    scroller.scrollLeft = 0
+    scroller.scrollTop = 0
+    await wrapper.get('.heatmap-scroller').trigger('scroll')
+    expect(cell(wrapper, '20261102').classes()).toContain('is-today')
+    expect(today.getBoundingClientRect().right).toBeLessThanOrEqual(188)
+    expect(today.getBoundingClientRect().bottom).toBeLessThanOrEqual(258)
+    expect(wrapper.find('[data-date="20261103"]').exists()).toBe(false)
+  })
+
   it('shows exactly 365 days in Monday-first weeks, including leap day and excluding future dates', () => {
     const wrapper = heatmap([], '20280301')
     const days = wrapper.findAll('.heatmap-table [data-date]')

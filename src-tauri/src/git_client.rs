@@ -78,7 +78,7 @@ pub struct Diff {
     pub truncated: bool,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Action {
     pub operation: String,
@@ -88,6 +88,8 @@ pub struct Action {
     pub message: String,
     #[serde(default)]
     pub reference: String,
+    #[serde(default)]
+    pub credentials: Option<crate::git_auth::Credentials>,
 }
 
 fn args(values: &[&str]) -> Vec<String> {
@@ -98,6 +100,15 @@ async fn command(
     settings: &Settings,
     root: &Path,
     values: &[String],
+) -> Result<std::process::Output, String> {
+    command_with_credentials(settings, root, values, None).await
+}
+
+async fn command_with_credentials(
+    settings: &Settings,
+    root: &Path,
+    values: &[String],
+    credentials: Option<&crate::git_auth::Credentials>,
 ) -> Result<std::process::Output, String> {
     let mut arguments = args(&[
         "--no-literal-pathspecs",
@@ -112,7 +123,7 @@ async fn command(
         arguments.push("--literal-pathspecs".into());
     }
     arguments.extend_from_slice(values);
-    git::run(settings, root, &arguments).await
+    git::run_with_credentials(settings, root, &arguments, credentials).await
 }
 
 fn checked(output: std::process::Output) -> Result<Vec<u8>, String> {
@@ -501,6 +512,9 @@ async fn local_branch(settings: &Settings, root: &Path, reference: &str) -> Resu
 
 /// Caller holds repository_lock and has revalidated the originating workspace.
 pub async fn action(settings: &Settings, id: &str, request: Action) -> Result<String, String> {
+    if request.credentials.is_some() && !matches!(request.operation.as_str(), "fetch" | "pull" | "push") {
+        return Err("只有 Fetch / Pull / Push 可以使用远程认证".into());
+    }
     let root = root(settings, id).await?;
     if request.message.len() > 20000 || request.message.contains('\0') || request.paths.len() > 10000 {
         return Err("Git 操作参数过长或无效".into());
@@ -664,7 +678,7 @@ pub async fn action(settings: &Settings, id: &str, request: Action) -> Result<St
         }
         _ => return Err("不支持的 Git 操作".into()),
     }
-    let output = command(settings, &root, &values).await?;
+    let output = command_with_credentials(settings, &root, &values, request.credentials.as_ref()).await?;
     if !output.status.success() {
         return checked(output).map(|_| String::new());
     }
@@ -719,6 +733,7 @@ mod tests {
             paths: paths.iter().map(|s| (*s).into()).collect(),
             message: message.into(),
             reference: reference.into(),
+            credentials: None,
         }
     }
     async fn act(settings: &Settings, operation: &str, paths: &[&str],

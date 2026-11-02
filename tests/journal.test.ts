@@ -60,6 +60,78 @@ describe('workspace journal save lifecycle', () => {
     journal.dispose()
   })
 
+  it('finds the nearest earlier nonempty report from a fresh index across dates and formats', async () => {
+    const journal = await setup()
+    const report = (date: string, content: string, format: 'md' | 'txt' = 'md'): Document => ({
+      date,
+      filename: `${date}.${format}`,
+      format,
+      content,
+      revision: date,
+    })
+    const reports = [
+      report('20261019', '未来日报'),
+      report('20261010', '更早的日报'),
+      report('20261017', ' \n\t '),
+      report('20261016', '上次工作\n第二行\n', 'txt'),
+      original,
+    ]
+    vi.mocked(api.list).mockResolvedValue(reports)
+    vi.mocked(api.read).mockImplementation(async (date) => reports.find((value) => value.date === date)!)
+    vi.mocked(api.read).mockClear()
+    const previous = await journal.readPreviousReport()
+    expect(previous).toEqual(reports[3])
+    expect(api.read).toHaveBeenCalledTimes(2)
+    expect(api.read).toHaveBeenNthCalledWith(1, '20261017', 'md')
+    expect(api.read).toHaveBeenNthCalledWith(2, '20261016', 'txt')
+    expect(journal.draft.value).toBe(original.content)
+    expect(journal.selectedDate.value).toBe(original.date)
+    expect(api.save).not.toHaveBeenCalled()
+    journal.dispose()
+  })
+
+  it('returns no previous report when all earlier reports are empty', async () => {
+    const journal = await setup()
+    vi.mocked(api.list).mockResolvedValue([{ date: '20261017', filename: '20261017.md', format: 'md' }])
+    vi.mocked(api.read).mockResolvedValue({ ...original, date: '20261017', content: '\n ' })
+    expect(await journal.readPreviousReport()).toBeNull()
+    vi.mocked(api.list).mockResolvedValue([original])
+    expect(await journal.readPreviousReport()).toBeNull()
+    journal.dispose()
+  })
+
+  it('propagates a previous report read failure without marking the draft as a save error', async () => {
+    const journal = await setup()
+    vi.mocked(api.list).mockResolvedValue([{ date: '20261017', filename: '20261017.md', format: 'md' }])
+    vi.mocked(api.read).mockRejectedValue(new Error('读取失败'))
+    await expect(journal.readPreviousReport()).rejects.toThrow('读取失败')
+    expect(journal.error.value).toBe('')
+    expect(journal.draft.value).toBe(original.content)
+    journal.dispose()
+  })
+
+  it.each(['date', 'workspace'] as const)('discards a previous report lookup when the %s changes', async (scope) => {
+    const journal = await setup()
+    let resolve!: (value: Document) => void
+    vi.mocked(api.list).mockResolvedValue([{ date: '20261017', filename: '20261017.md', format: 'md' }])
+    vi.mocked(api.read).mockReturnValueOnce(
+      new Promise((done) => {
+        resolve = done
+      }),
+    )
+    const lookup = journal.readPreviousReport()
+    await Promise.resolve()
+    if (scope === 'date') await journal.select('20261020')
+    else {
+      vi.mocked(api.open).mockResolvedValue({ path: '/other', name: 'other' })
+      await journal.open('/other')
+    }
+    resolve({ ...original, date: '20261017', content: '旧工作空间的日报' })
+    expect(await lookup).toBeNull()
+    expect(journal.draft.value).not.toBe('旧工作空间的日报')
+    journal.dispose()
+  })
+
   it('debounces typing and saves the literal Markdown content', async () => {
     const journal = await setup()
     vi.mocked(api.save).mockImplementation(async (date, content) => ({ ...original, date, content, revision: 'r2' }))

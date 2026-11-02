@@ -1,5 +1,6 @@
 import { invoke, isTauri } from '@tauri-apps/api/core'
 import { ref } from 'vue'
+import { gitAuthenticationOrigin, gitErrorMessage, type GitCredentials } from './gitAuthentication'
 
 export interface GitFileChange {
   path: string
@@ -71,6 +72,7 @@ export interface GitActionRequest {
   paths: string[]
   message: string
   reference: string
+  credentials?: GitCredentials
 }
 
 export interface GitWorkbenchScope {
@@ -101,6 +103,7 @@ export function useGitWorkbench(scope: () => GitWorkbenchScope) {
   const busy = ref(false)
   const error = ref('')
   const notice = ref('')
+  const authentication = ref<{ url: string; operation: GitOperation } | null>(null)
   const generatingMessage = ref(false)
   let messageRequestId = ''
   let scopeRevision = 0
@@ -142,6 +145,7 @@ export function useGitWorkbench(scope: () => GitWorkbenchScope) {
     busy.value = false
     error.value = ''
     notice.value = ''
+    authentication.value = null
   }
 
   function cancelCommitMessage() {
@@ -251,6 +255,7 @@ export function useGitWorkbench(scope: () => GitWorkbenchScope) {
     busy.value = true
     error.value = ''
     notice.value = ''
+    authentication.value = null
     repositoryRevision++
     historyRevision++
     historyLoading.value = false
@@ -269,10 +274,17 @@ export function useGitWorkbench(scope: () => GitWorkbenchScope) {
       return valid()
     } catch (cause) {
       if (!valid()) return false
-      const message = `Git 操作失败：${String(cause)}`
+      const origin = ['pull', 'push'].includes(request.operation) ? gitAuthenticationOrigin(cause) : null
+      const detail = gitErrorMessage(cause)
+      const message = origin
+        ? '远程仓库需要认证，请填写用户名和密码或访问令牌后重试。'
+        : `Git 操作失败：${request.credentials?.password ? detail.split(request.credentials.password).join('[已隐藏]') : detail}`
       // Merge, pull and stash application can leave conflicts even when Git exits with an error.
       await refresh()
-      if (valid()) error.value = message
+      if (valid()) {
+        error.value = message
+        if (origin) authentication.value = { url: origin, operation: request.operation }
+      }
       return false
     } finally {
       if (valid()) busy.value = false
@@ -289,6 +301,7 @@ export function useGitWorkbench(scope: () => GitWorkbenchScope) {
     busy,
     error,
     notice,
+    authentication,
     generatingMessage,
     generateCommitMessage,
     cancelCommitMessage,

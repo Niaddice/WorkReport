@@ -162,6 +162,25 @@ export function useJournal(options: { beforeFlush?: () => Promise<boolean> } = {
     }
   }
 
+  async function readPreviousReport(): Promise<Document | null> {
+    if (!workspace.value || !document.value || busy.value) return null
+    const path = workspace.value.path
+    const date = selectedDate.value
+    const current = () => workspace.value?.path === path && selectedDate.value === date && !busy.value
+    // Read a fresh index so reports created outside the app can also be reused.
+    const index = await api.list()
+    if (!current()) return null
+    const candidates = index
+      .filter((entry) => entry.date < date)
+      .sort((left, right) => right.date.localeCompare(left.date))
+    for (const entry of candidates) {
+      const value = await api.read(entry.date, entry.format)
+      if (!current()) return null
+      if (value.content.trim()) return value
+    }
+    return null
+  }
+
   async function flushJournal(): Promise<boolean> {
     clearTimeout(timer)
     if (pendingSave) return pendingSave.then((success) => (success && dirty.value ? flushJournal() : success))
@@ -526,6 +545,7 @@ export function useJournal(options: { beforeFlush?: () => Promise<boolean> } = {
     refresh,
     appendGitReports,
     loadPreviews,
+    readPreviousReport,
     reportError,
     dispose,
   }
