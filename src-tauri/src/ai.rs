@@ -17,6 +17,8 @@ pub enum ProviderKind {
     Codex,
     Claude,
     Opencode,
+    Cursor,
+    Grok,
     Http,
     Anthropic,
 }
@@ -52,6 +54,11 @@ pub struct DetectedCli {
     pub name: String,
     pub executable: String,
     pub version: String,
+    pub cli_available: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub app_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
 }
 #[derive(Debug, Serialize)]
 pub struct ModelInfo {
@@ -176,6 +183,7 @@ fn search_paths() -> Vec<PathBuf> {
                 ".npm-global/bin",
                 ".bun/bin",
                 ".opencode/bin",
+                ".grok/bin",
                 ".cargo/bin",
             ]
             .map(|suffix| home.join(suffix)),
@@ -187,19 +195,22 @@ fn search_paths() -> Vec<PathBuf> {
     paths
 }
 fn find_cli(kind: &ProviderKind) -> Option<PathBuf> {
-    let name = match kind {
-        ProviderKind::Codex => "codex",
-        ProviderKind::Claude => "claude",
-        ProviderKind::Opencode => "opencode",
+    find_cli_in(kind, &search_paths())
+}
+fn find_cli_in(kind: &ProviderKind, paths: &[PathBuf]) -> Option<PathBuf> {
+    let names: &[&str] = match kind {
+        ProviderKind::Codex => &["codex"],
+        ProviderKind::Claude => &["claude"],
+        ProviderKind::Opencode => &["opencode"],
+        ProviderKind::Cursor => &["cursor-agent", "agent"],
+        ProviderKind::Grok => &["grok"],
         ProviderKind::Http | ProviderKind::Anthropic => return None,
     };
-    let mut candidates: Vec<PathBuf> = search_paths().iter().map(|path| path.join(name)).collect();
+    let mut candidates: Vec<PathBuf> = names.iter().flat_map(|name| paths.iter().map(move |path| path.join(name))).collect();
     #[cfg(windows)]
     {
         candidates.extend(
-            search_paths()
-                .iter()
-                .map(|path| path.join(format!("{name}.exe"))),
+            names.iter().flat_map(|name| paths.iter().map(move |path| path.join(format!("{name}.exe")))),
         );
     }
     if *kind == ProviderKind::Codex {
@@ -213,8 +224,48 @@ fn find_cli(kind: &ProviderKind) -> Option<PathBuf> {
     }
     candidates
         .into_iter()
-        .find(|path| path.is_file())
-        .and_then(|path| fs::canonicalize(path).ok())
+        .filter(|path| path.is_file())
+        .filter_map(|path| {
+            let resolved = fs::canonicalize(&path).ok()?;
+            // "agent" is a common command name. Only accept Cursor's alias
+            // when the symlink target or launcher identifies cursor-agent.
+            if *kind == ProviderKind::Cursor && path.file_stem().is_some_and(|name| name == "agent")
+                && !resolved.components().any(|part| part.as_os_str().to_string_lossy().contains("cursor-agent")) {
+                use std::io::Read;
+                let mut launcher = String::new();
+                fs::File::open(&resolved).ok()?.take(16_384).read_to_string(&mut launcher).ok()?;
+                if !launcher.starts_with("#!") || !launcher.contains("cursor-agent") { return None; }
+            }
+            Some(resolved)
+        })
+        .next()
+}
+fn desktop_app_in(kind: &ProviderKind, roots: &[PathBuf]) -> Option<PathBuf> {
+    let name = match kind {
+        ProviderKind::Cursor => "Cursor.app",
+        ProviderKind::Grok => "Grok Bot.app",
+        _ => return None,
+    };
+    roots.iter().map(|root| root.join(name)).find(|app| app.join("Contents/Info.plist").is_file())
+}
+async fn detected_desktop_app(kind: ProviderKind) -> Option<DetectedCli> {
+    let mut roots = vec![PathBuf::from("/Applications")];
+    if let Some(home) = std::env::var_os("HOME") { roots.push(PathBuf::from(home).join("Applications")); }
+    let app = desktop_app_in(&kind, &roots)?;
+    let version = timeout(Duration::from_secs(2), Command::new("/usr/bin/plutil")
+        .args(["-extract", "CFBundleShortVersionString", "raw"])
+        .arg(app.join("Contents/Info.plist")).stdin(Stdio::null()).kill_on_drop(true).output()).await;
+    let version = match version {
+        Ok(Ok(output)) if output.status.success() => String::from_utf8_lossy(&output.stdout).trim().chars().take(150).collect(),
+        _ => "已安装桌面应用".into(),
+    };
+    let (name, message) = match kind {
+        ProviderKind::Cursor => ("Cursor", "已安装桌面应用；安装并登录 Cursor Agent CLI 后可在此添加，或在下方手动填写 CLI 路径。"),
+        ProviderKind::Grok => ("Grok Bot", "已安装桌面应用；自动调用需另行安装并登录 Grok Build CLI。桌面应用本身暂不支持直接调用。"),
+        _ => return None,
+    };
+    Some(DetectedCli { kind, name: name.into(), executable: String::new(), version,
+        cli_available: false, app_path: Some(app.to_string_lossy().into_owned()), message: Some(message.into()) })
 }
 fn command(executable: &str) -> Command {
     let mut command = Command::new(executable);
@@ -241,13 +292,15 @@ pub async fn detect() -> Vec<DetectedCli> {
         (ProviderKind::Codex, "Codex"),
         (ProviderKind::Claude, "Claude Code"),
         (ProviderKind::Opencode, "OpenCode"),
+        (ProviderKind::Cursor, "Cursor"),
+        (ProviderKind::Grok, "Grok Build"),
     ] {
         if let Some(path) = find_cli(&kind) {
             let executable = path.to_string_lossy().into_owned();
             let result = timeout(
                 Duration::from_secs(5),
                 command(&executable)
-                    .arg("--version")
+                    .arg(if kind == ProviderKind::Grok { "version" } else { "--version" })
                     .stdin(Stdio::null())
                     .output(),
             )
@@ -267,7 +320,12 @@ pub async fn detect() -> Vec<DetectedCli> {
                 name: name.into(),
                 executable,
                 version,
+                cli_available: true,
+                app_path: None,
+                message: None,
             });
+        } else if let Some(app) = detected_desktop_app(kind).await {
+            results.push(app);
         }
     }
     results
@@ -514,6 +572,51 @@ fn parse_opencode_models(stdout: &str) -> Vec<ModelInfo> {
     }
     result
 }
+fn parse_named_cli_models(stdout: &str) -> Vec<ModelInfo> {
+    let mut plain = String::new();
+    let mut chars = stdout.chars();
+    while let Some(ch) = chars.next() {
+        if ch == '\u{1b}' {
+            if chars.next() == Some('[') {
+                for code in chars.by_ref() { if ('@'..='~').contains(&code) { break; } }
+            }
+        } else { plain.push(ch); }
+    }
+    let mut seen = HashSet::new();
+    let mut result = Vec::new();
+    let valid_id = |id: &str| !id.is_empty() && id.chars().any(|ch| ch.is_ascii_alphanumeric())
+        && id.chars().all(|ch| ch.is_ascii_alphanumeric() || "-._/:[]=".contains(ch));
+    if let Ok(json) = serde_json::from_str::<Value>(&plain) {
+        if let Some(models) = json.as_array().or_else(|| json.get("models").and_then(Value::as_array)) {
+            for item in models {
+                let id = item.as_str().or_else(|| item.get("id").and_then(Value::as_str));
+                if let Some(id) = id.filter(|id| valid_id(id)) {
+                    if !seen.insert(id.to_string()) { continue; }
+                    let name = item.get("name").or_else(|| item.get("display_name")).and_then(Value::as_str).unwrap_or(id);
+                    result.push(ModelInfo { id: id.into(), name: name.into() });
+                }
+            }
+            return result;
+        }
+    }
+    for line in plain.lines() {
+        let line = line.trim().trim_start_matches(['*', '>', '•', '●', '|', ' ']);
+        let Some(id) = line.split_whitespace().next() else { continue; };
+        if !valid_id(id) || id.ends_with(':') || ["id", "model", "models", "available", "name", "status"].contains(&id.to_ascii_lowercase().as_str()) { continue; }
+        let suffix = &line[id.len()..];
+        let rest = suffix.trim().trim_start_matches(['-', '|', ' ']).trim();
+        // Accept a named row, a bare slug, or a default/current marker; reject
+        // informational prose rather than offering it as a selectable model.
+        if rest.is_empty() && !id.contains('-') && !id.contains('/') && id != "auto" { continue; }
+        if !rest.is_empty() && !suffix.starts_with(" - ") && !suffix.starts_with("  ") && !suffix.starts_with('\t')
+            && !suffix.trim_start().starts_with('|') && rest != "(default)" && rest != "(current)" { continue; }
+        if !seen.insert(id.to_string()) { continue; }
+        let name = rest.trim_end_matches("(current)").trim_end_matches("(default)").trim_end_matches('|').trim();
+        result.push(ModelInfo { id: id.into(), name: if name.is_empty() { id.into() } else { name.into() } });
+    }
+    result
+}
+
 pub async fn list_cli_models(
     kind: &ProviderKind,
     executable: &str,
@@ -537,6 +640,8 @@ pub async fn list_cli_models(
     let (name, args): (&str, &[&str]) = match kind {
         ProviderKind::Codex => ("Codex", &["debug", "models"]),
         ProviderKind::Opencode => ("OpenCode", &["models"]),
+        ProviderKind::Cursor => ("Cursor", &["models"]),
+        ProviderKind::Grok => ("Grok Build", &["models"]),
         _ => return Err("该 AI 类型不支持获取模型列表".into()),
     };
     child.args(args);
@@ -559,6 +664,7 @@ pub async fn list_cli_models(
         ProviderKind::Opencode => Ok(parse_opencode_models(&String::from_utf8_lossy(
             &output.stdout,
         ))),
+        ProviderKind::Cursor | ProviderKind::Grok => Ok(parse_named_cli_models(&String::from_utf8_lossy(&output.stdout))),
         _ => Err("该 AI 类型不支持获取模型列表".into()),
     }
 }
@@ -811,6 +917,22 @@ async fn cli_completion(provider: &Provider, prompt: &str, action: &str) -> Resu
             child.args(["run", "--format", "json"]);
             child.env("OPENCODE_CONFIG_CONTENT", r#"{"permission":{"*":"deny"}}"#);
         }
+        ProviderKind::Cursor => {
+            let config = temp.path().join(".cursor");
+            fs::create_dir(&config).map_err(|_| "无法创建 Cursor 临时配置")?;
+            fs::write(config.join("cli.json"), r#"{"version":1,"permissions":{"allow":[],"deny":["Shell(*)","Read(**)","Write(**)"]}}"#)
+                .map_err(|_| "无法创建 Cursor 临时配置")?;
+            child.args(["--print", "--output-format", "json", "--mode", "ask", "--trust"]);
+        }
+        ProviderKind::Grok => {
+            child.args(["--no-auto-update", "--output-format", "plain", "--tools", "", "--no-subagents", "--no-memory", "--disable-web-search", "--max-turns", "1"]);
+            for tool in ["Bash", "Edit", "Read", "Grep", "MCPTool", "WebFetch", "WebSearch"] {
+                child.args(["--deny", tool]);
+            }
+            // Grok's documented --single interface takes the prompt as one
+            // argument. Command passes it literally, without a shell.
+            child.args(["-p", prompt]).stdin(Stdio::null());
+        }
         ProviderKind::Http | ProviderKind::Anthropic => return Err("AI 类型无效".into()),
     }
     if !provider.model.trim().is_empty() {
@@ -822,12 +944,11 @@ async fn cli_completion(provider: &Provider, prompt: &str, action: &str) -> Resu
     let mut process = child
         .spawn()
         .map_err(|_| "无法启动 CLI，请重新检测并检查可执行文件和登录状态")?;
-    let mut stdin = process.stdin.take().ok_or("无法传入请求内容")?;
-    stdin
-        .write_all(prompt.as_bytes())
-        .await
-        .map_err(|_| "CLI 未能接收请求内容，请检查登录状态")?;
-    drop(stdin);
+    if provider.kind != ProviderKind::Grok {
+        let mut stdin = process.stdin.take().ok_or("无法传入请求内容")?;
+        stdin.write_all(prompt.as_bytes()).await
+            .map_err(|_| "CLI 未能接收请求内容，请检查登录状态")?;
+    }
     let output = timeout(Duration::from_secs(150), process.wait_with_output())
         .await
         .map_err(|_| "CLI 调用超时，请检查登录状态或重试")?
@@ -856,6 +977,13 @@ async fn cli_completion(provider: &Provider, prompt: &str, action: &str) -> Resu
             .filter_map(|event| event["part"]["text"].as_str().map(str::to_string))
             .collect::<Vec<_>>()
             .join("\n"),
+        ProviderKind::Cursor => {
+            let result: Value = serde_json::from_str(&stdout).map_err(|_| "Cursor 未返回有效的结果 JSON")?;
+            if result["is_error"] == true || result["subtype"] != "success" || result["type"] != "result" {
+                return Err("Cursor 未能完成请求，请检查登录状态后重试".into());
+            }
+            result["result"].as_str().ok_or("Cursor 未返回正文")?.to_string()
+        }
         _ => stdout.into_owned(),
     };
     clean_result(&text)
@@ -1570,6 +1698,132 @@ mod tests {
         assert!(prompt.contains("正式专业，保留条目结构"));
         assert!(prompt.contains("<daily_report>\n今天完成适配测试\n</daily_report>"));
         assert!(prompt.contains("保留合理的 Markdown 格式"));
+    }
+    #[test]
+    fn cursor_and_grok_discovery_requires_a_cli_and_recognizes_desktop_apps_separately() {
+        let root = tempfile::tempdir().unwrap();
+        let bin = root.path().join("bin");
+        fs::create_dir(&bin).unwrap();
+        fs::write(bin.join("cursor"), "desktop editor launcher").unwrap();
+        fs::write(bin.join("agent"), "#!/bin/sh\necho unrelated-agent\n").unwrap();
+        let paths = [bin.clone()];
+        assert!(find_cli_in(&ProviderKind::Cursor, &paths).is_none());
+        fs::write(bin.join("cursor-agent"), "fixture").unwrap();
+        assert_eq!(find_cli_in(&ProviderKind::Cursor, &paths).unwrap(), fs::canonicalize(bin.join("cursor-agent")).unwrap());
+        fs::write(bin.join("grok"), "fixture").unwrap();
+        assert_eq!(find_cli_in(&ProviderKind::Grok, &paths).unwrap(), fs::canonicalize(bin.join("grok")).unwrap());
+        let contents = root.path().join("Grok Bot.app/Contents");
+        fs::create_dir_all(&contents).unwrap();
+        fs::write(contents.join("Info.plist"), "fixture").unwrap();
+        assert_eq!(desktop_app_in(&ProviderKind::Grok, &[root.path().into()]).unwrap(), root.path().join("Grok Bot.app"));
+        assert!(desktop_app_in(&ProviderKind::Cursor, &[root.path().into()]).is_none());
+    }
+    #[cfg(unix)]
+    #[test]
+    fn cursor_agent_alias_can_resolve_to_the_official_installation() {
+        use std::os::unix::fs::symlink;
+        let root = tempfile::tempdir().unwrap();
+        let installation = root.path().join("cursor-agent/versions/test");
+        let bin = root.path().join("bin");
+        fs::create_dir_all(&installation).unwrap();
+        fs::create_dir(&bin).unwrap();
+        fs::write(installation.join("agent"), "fixture").unwrap();
+        symlink(installation.join("agent"), bin.join("agent")).unwrap();
+        assert_eq!(find_cli_in(&ProviderKind::Cursor, &[bin]).unwrap(), fs::canonicalize(installation.join("agent")).unwrap());
+    }
+    #[test]
+    fn named_cli_model_catalogs_accept_json_tables_and_color_without_exposing_headers() {
+        let models = parse_named_cli_models("Available models:\nModel ID  Name\n\x1b[32mauto - Auto (current)\x1b[0m\ncomposer-2 - Composer 2\ngrok-4.7 (default)\ncomposer-2 - duplicate\nRun agent login to authenticate\n");
+        assert_eq!(models.iter().map(|model| model.id.as_str()).collect::<Vec<_>>(), ["auto", "composer-2", "grok-4.7"]);
+        assert_eq!(models[0].name, "Auto");
+        let json = parse_named_cli_models(r#"{"models":[{"id":"grok-4.7","name":"Grok"},{"id":"grok-4.7"}]}"#);
+        assert_eq!(json.len(), 1);
+        assert_eq!(json[0].name, "Grok");
+    }
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn cursor_and_grok_list_models_with_their_documented_command() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().unwrap();
+        let executable = root.path().join("mock-cli");
+        fs::write(&executable, "#!/bin/sh\n[ \"$1\" = models ] || exit 4\nprintf 'auto - Auto\\ngrok-4.7 - Grok\\n'\n").unwrap();
+        fs::set_permissions(&executable, fs::Permissions::from_mode(0o700)).unwrap();
+        for kind in [ProviderKind::Cursor, ProviderKind::Grok] {
+            let models = list_cli_models(&kind, executable.to_str().unwrap()).await.unwrap();
+            assert_eq!(models.len(), 2);
+            assert_eq!(models[1].id, "grok-4.7");
+        }
+    }
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn cursor_completion_uses_ask_mode_stdin_and_returns_only_the_final_result() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().unwrap();
+        let executable = root.path().join("mock-cursor");
+        let args_file = root.path().join("args.txt");
+        let prompt_file = root.path().join("prompt.txt");
+        let config_file = root.path().join("config.json");
+        fs::write(&executable, format!(r#"#!/bin/sh
+printf '%s\n' "$@" > '{}'
+cat > '{}'
+cat .cursor/cli.json > '{}'
+printf '%s' '{{"type":"result","subtype":"success","is_error":false,"result":"润色后的正文"}}'
+"#, args_file.display(), prompt_file.display(), config_file.display())).unwrap();
+        fs::set_permissions(&executable, fs::Permissions::from_mode(0o700)).unwrap();
+        let provider = Provider { id: "cursor".into(), name: "Cursor".into(), kind: ProviderKind::Cursor,
+            executable: executable.to_string_lossy().into_owned(), model: "composer-2".into(), base_url: String::new(), api_key: String::new() };
+        assert_eq!(cli_completion(&provider, "只处理传入文字", "测试").await.unwrap(), "润色后的正文");
+        assert_eq!(fs::read_to_string(prompt_file).unwrap(), "只处理传入文字");
+        let args = fs::read_to_string(args_file).unwrap();
+        assert!(args.contains("--mode\nask\n--trust"));
+        assert!(args.contains("--model\ncomposer-2"));
+        assert!(!args.contains("--force"));
+        let config: Value = serde_json::from_str(&fs::read_to_string(config_file).unwrap()).unwrap();
+        assert_eq!(config["permissions"]["deny"], json!(["Shell(*)", "Read(**)", "Write(**)"]));
+    }
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn cursor_failure_json_never_returns_error_details_as_generated_text() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().unwrap();
+        let executable = root.path().join("mock-cursor");
+        fs::write(&executable, r#"#!/bin/sh
+cat >/dev/null
+printf '%s' '{"type":"result","subtype":"error","is_error":true,"result":"secret-token"}'
+"#).unwrap();
+        fs::set_permissions(&executable, fs::Permissions::from_mode(0o700)).unwrap();
+        let provider = Provider { id: "cursor".into(), name: "Cursor".into(), kind: ProviderKind::Cursor,
+            executable: executable.to_string_lossy().into_owned(), model: String::new(), base_url: String::new(), api_key: String::new() };
+        let error = cli_completion(&provider, "请求正文", "测试").await.unwrap_err();
+        assert!(!error.contains("secret-token"));
+    }
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn grok_completion_passes_single_prompt_literally_and_disables_tools_and_updates() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().unwrap();
+        let executable = root.path().join("mock-grok");
+        let prompt_file = root.path().join("prompt.txt");
+        let args_file = root.path().join("args.txt");
+        fs::write(&executable, format!(r#"#!/bin/sh
+printf '%s\n' "$@" > '{}'
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = '-p' ]; then shift; printf '%s' "$1" > '{}'; fi
+  shift
+done
+printf '生成的日报'
+"#, args_file.display(), prompt_file.display())).unwrap();
+        fs::set_permissions(&executable, fs::Permissions::from_mode(0o700)).unwrap();
+        let provider = Provider { id: "grok".into(), name: "Grok Build".into(), kind: ProviderKind::Grok,
+            executable: executable.to_string_lossy().into_owned(), model: "grok-4.7".into(), base_url: String::new(), api_key: String::new() };
+        let prompt = "正文含空格与\n换行、$(touch SHOULD_NOT_EXIST) 和 `whoami`";
+        assert_eq!(cli_completion(&provider, prompt, "测试").await.unwrap(), "生成的日报");
+        assert_eq!(fs::read_to_string(prompt_file).unwrap(), prompt);
+        let args = fs::read_to_string(args_file).unwrap();
+        assert!(args.contains("--no-auto-update"));
+        assert!(args.contains("--deny\nMCPTool"));
+        assert!(args.contains("--model\ngrok-4.7"));
+        assert!(!args.contains("--always-approve"));
     }
     #[test]
     fn parses_visible_codex_models_and_skips_hidden_or_api_disabled() {

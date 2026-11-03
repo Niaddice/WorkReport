@@ -935,6 +935,69 @@ describe('Git workbench controls', () => {
     wrapper.unmount()
   })
 
+  it('prompts for HTTP credentials after Fetch fails and retries Fetch with the explicit save choice', async () => {
+    const wrapper = await mountReady()
+    let fetches = 0
+    invoke.mockImplementation(async (command: string) => {
+      if (command === 'git_repository_action') {
+        if (fetches++ === 0)
+          throw "Git 操作失败：fatal: could not read Username for 'http://106.75.23.137:13000': terminal prompts disabled"
+        return '获取完成，Git 凭据已加密保存到本机。'
+      }
+      return state()
+    })
+    try {
+      await button(wrapper, 'Fetch 获取').trigger('click')
+      await flushPromises()
+      const form = wrapper.get('[aria-label="Git 远程认证"]')
+      expect(form.text()).toContain('重试 Fetch 获取')
+      expect(form.text()).toContain('http://106.75.23.137:13000')
+      expect(wrapper.text()).not.toContain('terminal prompts disabled')
+      await form.get('[aria-label="Git 用户名"]').setValue('developer')
+      await form.get('[aria-label="Git 密码或访问令牌"]').setValue('fetch-test-token')
+      await form.get('[aria-label="保存 Git 凭据到本机"]').setValue(true)
+      await form.trigger('submit')
+      await flushPromises()
+      expect(actionCalls().map(([, args]) => args.request.operation)).toEqual(['fetch', 'fetch'])
+      expect(actionCalls().at(-1)![1].request.credentials).toEqual({
+        url: 'http://106.75.23.137:13000',
+        username: 'developer',
+        password: 'fetch-test-token',
+        save: true,
+      })
+      expect(wrapper.find('[aria-label="Git 远程认证"]').exists()).toBe(false)
+      expect(wrapper.text()).not.toContain('fetch-test-token')
+      expect(wrapper.text()).toContain('获取完成')
+    } finally {
+      wrapper.unmount()
+    }
+  })
+
+  it('reopens Fetch authentication after rejected credentials and does not retry after cancellation', async () => {
+    const wrapper = await mountReady()
+    invoke.mockImplementation(async (command: string) => {
+      if (command === 'git_repository_action')
+        throw "Git 操作失败：fatal: Authentication failed for 'http://106.75.23.137:13000/team/repo.git/'"
+      return state()
+    })
+    try {
+      await button(wrapper, 'Fetch 获取').trigger('click')
+      await flushPromises()
+      await wrapper.get('[aria-label="Git 用户名"]').setValue('developer')
+      await wrapper.get('[aria-label="Git 密码或访问令牌"]').setValue('rejected-fetch-token')
+      await wrapper.get('[aria-label="Git 远程认证"]').trigger('submit')
+      await flushPromises()
+      expect(wrapper.find('[aria-label="Git 远程认证"]').exists()).toBe(true)
+      expect(wrapper.get<HTMLInputElement>('[aria-label="Git 密码或访问令牌"]').element.value).toBe('')
+      await wrapper.get('[aria-label="Git 远程认证"] button[type="button"]').trigger('click')
+      expect(actionCalls()).toHaveLength(2)
+      expect(wrapper.find('[aria-label="Git 远程认证"]').exists()).toBe(false)
+      expect(wrapper.text()).not.toContain('rejected-fetch-token')
+    } finally {
+      wrapper.unmount()
+    }
+  })
+
   it('passes the explicit save choice only after the user selects encrypted local storage', async () => {
     const wrapper = await mountReady()
     let calls = 0
@@ -963,6 +1026,32 @@ describe('Git workbench controls', () => {
     expect(wrapper.text()).toContain('已加密保存到本机')
     wrapper.unmount()
   })
+
+  it.each([
+    ['fetch', 'Fetch 获取'],
+    ['pull', 'Pull 更新'],
+    ['push', 'Push 推送'],
+  ])(
+    'shows a replacement form after the backend has already tried saved credentials for %s',
+    async (operation, label) => {
+      const wrapper = await mountReady()
+      invoke.mockImplementation(async (command: string) => {
+        if (command === 'git_repository_action')
+          throw "fatal: Authentication failed for 'https://example.test/team/repo.git/'\n已保存的凭据认证失败，请重新填写用户名和密码或访问令牌。"
+        return state()
+      })
+      try {
+        await button(wrapper, label).trigger('click')
+        await flushPromises()
+        expect(actionCalls()).toHaveLength(1)
+        expect(actionCalls()[0]![1].request.operation).toBe(operation)
+        expect(wrapper.text()).toContain('已保存的账号密码未通过认证')
+        expect(wrapper.get('[aria-label="Git 远程认证"]').text()).toContain('https://example.test')
+      } finally {
+        wrapper.unmount()
+      }
+    },
+  )
 
   it('does not repeat a network operation when authentication is canceled', async () => {
     const wrapper = await mountReady()

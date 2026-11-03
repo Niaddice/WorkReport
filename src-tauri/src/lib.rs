@@ -318,10 +318,20 @@ async fn save_entry(
     content: String,
     format: Format,
     expected_revision: String,
+    automatic: Option<bool>,
 ) -> Result<Document, String> {
     run_workspace(state.0.clone(), move |workspace| {
-        workspace.save(&date, format, &content, &expected_revision)
+        workspace.save_with_mode(&date, format, &content, &expected_revision, automatic.unwrap_or(false))
     }).await
+}
+
+#[tauri::command]
+async fn checkpoint_entry_history(
+    state: State<'_, AppState>,
+    date: String,
+    format: Format,
+) -> Result<(), String> {
+    run_workspace(state.0.clone(), move |workspace| workspace.checkpoint_history(&date, format)).await
 }
 
 #[tauri::command]
@@ -654,8 +664,10 @@ async fn read_git_diff(state: State<'_, AppState>, workspace_path: String, repos
 async fn git_repository_action(app: tauri::AppHandle, state: State<'_, AppState>, workspace_path: String, repository_id: String, request: git_client::Action) -> Result<String, String> {
     let configuration = git_configuration(state.0.clone(), workspace_path.clone()).await?;
     let _guard = git_client::repository_lock(&configuration, &repository_id).await?;
+    validate_git_configuration(state.0.clone(), workspace_path.clone(), configuration.clone()).await?;
+    let origins = git_client::authentication_origins(&configuration, &repository_id, &request.operation).await?;
     let storage = Arc::new(git_credentials::LocalStore(legacy_config_dir(&app)));
-    git_credentials::execute(request, storage, |request| {
+    git_credentials::execute(request, storage, origins, |request, cached| {
         let state = state.0.clone();
         let workspace_path = workspace_path.clone();
         let configuration = configuration.clone();
@@ -663,7 +675,7 @@ async fn git_repository_action(app: tauri::AppHandle, state: State<'_, AppState>
         async move {
             // Revalidate after waiting for the lock or decrypting a saved credential.
             validate_git_configuration(state, workspace_path, configuration.clone()).await?;
-            git_client::action(&configuration, &repository_id, request).await
+            git_client::action_with_credentials(&configuration, &repository_id, request, &cached).await
         }
     }).await
 }
@@ -1231,7 +1243,7 @@ pub fn run() {
         .manage(holidays::Runtime::default())
         .manage(AppState::default())
         .invoke_handler(tauri::generate_handler![
-            updates::has_published_update,
+            updates::check_channel_update,
             updates::open_update_download,
             recent_workspace,
             load_holiday_data,
@@ -1250,6 +1262,7 @@ pub fn run() {
             create_entry,
             append_git_reports,
             save_entry,
+            checkpoint_entry_history,
             list_entry_history,
             read_entry_history,
             switch_entry_format,

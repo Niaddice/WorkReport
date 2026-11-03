@@ -77,7 +77,7 @@ export const MODULE_REGISTRY: readonly ModuleDefinition[] = [
     icon: PhClockCounterClockwise,
     component: HistoryModule,
     help: [
-      '每次保存都会为当天日报生成一个历史版本，按日期分组展示。',
+      '自动保存的历史快照每分钟最多生成一份；手动保存、切换日报或关闭应用时补存最终版本，相同内容与格式不重复记录。',
       '鼠标指向或键盘聚焦某个版本可预览全文，右侧复制图标可复制该版本原文。',
       '右键历史版本可预览、复制内容、查看当日日报或刷新；空白处右键可刷新，也支持 Shift + F10 打开菜单。',
     ],
@@ -146,7 +146,7 @@ export const MODULE_REGISTRY: readonly ModuleDefinition[] = [
       '提交说明旁的 AI 图标可根据已暂存更改生成说明，沿用默认 AI；在「设置 → Git 配置」自定义提示词，生成后可修改再提交。',
       '工作台支持搜索和分页浏览历史、查看提交 Diff、创建或切换分支、快进合并，以及保存和恢复 Stash。',
       'Fetch 更新远程引用，Pull 仅允许快进，Push 使用当前分支的上游；丢弃修改、删除分支和删除 Stash 需要确认。',
-      'Pull / Push 遇到 HTTP / HTTPS 认证错误时，在工作台填写用户名和密码或访问令牌后重试。可勾选加密保存到本机，后续自动使用，也可在 Git 设置中清除；不勾选则仅用于本次操作。提交后推送失败会保留本地提交。',
+      'Fetch / Pull / Push 遇到 HTTP / HTTPS 认证错误时，在工作台填写用户名和密码或访问令牌后重试。可勾选加密保存到本机，后续优先自动尝试、失效后再提示认证，也可在 Git 设置中清除；不勾选则仅用于本次操作。提交后推送失败会保留本地提交。',
       '右键点击工作台中的文件、提交、分支或 Stash，可打开对应的操作菜单；也可聚焦项目后按 Shift + F10。',
     ],
     defaultEnabled: false,

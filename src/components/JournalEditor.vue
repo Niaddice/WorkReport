@@ -417,12 +417,55 @@ function onRichEdit(content: string, forceHistory = false) {
   emit('edit', content, forceHistory)
   scrollSync.captureEditor()
 }
+let suspendedFocus: {
+  input: HTMLElement
+  source: string
+  format?: FileFormat
+  selection: readonly [number, number, 'forward' | 'backward' | 'none'] | null
+} | null = null
 watch(
   () => props.disabled,
   (disabled) => {
-    if (disabled) closePopovers()
+    if (!disabled) return
+    const input = richEditor.value?.getEditableElement() ?? textarea.value
+    if (input && document.activeElement === input) {
+      suspendedFocus = {
+        input,
+        source: scrollKey.value,
+        format: props.document?.format,
+        selection: textarea.value
+          ? [textarea.value.selectionStart, textarea.value.selectionEnd, textarea.value.selectionDirection]
+          : null,
+      }
+    } else if (document.activeElement !== document.body || suspendedFocus?.input !== input) {
+      suspendedFocus = null
+    }
+    closePopovers()
   },
 )
+watch(
+  () => props.disabled,
+  (disabled) => {
+    if (disabled) return
+    const snapshot = suspendedFocus
+    suspendedFocus = null
+    if (!snapshot) return
+    // Restore after the DOM is editable again, preserving ProseMirror's
+    // selection and avoiding a delayed focus that could steal a later click.
+    const { input, source, format, selection } = snapshot
+    if (source !== scrollKey.value || format !== props.document?.format || !input.isConnected) return
+    if (document.activeElement !== document.body && document.activeElement !== input) return
+    if (richEditor.value?.getEditableElement() === input) richEditor.value.restoreFocus()
+    else if (textarea.value === input && input instanceof HTMLTextAreaElement) {
+      const top = input.scrollTop
+      input.focus({ preventScroll: true })
+      if (selection) input.setSelectionRange(...selection)
+      input.scrollTop = top
+    }
+  },
+  { flush: 'post' },
+)
+
 function toolEnabled(action: ToolbarAction) {
   if (props.disabled) return false
   if (action === 'undo') return props.canUndo

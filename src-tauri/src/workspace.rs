@@ -245,11 +245,19 @@ impl Workspace {
     }
     /// 历史版本失败不应阻断保存，这里只做尽力而为的记录。
     fn record_history(&self, date: &str, format: Format, content: &str) {
+        self.record_history_with_mode(date, format, content, false);
+    }
+    fn record_history_with_mode(&self, date: &str, format: Format, content: &str, automatic: bool) {
         let limit = self.database_settings.history_limit_bytes;
-        if let Err(error) = crate::history::record(self.root(), date, format, content, limit) {
+        let record = if automatic { crate::history::record_automatic } else { crate::history::record };
+        if let Err(error) = record(self.root(), date, format, content, limit) {
             #[cfg(debug_assertions)]
             eprintln!("[history] {error}");
         }
+    }
+    pub fn checkpoint_history(&self, date: &str, format: Format) -> Result<(), String> {
+        let document = self.read(date, format)?;
+        crate::history::record(self.root(), date, format, &document.content, self.database_settings.history_limit_bytes)
     }
     pub fn info(&self) -> WorkspaceInfo {
         WorkspaceInfo {
@@ -703,17 +711,21 @@ impl Workspace {
     }
 
     pub fn save(&mut self, date: &str, format: Format, content: &str, expected_revision: &str) -> Result<Document, String> {
+        self.save_with_mode(date, format, content, expected_revision, false)
+    }
+
+    pub fn save_with_mode(&mut self, date: &str, format: Format, content: &str, expected_revision: &str, automatic: bool) -> Result<Document, String> {
         if self.database_only() {
             self.read(date, format)?;
             let record = JournalRecord::new(date, format, content);
             let database = self.connected_database()?;
             database::run_blocking(|| database.save(&record, Some(expected_revision)))?;
-            self.record_history(date, format, content);
+            self.record_history_with_mode(date, format, content, automatic);
             return self.document_from_record(record);
         }
         let was_pending = self.begin_backup();
         let document = self.save_file(date, format, content, expected_revision)?;
-        self.record_history(date, format, content);
+        self.record_history_with_mode(date, format, content, automatic);
         Ok(self.backup_document(document, was_pending))
     }
 
@@ -1425,6 +1437,38 @@ mod tests {
         let versions = crate::history::list(dir.path(), Some("20261018")).unwrap();
         assert_eq!(versions.len(), 2);
         assert_eq!(crate::history::read(dir.path(), "20261018", &versions[0].id).unwrap(), "第二版");
+    }
+    #[test]
+    fn autosave_throttles_history_but_checkpoints_keep_the_final_stored_content() {
+        let (dir, mut workspace) = setup();
+        let first = workspace.create_with_content("20261018", Format::Md, "第一版").unwrap();
+        let second = workspace.save_with_mode("20261018", Format::Md, "自动保存一", &first.revision, true).unwrap();
+        workspace.save_with_mode("20261018", Format::Md, "自动保存二", &second.revision, true).unwrap();
+        assert_eq!(workspace.read("20261018", Format::Md).unwrap().content, "自动保存二");
+        assert_eq!(crate::history::list(dir.path(), Some("20261018")).unwrap().len(), 1);
+
+        // Reopening the workspace must not reset the history interval.
+        let reopened = Workspace::open(dir.path().to_str().unwrap()).unwrap();
+        reopened.checkpoint_history("20261018", Format::Md).unwrap();
+        reopened.checkpoint_history("20261018", Format::Md).unwrap();
+        let versions = crate::history::list(dir.path(), Some("20261018")).unwrap();
+        assert_eq!(versions.len(), 2);
+        assert_eq!(crate::history::read(dir.path(), "20261018", &versions[0].id).unwrap(), "自动保存二");
+    }
+    #[test]
+    fn database_and_dual_autosaves_share_the_history_interval_and_checkpoint_policy() {
+        for mode in [Mode::Database, Mode::Dual] {
+            let (dir, mut workspace) = setup();
+            enable_database(&mut workspace, mode);
+            let first = workspace.create_with_content("20261018", Format::Md, "第一版").unwrap();
+            workspace.save_with_mode("20261018", Format::Md, "最终正文", &first.revision, true).unwrap();
+            assert_eq!(workspace.read("20261018", Format::Md).unwrap().content, "最终正文");
+            assert_eq!(crate::history::list(dir.path(), Some("20261018")).unwrap().len(), 1);
+            workspace.checkpoint_history("20261018", Format::Md).unwrap();
+            let versions = crate::history::list(dir.path(), Some("20261018")).unwrap();
+            assert_eq!(versions.len(), 2);
+            assert_eq!(crate::history::read(dir.path(), "20261018", &versions[0].id).unwrap(), "最终正文");
+        }
     }
     #[test]
     fn create_with_content_writes_literal_report_without_template() {

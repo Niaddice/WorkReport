@@ -60,8 +60,9 @@ export const api = {
   read: (date: string, format: FileFormat = 'md') => invoke<Document>('read_entry', { date, format }),
   create: (date: string, format: FileFormat, content: string) =>
     invoke<Document>('create_entry', { date, format, content }),
-  save: (date: string, content: string, expectedRevision: string, format: FileFormat = 'md') =>
-    invoke<Document>('save_entry', { date, content, expectedRevision, format }),
+  save: (date: string, content: string, expectedRevision: string, format: FileFormat = 'md', automatic = false) =>
+    invoke<Document>('save_entry', { date, content, expectedRevision, format, ...(automatic ? { automatic } : {}) }),
+  checkpointHistory: (date: string, format: FileFormat) => invoke<void>('checkpoint_entry_history', { date, format }),
   appendGitReports: (workspacePath: string, reports: GitReportEntry[]) =>
     invoke<GitAppendResult>('append_git_reports', { workspacePath, reports }),
   switchFormat: (date: string, from: FileFormat, to: FileFormat, expectedRevision: string) =>

@@ -90,6 +90,68 @@ async function resizeToolbar(wrapper: VueWrapper, width: number, gap = 0) {
   await flushPromises()
 }
 
+describe('editor focus after a temporary refresh', () => {
+  it.each(['md', 'txt'] as const)(
+    'restores %s focus and selection after the refresh disables the editor',
+    async (format) => {
+      const wrapper = await mountEditor('今天完成接口联调', format)
+      const input = wrapper.get<HTMLElement>('.markdown-editor').element
+      if (format === 'md') await selectEditorText(wrapper, 2, 6)
+      else {
+        input.focus()
+        ;(input as HTMLTextAreaElement).setSelectionRange(2, 6, 'backward')
+      }
+      expect(document.activeElement === input).toBe(true)
+      await wrapper.setProps({ disabled: true })
+      // WebKit blurs disabled inputs; reproduce that native behavior explicitly.
+      input.blur()
+      input.scrollTop = 120
+      await wrapper.setProps({ disabled: false })
+      await flushPromises()
+      await new Promise((resolve) => requestAnimationFrame(resolve))
+      expect(document.activeElement === input).toBe(true)
+      expect(input.scrollTop).toBe(120)
+      if (format === 'md')
+        expect(wrapper.getComponent(RichMarkdownEditor).vm.getSelection()).toEqual({ from: 3, to: 7 })
+      else {
+        expect((input as HTMLTextAreaElement).selectionStart).toBe(2)
+        expect((input as HTMLTextAreaElement).selectionEnd).toBe(6)
+        expect((input as HTMLTextAreaElement).selectionDirection).toBe('backward')
+      }
+    },
+  )
+
+  it('keeps focus on a control chosen while the refresh is in progress', async () => {
+    const wrapper = await mountEditor()
+    await selectEditorText(wrapper, 2, 6)
+    await wrapper.setProps({ disabled: true })
+    const other = document.createElement('input')
+    document.body.append(other)
+    other.focus()
+    await wrapper.setProps({ disabled: false })
+    await flushPromises()
+    expect(document.activeElement).toBe(other)
+  })
+
+  it('does not focus an editor that was not active before the refresh', async () => {
+    const wrapper = await mountEditor()
+    await wrapper.setProps({ disabled: true })
+    await wrapper.setProps({ disabled: false })
+    await flushPromises()
+    expect(document.activeElement).toBe(document.body)
+  })
+
+  it('does not restore focus after switching document scope', async () => {
+    const wrapper = await mountEditor()
+    await selectEditorText(wrapper, 2, 6)
+    await wrapper.setProps({ disabled: true })
+    wrapper.get<HTMLElement>('.markdown-editor').element.blur()
+    await wrapper.setProps({ scrollSourceKey: 'another-workspace', disabled: false })
+    await flushPromises()
+    expect(document.activeElement).toBe(document.body)
+  })
+})
+
 function menu() {
   return document.querySelector<HTMLElement>('.markdown-tools-menu[aria-label="更多 Markdown 工具"]')
 }

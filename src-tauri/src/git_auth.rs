@@ -74,38 +74,9 @@ impl Credentials {
         Ok(())
     }
 
+    #[cfg(test)]
     pub fn configure(&self, command: &mut Command) -> Result<(), String> {
-        self.validate()?;
-        let url = reqwest::Url::parse(&self.url).map_err(|_| "Git 认证地址无效")?;
-        let origin = url.origin().ascii_serialization();
-        let host = origin
-            .strip_prefix(&format!("{}://", url.scheme()))
-            .ok_or("Git 认证地址无效")?;
-        command.args([
-            "-c",
-            "credential.helper=",
-            "-c",
-            &format!("credential.helper={HELPER}"),
-            "-c",
-            "core.askPass=",
-            "-c",
-            "trace2.envVars=",
-            "-c",
-            "trace2.configParams=",
-        ]);
-        command
-            .env("WORKREPORT_GIT_PROTOCOL", url.scheme())
-            .env("WORKREPORT_GIT_HOST", host)
-            .env("WORKREPORT_GIT_USERNAME", &self.username)
-            .env("WORKREPORT_GIT_PASSWORD", &self.password)
-            .env_remove("GIT_ASKPASS")
-            .env_remove("SSH_ASKPASS");
-        for (key, _) in std::env::vars_os() {
-            if key.to_string_lossy().starts_with("GIT_TRACE") || key == "GIT_CURL_VERBOSE" {
-                command.env_remove(key);
-            }
-        }
-        Ok(())
+        configure_credentials(command, &[self])
     }
 
     pub fn redact(&self, bytes: &mut Vec<u8>) {
@@ -125,6 +96,41 @@ impl Credentials {
             self.redact(bytes);
         }
     }
+}
+
+/// Override helpers only for saved origins. Other remotes keep the user's
+/// existing helpers, and saved passwords cannot be stored by those helpers.
+pub fn configure_credentials(command: &mut Command, credentials: &[&Credentials]) -> Result<(), String> {
+    if credentials.is_empty() { return Ok(()); }
+    for value in credentials { value.validate()?; }
+    command.args([
+        "-c", "core.askPass=",
+        "-c", "trace2.envVars=",
+        "-c", "trace2.configParams=",
+    ]);
+    for (index, value) in credentials.iter().enumerate() {
+        let url = reqwest::Url::parse(&value.url).map_err(|_| "Git 认证地址无效")?;
+        let origin = url.origin().ascii_serialization();
+        let host = origin.strip_prefix(&format!("{}://", url.scheme())).ok_or("Git 认证地址无效")?;
+        let prefix = format!("WORKREPORT_GIT_{index}_");
+        command.args([
+            "-c", &format!("credential.{origin}.helper="),
+            "-c", &format!("credential.{origin}.helper={}", HELPER.replace("WORKREPORT_GIT_", &prefix)),
+        ]);
+        command.env(format!("{prefix}PROTOCOL"), url.scheme())
+            .env(format!("{prefix}HOST"), host)
+            .env(format!("{prefix}USERNAME"), &value.username)
+            .env(format!("{prefix}PASSWORD"), &value.password);
+    }
+    command
+        .env_remove("GIT_ASKPASS")
+        .env_remove("SSH_ASKPASS");
+    for (key, _) in std::env::vars_os() {
+        if key.to_string_lossy().starts_with("GIT_TRACE") || key == "GIT_CURL_VERBOSE" {
+            command.env_remove(key);
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -183,6 +189,72 @@ mod tests {
         let wrong_origin = fill("other.example.test:13000").await;
         assert!(!wrong_origin.status.success());
         assert!(!String::from_utf8_lossy(&wrong_origin.stdout).contains(&credentials().password));
+    }
+    #[tokio::test]
+    async fn multiple_helpers_keep_credentials_separate_by_protocol_host_and_port() {
+        let first = credentials();
+        let second = Credentials { url: "https://other.example.test:8443".into(),
+            username: "second-user".into(), password: "second-token-$'\"`&;=".into(), save: false };
+        for (protocol, host, expected) in [
+            ("http", "git.example.test:13000", Some(&first)),
+            ("https", "other.example.test:8443", Some(&second)),
+            ("https", "git.example.test:13000", None),
+            ("https", "other.example.test:8444", None),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let mut command = Command::new("git");
+            configure_credentials(&mut command, &[&first, &second]).unwrap();
+            for value in [&first, &second] {
+                assert!(command.as_std().get_args().all(|arg| !arg.to_string_lossy().contains(&value.password)));
+            }
+            command.current_dir(dir.path()).args(["credential", "fill"])
+                .env("GIT_TERMINAL_PROMPT", "0").env("GIT_CONFIG_NOSYSTEM", "1")
+                .env("GIT_CONFIG_GLOBAL", if cfg!(windows) { "NUL" } else { "/dev/null" })
+                .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
+            let mut child = command.spawn().unwrap();
+            child.stdin.take().unwrap().write_all(format!("protocol={protocol}\nhost={host}\n\n").as_bytes()).await.unwrap();
+            let output = child.wait_with_output().await.unwrap();
+            let text = String::from_utf8_lossy(&output.stdout);
+            if let Some(value) = expected {
+                assert!(output.status.success());
+                assert!(text.contains(&format!("username={}\npassword={}\n", value.username, value.password)));
+            } else {
+                assert!(!output.status.success());
+                assert!(!text.contains(&first.password));
+                assert!(!text.contains(&second.password));
+            }
+        }
+    }
+    #[tokio::test]
+    async fn saved_origin_overrides_native_helper_without_affecting_other_origins_or_storing_secrets() {
+        let dir = tempfile::tempdir().unwrap();
+        let native_store_log = dir.path().join("native-store-called");
+        let legacy = r#"!f() { case "$1" in
+            get) printf 'username=native-user\npassword=native-test-token\n';;
+            store) printf called >> "$MOCK_HELPER_LOG";; esac; }; f"#;
+        for (host, operation, expected) in [
+            ("git.example.test:13000", "fill", Some("test-user")),
+            ("unrelated.example.test:13000", "fill", Some("native-user")),
+            ("git.example.test:13000", "approve", None),
+        ] {
+            let mut command = Command::new("git");
+            command.args(["-c", &format!("credential.helper={legacy}")]);
+            credentials().configure(&mut command).unwrap();
+            command.current_dir(dir.path()).args(["credential", operation])
+                .env("MOCK_HELPER_LOG", &native_store_log)
+                .env("GIT_TERMINAL_PROMPT", "0").env("GIT_CONFIG_NOSYSTEM", "1")
+                .env("GIT_CONFIG_GLOBAL", if cfg!(windows) { "NUL" } else { "/dev/null" })
+                .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
+            let mut child = command.spawn().unwrap();
+            let extra = if operation == "approve" { "username=test-user\npassword=test-token\n" } else { "" };
+            child.stdin.take().unwrap().write_all(format!("protocol=http\nhost={host}\n{extra}\n").as_bytes()).await.unwrap();
+            let output = child.wait_with_output().await.unwrap();
+            assert!(output.status.success());
+            if let Some(username) = expected {
+                assert!(String::from_utf8_lossy(&output.stdout).contains(&format!("username={username}\n")));
+            }
+        }
+        assert!(!native_store_log.exists());
     }
 
     #[tokio::test]

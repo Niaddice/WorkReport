@@ -5,6 +5,34 @@ import { version } from '../../package.json'
 import { dismissMessage, pushMessage } from './messages'
 
 export const UPDATE_DOWNLOAD_URL = 'https://github.com/Niaddice/WorkReport/releases/latest'
+export const DEV_DOWNLOAD_URL = 'https://github.com/Niaddice/WorkReport/releases'
+export const UPDATE_CHANNEL_KEY = 'work-report.update-channel'
+const CHANNEL_SWITCH_KEY = 'work-report.update-channel-switch'
+export type UpdateChannel = 'main' | 'dev'
+export const UPDATE_CHANNEL_OPTIONS = [
+  { value: 'main', label: '正式版（main）' },
+  { value: 'dev', label: '开发版（dev）' },
+]
+
+function readPreference(key: string) {
+  try {
+    return globalThis.localStorage.getItem(key)
+  } catch {
+    return null
+  }
+}
+function writePreference(key: string, value: string) {
+  try {
+    globalThis.localStorage.setItem(key, value)
+  } catch {
+    /* The selected channel still works for this session if storage is unavailable. */
+  }
+}
+interface ChannelCheck {
+  update: ConstructorParameters<typeof Update>[0] | null
+  published: boolean
+  downloadUrl: string
+}
 
 type UpdateStatus =
   | 'idle'
@@ -28,6 +56,12 @@ function updateFailure(cause: unknown, fallback: string) {
 
 export function useUpdater(options: { beforeInstall: () => Promise<boolean> }) {
   const supported = isTauri()
+  const channel = ref<UpdateChannel>(readPreference(UPDATE_CHANNEL_KEY) === 'dev' ? 'dev' : 'main')
+  const channelLabel = computed(() => (channel.value === 'dev' ? '开发版（dev）' : '正式版（main）'))
+  const resolvedDownloadUrl = ref('')
+  const manualDownloadUrl = computed(
+    () => resolvedDownloadUrl.value || (channel.value === 'dev' ? DEV_DOWNLOAD_URL : UPDATE_DOWNLOAD_URL),
+  )
   const status = ref<UpdateStatus>('idle')
   const release = shallowRef<{ version: string; notes: string; date?: string } | null>(null)
   const error = ref('')
@@ -48,18 +82,19 @@ export function useUpdater(options: { beforeInstall: () => Promise<boolean> }) {
   let disposed = false
   let messageId = 0
   let fallbackNotified = false
+  let allowChannelSwitch = readPreference(CHANNEL_SWITCH_KEY) === channel.value
 
   async function openManualDownload() {
     if (disposed || manualDownloadOpening.value) return
     manualDownloadOpening.value = true
     manualDownloadError.value = ''
     try {
-      if (supported) await invoke('open_update_download')
-      else window.open(UPDATE_DOWNLOAD_URL, '_blank', 'noopener,noreferrer')
+      if (supported) await invoke('open_update_download', { channel: channel.value })
+      else window.open(manualDownloadUrl.value, '_blank', 'noopener,noreferrer')
     } catch {
       if (disposed) return
       manualDownloadError.value = '无法打开浏览器，请复制下载地址后手动打开。'
-      pushMessage({ tone: 'error', text: `${manualDownloadError.value}${UPDATE_DOWNLOAD_URL}`, duration: 0 })
+      pushMessage({ tone: 'error', text: `${manualDownloadError.value}${manualDownloadUrl.value}`, duration: 0 })
     } finally {
       manualDownloadOpening.value = false
     }
@@ -92,6 +127,41 @@ export function useUpdater(options: { beforeInstall: () => Promise<boolean> }) {
     }
   }
 
+  async function setChannel(value: string) {
+    if (
+      !['main', 'dev'].includes(value) ||
+      value === channel.value ||
+      disposed ||
+      checking.value ||
+      busy.value ||
+      status.value === 'installed'
+    )
+      return
+    channel.value = value as UpdateChannel
+    writePreference(UPDATE_CHANNEL_KEY, value)
+    // Keep an unfinished channel switch across restarts, including a return
+    // from a newer dev build to the published main version.
+    allowChannelSwitch = true
+    writePreference(CHANNEL_SWITCH_KEY, value)
+    const previous = update
+    update = null
+    readyToInstall = false
+    release.value = null
+    visible.value = false
+    status.value = 'idle'
+    error.value = ''
+    resolvedDownloadUrl.value = ''
+    lastChecked.value = ''
+    downloaded.value = 0
+    total.value = undefined
+    manualDownloadAvailable.value = !supported
+    manualDownloadError.value = ''
+    fallbackNotified = false
+    if (messageId) dismissMessage(messageId)
+    await releaseResource(previous)
+    if (supported) await checkForUpdates()
+  }
+
   async function checkForUpdates(manual = true) {
     if (disposed || checking.value || busy.value || status.value === 'installed') return
     if (!supported) {
@@ -102,8 +172,9 @@ export function useUpdater(options: { beforeInstall: () => Promise<boolean> }) {
     status.value = 'checking'
     error.value = ''
     try {
-      const { check } = await import('@tauri-apps/plugin-updater')
-      const next = await check({ timeout: 15_000 })
+      const { Update } = await import('@tauri-apps/plugin-updater')
+      const result = await invoke<ChannelCheck>('check_channel_update', { channel: channel.value, allowChannelSwitch })
+      const next = result.update ? new Update(result.update) : null
       if (disposed) {
         await releaseResource(next)
         return
@@ -114,43 +185,35 @@ export function useUpdater(options: { beforeInstall: () => Promise<boolean> }) {
         return
       }
       update = next
+      resolvedDownloadUrl.value = result.downloadUrl
       readyToInstall = false
-      manualDownloadAvailable.value = false
+      manualDownloadAvailable.value = !result.published
       manualDownloadError.value = ''
       downloaded.value = 0
       total.value = undefined
       if (messageId) dismissMessage(messageId)
       lastChecked.value = new Date().toISOString()
       release.value = next ? { version: next.version, notes: next.body ?? '', date: next.date } : null
-      status.value = next ? 'available' : 'latest'
+      status.value = !result.published ? 'unpublished' : next ? 'available' : 'latest'
+      if (!result.published) {
+        notifyManualDownload(manual, `${channelLabel.value}暂未发布支持自动更新的版本，可打开下载页面查看。`)
+        return
+      }
+      if (!next) {
+        allowChannelSwitch = false
+        writePreference(CHANNEL_SWITCH_KEY, '')
+      }
       if (next) {
         if (manual) open()
         else
           messageId = pushMessage({
             title: '发现新版本',
-            text: `WorkReport ${next.version} 已可更新。`,
+            text: `${channelLabel.value} WorkReport ${next.version} 已可更新。`,
             duration: 0,
             actions: [{ label: '查看更新', run: open }],
           })
-      } else if (manual) pushMessage({ tone: 'success', text: '当前已是最新版本。' })
+      } else if (manual) pushMessage({ tone: 'success', text: `当前已是${channelLabel.value}最新版本。` })
     } catch (cause) {
-      if (disposed) return
-      if (!update && /could not fetch a valid release json/i.test(String(cause))) {
-        try {
-          const published = await invoke<boolean>('has_published_update')
-          if (disposed) return
-          if (published === false) {
-            status.value = 'unpublished'
-            error.value = ''
-            lastChecked.value = new Date().toISOString()
-            manualDownloadAvailable.value = true
-            notifyManualDownload(manual, '暂未发布支持自动更新的版本，可打开下载页面手动下载更新。')
-            return
-          }
-        } catch {
-          // An unreachable/rate-limited metadata API must remain a check error.
-        }
-      }
       if (disposed) return
       status.value = update ? 'available' : 'error'
       error.value = updateFailure(cause, '暂时无法获取更新信息，请检查网络或稍后重试。')
@@ -215,6 +278,8 @@ export function useUpdater(options: { beforeInstall: () => Promise<boolean> }) {
       status.value = 'installing'
       await update.install()
       status.value = 'installed'
+      allowChannelSwitch = false
+      writePreference(CHANNEL_SWITCH_KEY, '')
       await releaseResource(update)
       update = null
       await restart(true)
@@ -235,6 +300,9 @@ export function useUpdater(options: { beforeInstall: () => Promise<boolean> }) {
   return {
     supported,
     currentVersion: version,
+    channel,
+    channelLabel,
+    setChannel,
     status,
     release,
     error,
@@ -242,7 +310,7 @@ export function useUpdater(options: { beforeInstall: () => Promise<boolean> }) {
     downloaded,
     total,
     lastChecked,
-    manualDownloadUrl: UPDATE_DOWNLOAD_URL,
+    manualDownloadUrl,
     manualDownloadAvailable,
     manualDownloadOpening,
     manualDownloadError,

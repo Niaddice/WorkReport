@@ -18,6 +18,8 @@ import SettingsDialog from '../src/components/SettingsDialog.vue'
 import AiSummaryDialog from '../src/components/AiSummaryDialog.vue'
 import RichMarkdownEditor from '../src/components/RichMarkdownEditor.vue'
 import JournalEditor from '../src/components/JournalEditor.vue'
+import AppSelect from '../src/components/AppSelect.vue'
+import CliModelPicker from '../src/components/CliModelPicker.vue'
 import { flattenLayout } from '../src/modules/layout'
 import { DEFAULT_DATABASE_SETTINGS } from '../src/lib/database'
 import { cloneFileSettings, type FileChangesPlan } from '../src/lib/fileSettings'
@@ -107,6 +109,95 @@ async function openDemoWorkspace() {
   await flushPromises()
   return wrapper
 }
+
+describe('additional local AI integrations', () => {
+  it('adds a detected Cursor CLI, fetches its models and keeps a desktop-only Grok Bot out of saved providers', async () => {
+    invoke.mockImplementation(async (command: string, args?: Record<string, unknown>) => {
+      if (command === 'detect_ai_clis')
+        return [
+          { kind: 'cursor', name: 'Cursor', executable: '/tools/cursor-agent', version: 'test', cliAvailable: true },
+          {
+            kind: 'grok',
+            name: 'Grok Bot',
+            executable: '',
+            version: '0.78.1',
+            cliAvailable: false,
+            appPath: '/Applications/Grok Bot.app',
+            message: '已安装桌面应用；自动调用需另行安装并登录 Grok Build CLI。',
+          },
+        ]
+      if (command === 'list_cli_models') return [{ id: 'composer-2', name: 'Composer 2' }]
+      if (command === 'save_workspace_settings') return args!.settings
+      return commandResult(command)
+    })
+    const wrapper = await openDemoWorkspace()
+    try {
+      await wrapper.get('.app-rail [aria-label="设置"]').trigger('click')
+      await flushPromises()
+      await wrapper.get('[aria-controls="settings-panel-ai"]').trigger('click')
+      await wrapper.get('#settings-panel-ai .settings-section-heading button').trigger('click')
+      await flushPromises()
+      const rows = wrapper.findAll('.detected-row')
+      expect(rows).toHaveLength(2)
+      expect(rows[1]!.get('button').attributes('disabled')).toBeDefined()
+      expect(rows[1]!.text()).toContain('Grok Build CLI')
+      await rows[0]!.get('button').trigger('click')
+      const picker = wrapper.getComponent(CliModelPicker)
+      await picker.get('button').trigger('click')
+      await flushPromises()
+      expect(invoke).toHaveBeenCalledWith('list_cli_models', { kind: 'cursor', executable: '/tools/cursor-agent' })
+      picker.getComponent(AppSelect).vm.$emit('update:modelValue', 'composer-2')
+      await wrapper.get('input[name="default-ai"]').setValue(true)
+      await wrapper.get('.app-rail [aria-label="设置"]').trigger('click')
+      await flushPromises()
+      const saved = invoke.mock.calls.find(([command]) => command === 'save_workspace_settings')![1]
+        .settings as WorkspaceSettings
+      expect(saved.ai.providers).toHaveLength(1)
+      expect(saved.ai.providers[0]).toMatchObject({
+        kind: 'cursor',
+        executable: '/tools/cursor-agent',
+        model: 'composer-2',
+      })
+      expect(saved.ai.defaultProviderId).toBe(saved.ai.providers[0]!.id)
+    } finally {
+      wrapper.unmount()
+    }
+  })
+
+  it('allows manually adding Cursor and Grok CLI paths when detection cannot find them', async () => {
+    invoke.mockImplementation(async (command: string, args?: Record<string, unknown>) =>
+      command === 'save_workspace_settings' ? args!.settings : commandResult(command),
+    )
+    const wrapper = await openDemoWorkspace()
+    try {
+      await wrapper.get('.app-rail [aria-label="设置"]').trigger('click')
+      await flushPromises()
+      await wrapper.get('[aria-controls="settings-panel-ai"]').trigger('click')
+      const select = wrapper.findAllComponents(AppSelect).find((item) => item.props('id') === 'ai-preset')!
+      for (const kind of ['cursor', 'grok']) {
+        select.vm.$emit('update:modelValue', kind)
+        await flushPromises()
+        await wrapper.get('.custom-ai-add > button').trigger('click')
+        const card = wrapper.findAll('.provider-card').at(-1)!
+        await card
+          .findAll('label')
+          .find((label) => label.text().startsWith('CLI 路径'))!
+          .get('input')
+          .setValue(`/tools/${kind}`)
+      }
+      await wrapper.get('.app-rail [aria-label="设置"]').trigger('click')
+      await flushPromises()
+      const saved = invoke.mock.calls.find(([command]) => command === 'save_workspace_settings')![1]
+        .settings as WorkspaceSettings
+      expect(saved.ai.providers.map(({ kind, executable }) => ({ kind, executable }))).toEqual([
+        { kind: 'cursor', executable: '/tools/cursor' },
+        { kind: 'grok', executable: '/tools/grok' },
+      ])
+    } finally {
+      wrapper.unmount()
+    }
+  })
+})
 
 async function replaceRichMarkdown(wrapper: VueWrapper, markdown: string) {
   const editor = wrapper.getComponent(RichMarkdownEditor)

@@ -200,35 +200,65 @@ impl CredentialStorage for LocalStore {
     }
 }
 
-/// Retry only a failed network action, and persist only an explicitly selected successful login.
+async fn saved_credential(storage: Arc<dyn CredentialStorage>, origin: String) -> Result<Option<Credentials>, String> {
+    tokio::task::spawn_blocking(move || {
+        let mut value = storage.load(&origin)?;
+        if let Some(value) = &mut value {
+            value.validate()?;
+            if value.url != origin { return Err("已保存凭据的服务器地址不匹配".into()); }
+            value.save = false;
+        }
+        Ok(value)
+    }).await.unwrap_or_else(|_| Err("读取本机 Git 凭据失败".into()))
+}
+
+/// Use saved logins on the first attempt. A previously unseen redirect origin
+/// may be retried once, while rejected cached credentials go straight to the UI.
 pub async fn execute<F, Fut>(
-    mut request: crate::git_client::Action,
+    request: crate::git_client::Action,
     storage: Arc<dyn CredentialStorage>,
+    origins: Vec<String>,
     mut run: F,
 ) -> Result<String, String>
 where
-    F: FnMut(crate::git_client::Action) -> Fut,
+    F: FnMut(crate::git_client::Action, Vec<Credentials>) -> Fut,
     Fut: std::future::Future<Output = Result<String, String>>,
 {
     let remember = request.credentials.as_ref().filter(|value| value.save).cloned();
-    let mut result = run(request.clone()).await;
-    if request.credentials.is_none() && matches!(request.operation.as_str(), "pull" | "push") {
-        if let Some(origin) = result.as_ref().err().and_then(|error| crate::git_auth::authentication_origin(error)) {
-            let store = storage.clone();
-            let saved = tokio::task::spawn_blocking(move || store.load(&origin)).await
-                .unwrap_or_else(|_| Err("读取本机 Git 凭据失败".into()));
-            match saved {
-                Ok(Some(mut value)) => {
-                    value.save = false;
-                    request.credentials = Some(value);
-                    result = run(request).await;
-                }
-                Ok(None) => {}
-                Err(error) => if let Err(message) = &mut result {
-                    message.push_str(&format!("\n已保存凭据不可用：{error}"));
-                },
+    let network = matches!(request.operation.as_str(), "fetch" | "pull" | "push");
+    let mut attempted = std::collections::HashSet::new();
+    let mut cached = Vec::new();
+    let mut warnings = Vec::new();
+    if network {
+        for origin in origins {
+            if request.credentials.as_ref().is_some_and(|value| value.url == origin) || !attempted.insert(origin.clone()) { continue; }
+            match saved_credential(storage.clone(), origin).await {
+                Ok(Some(value)) => cached.push(value),
+                Ok(None) => {},
+                Err(error) => warnings.push(error),
             }
         }
+    }
+    let mut result = run(request.clone(), cached.clone()).await;
+    if request.credentials.is_none() && network {
+        if let Some(origin) = result.as_ref().err().and_then(|error| crate::git_auth::authentication_origin(error)) {
+            if attempted.insert(origin.clone()) {
+                match saved_credential(storage.clone(), origin).await {
+                    Ok(Some(value)) => {
+                        cached.push(value);
+                        result = run(request, cached.clone()).await;
+                    }
+                    Ok(None) => {},
+                    Err(error) => warnings.push(error),
+                }
+            }
+        }
+    }
+    if let Err(message) = &mut result {
+        if crate::git_auth::authentication_origin(message).is_some_and(|origin| cached.iter().any(|value| value.url == origin)) {
+            message.push_str("\n已保存的凭据认证失败，请重新填写用户名和密码或访问令牌。");
+        }
+        for error in warnings { message.push_str(&format!("\n已保存凭据不可用：{error}")); }
     }
     if let (Ok(output), Some(credentials)) = (&mut result, remember) {
         let saved = tokio::task::spawn_blocking(move || storage.save(&credentials)).await;
@@ -358,18 +388,117 @@ mod tests {
         crate::git_client::Action { operation: "push".into(), paths: vec![], message: String::new(), reference: String::new(), credentials }
     }
     #[tokio::test]
+    async fn saved_logins_are_used_on_the_first_fetch_pull_and_push_attempt() {
+        for operation in ["fetch", "pull", "push"] {
+            let origin = "http://106.75.23.137:13000";
+            let store = Arc::new(MemoryStore::default());
+            store.entries.lock().unwrap().insert(origin.into(), credentials(origin));
+            let mut request = action(None);
+            request.operation = operation.into();
+            let calls = std::sync::atomic::AtomicUsize::new(0);
+            let output = execute(request, store.clone(), vec![origin.into()], |request, cached| {
+                assert_eq!(*store.reads.lock().unwrap(), [origin]);
+                assert_eq!(calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst), 0);
+                assert_eq!(request.operation, operation);
+                assert!(request.credentials.is_none());
+                assert_eq!(cached.len(), 1);
+                assert_eq!(cached[0].url, origin);
+                assert_eq!(cached[0].username, "private-user");
+                assert_eq!(cached[0].password, "private-token");
+                assert!(!cached[0].save);
+                async { Ok("completed with saved login".into()) }
+            }).await.unwrap();
+            assert_eq!(output, "completed with saved login");
+            assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+            assert_eq!(*store.writes.lock().unwrap(), 0);
+        }
+    }
+    #[tokio::test]
+    async fn rejected_saved_password_is_not_retried_before_requesting_a_new_login() {
+        let origin = "https://git.example.test";
+        let store = Arc::new(MemoryStore::default());
+        store.entries.lock().unwrap().insert(origin.into(), credentials(origin));
+        let calls = std::sync::atomic::AtomicUsize::new(0);
+        let result = execute(action(None), store.clone(), vec![origin.into()], |_, cached| {
+            calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            assert_eq!(cached.len(), 1);
+            async { Err("fatal: Authentication failed for 'https://git.example.test/team/repo.git/'".into()) }
+        }).await.unwrap_err();
+        assert_eq!(crate::git_auth::authentication_origin(&result).as_deref(), Some(origin));
+        assert!(result.contains("已保存的凭据认证失败"));
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_eq!(*store.reads.lock().unwrap(), [origin]);
+        assert_eq!(*store.writes.lock().unwrap(), 0);
+    }
+    #[tokio::test]
+    async fn explicit_replacement_overrides_saved_login_and_other_remotes_keep_their_own_credentials() {
+        let primary = "https://git.example.test";
+        let other = "http://other.example.test:13000";
+        let store = Arc::new(MemoryStore::default());
+        for origin in [primary, other] { store.entries.lock().unwrap().insert(origin.into(), credentials(origin)); }
+        let mut explicit = credentials(primary);
+        explicit.password = "replacement-token".into();
+        explicit.save = false;
+        execute(action(Some(explicit)), store.clone(), vec![primary.into(), other.into(), other.into()], |request, cached| {
+            assert_eq!(request.credentials.as_ref().unwrap().password, "replacement-token");
+            assert_eq!(cached.len(), 1);
+            assert_eq!(cached[0].url, other);
+            async { Ok("completed".into()) }
+        }).await.unwrap();
+        assert_eq!(*store.reads.lock().unwrap(), [other]);
+        assert_eq!(*store.writes.lock().unwrap(), 0);
+        let mut local = action(None);
+        local.operation = "commit".into();
+        execute(local, store.clone(), vec![primary.into()], |_, cached| {
+            assert!(cached.is_empty());
+            async { Ok("committed".into()) }
+        }).await.unwrap();
+        assert_eq!(*store.reads.lock().unwrap(), [other]);
+    }
+    #[tokio::test]
+    async fn fetch_reuses_saved_credentials_for_the_failed_http_origin_only_once() {
+        let origin = "http://106.75.23.137:13000";
+        let store = Arc::new(MemoryStore::default());
+        store.entries.lock().unwrap().insert(origin.into(), credentials(origin));
+        let mut fetch = action(None);
+        fetch.operation = "fetch".into();
+        let calls = Mutex::new(Vec::new());
+        let output = execute(fetch.clone(), store.clone(), vec![], |request, cached| {
+            calls.lock().unwrap().push(request.operation.clone());
+            async move {
+                if let Some(value) = request.credentials.as_ref().or_else(|| cached.first()) {
+                    assert_eq!(value.url, "http://106.75.23.137:13000");
+                    assert_eq!(value.password, "private-token");
+                    assert!(!value.save);
+                    Ok("fetched with saved credentials".into())
+                } else { Err("fatal: could not read Username for 'http://106.75.23.137:13000': terminal prompts disabled".into()) }
+            }
+        }).await.unwrap();
+        assert_eq!(output, "fetched with saved credentials");
+        assert_eq!(*calls.lock().unwrap(), ["fetch", "fetch"]);
+        assert_eq!(*store.reads.lock().unwrap(), [origin]);
+        assert_eq!(*store.writes.lock().unwrap(), 0);
+
+        let attempts = std::sync::atomic::AtomicUsize::new(0);
+        assert!(execute(fetch, store.clone(), vec![], |_, _| {
+            attempts.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            async { Err("fatal: Authentication failed for 'http://106.75.23.137:13000/team/repo.git/'".into()) }
+        }).await.is_err());
+        assert_eq!(attempts.load(std::sync::atomic::Ordering::SeqCst), 2);
+    }
+    #[tokio::test]
     async fn remembers_only_checked_successful_logins_and_keeps_push_success_when_saving_fails() {
         let store = Arc::new(MemoryStore::default());
         let mut once = credentials("https://git.example.test");
         once.save = false;
-        execute(action(Some(once)), store.clone(), |_| async { Ok("pushed".into()) }).await.unwrap();
+        execute(action(Some(once)), store.clone(), vec![], |_, _| async { Ok("pushed".into()) }).await.unwrap();
         assert_eq!(*store.writes.lock().unwrap(), 0);
-        assert!(execute(action(Some(credentials("https://git.example.test"))), store.clone(), |_| async { Err("authentication failed".into()) }).await.is_err());
+        assert!(execute(action(Some(credentials("https://git.example.test"))), store.clone(), vec![], |_, _| async { Err("authentication failed".into()) }).await.is_err());
         assert_eq!(*store.writes.lock().unwrap(), 0);
-        execute(action(Some(credentials("https://git.example.test"))), store.clone(), |_| async { Ok("pushed".into()) }).await.unwrap();
+        execute(action(Some(credentials("https://git.example.test"))), store.clone(), vec![], |_, _| async { Ok("pushed".into()) }).await.unwrap();
         assert_eq!(*store.writes.lock().unwrap(), 1);
         let locked = Arc::new(MemoryStore { fail_save: true, ..Default::default() });
-        let output = execute(action(Some(credentials("https://git.example.test"))), locked, |_| async { Ok("pushed".into()) }).await.unwrap();
+        let output = execute(action(Some(credentials("https://git.example.test"))), locked, vec![], |_, _| async { Ok("pushed".into()) }).await.unwrap();
         assert!(output.contains("pushed"));
         assert!(output.contains("凭据未能保存"));
     }
@@ -378,10 +507,10 @@ mod tests {
         let store = Arc::new(MemoryStore::default());
         store.entries.lock().unwrap().insert("https://git.example.test".into(), credentials("https://git.example.test"));
         let calls = Mutex::new(Vec::new());
-        let output = execute(action(None), store.clone(), |request| {
+        let output = execute(action(None), store.clone(), vec![], |request, cached| {
             calls.lock().unwrap().push(request.operation.clone());
             async move {
-                if let Some(value) = request.credentials {
+                if let Some(value) = request.credentials.as_ref().or_else(|| cached.first()) {
                     assert_eq!(value.password, "private-token");
                     Ok("pushed with saved credentials".into())
                 } else { Err("fatal: could not read Username for 'https://git.example.test': terminal prompts disabled".into()) }
@@ -391,7 +520,7 @@ mod tests {
         assert_eq!(*calls.lock().unwrap(), vec!["push", "push"]);
         assert_eq!(*store.writes.lock().unwrap(), 0);
         let calls = std::sync::atomic::AtomicUsize::new(0);
-        let failed = execute(action(None), store.clone(), |_| {
+        let failed = execute(action(None), store.clone(), vec![], |_, _| {
             calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             async { Err("fatal: Authentication failed for 'https://git.example.test/repo.git/'".into()) }
         }).await;

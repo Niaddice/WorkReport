@@ -170,6 +170,15 @@ pub(super) async fn run_with_credentials(
     args: &[String],
     credentials: Option<&crate::git_auth::Credentials>,
 ) -> Result<std::process::Output, String> {
+    run_with_credential_set(settings, path, args, &credentials.into_iter().collect::<Vec<_>>()).await
+}
+
+pub(super) async fn run_with_credential_set(
+    settings: &Settings,
+    path: &Path,
+    args: &[String],
+    credentials: &[&crate::git_auth::Credentials],
+) -> Result<std::process::Output, String> {
     let mut command = Command::new(settings.executable.trim());
     command
         .current_dir(path)
@@ -180,9 +189,7 @@ pub(super) async fn run_with_credentials(
         .env("GIT_TERMINAL_PROMPT", "0")
         .env("GIT_PAGER", "cat")
         .kill_on_drop(true);
-    if let Some(credentials) = credentials {
-        credentials.configure(&mut command)?;
-    }
+    crate::git_auth::configure_credentials(&mut command, credentials)?;
     command.args(args);
     // GUI apps may inherit a minimal PATH. Preserve the user's search order.
     let mut paths: Vec<_> =
@@ -218,9 +225,9 @@ pub(super) async fn run_with_credentials(
     })
     .await
     .map_err(|_| "读取 Git 超时，请检查仓库后重试".to_string())??;
-    if let Some(credentials) = credentials {
-        credentials.redact(&mut stdout);
-        credentials.redact_error(&mut stderr);
+    for value in credentials {
+        value.redact(&mut stdout);
+        value.redact_error(&mut stderr);
     }
     Ok(std::process::Output {
         stdout,

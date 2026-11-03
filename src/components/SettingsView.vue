@@ -220,6 +220,8 @@ const presetOptions = [
   { value: 'deepseek', label: 'DeepSeek' },
   { value: 'gemini', label: 'Gemini' },
   { value: 'anthropic', label: 'Anthropic' },
+  { value: 'cursor', label: 'Cursor CLI' },
+  { value: 'grok', label: 'Grok Build CLI' },
   { value: 'custom', label: '自定义 OpenAI 兼容' },
 ]
 const pageRoot = ref<HTMLElement>()
@@ -351,6 +353,7 @@ async function detect() {
   }
 }
 function addCli(cli: DetectedCli) {
+  if (cli.cliAvailable === false) return
   const existing = draft.value.ai.providers.find(
     (provider) => provider.kind === cli.kind && provider.executable === cli.executable,
   )
@@ -371,6 +374,15 @@ function addCli(cli: DetectedCli) {
   editingId.value = provider.id
 }
 function addCustom() {
+  if (preset.value === 'cursor' || preset.value === 'grok') {
+    addCli({
+      kind: preset.value,
+      name: preset.value === 'cursor' ? 'Cursor' : 'Grok Build',
+      executable: '',
+      version: '',
+    })
+    return
+  }
   const anthropic = preset.value === 'anthropic'
   const provider: AiProvider = {
     id: crypto.randomUUID(),
@@ -789,24 +801,31 @@ function remove(id: string) {
                   <div class="settings-reveal-inner">
                     <div class="detected-clis">
                       <p v-if="!detected.length" class="settings-muted">
-                        未检测到 Codex、Claude Code 或 OpenCode。可先安装并登录 CLI，或在下方添加模型接口。
+                        未检测到 Codex、Claude Code、OpenCode、Cursor 或 Grok。可先安装并登录 CLI，或在下方手动添加。
                       </p>
-                      <article v-for="cli in detected" :key="cli.executable" class="detected-row">
+                      <article
+                        v-for="cli in detected"
+                        :key="`${cli.kind}:${cli.executable || cli.appPath}`"
+                        class="detected-row"
+                      >
                         <div>
                           <strong
                             >{{ cli.name }}<small>{{ cli.version }}</small></strong
-                          ><span>{{ cli.executable }}</span>
+                          ><span>{{ cli.executable || cli.appPath }}</span>
+                          <p v-if="cli.message" class="field-hint">{{ cli.message }}</p>
                         </div>
-                        <button class="text-action" :disabled="busy" @click="addCli(cli)">
+                        <button class="text-action" :disabled="busy || cli.cliAvailable === false" @click="addCli(cli)">
                           <Transition name="button-label" mode="out-in"
                             ><span
                               :key="
                                 String(draft.ai.providers.some((provider) => provider.executable === cli.executable))
                               "
                               >{{
-                                draft.ai.providers.some((provider) => provider.executable === cli.executable)
-                                  ? '已添加'
-                                  : '添加'
+                                cli.cliAvailable === false
+                                  ? '需安装 CLI'
+                                  : draft.ai.providers.some((provider) => provider.executable === cli.executable)
+                                    ? '已添加'
+                                    : '添加'
                               }}</span
                             ></Transition
                           >
@@ -817,7 +836,7 @@ function remove(id: string) {
                 </div>
               </Transition>
               <div class="custom-ai-add">
-                <label for="ai-preset">添加模型接口</label
+                <label for="ai-preset">添加 AI</label
                 ><AppSelect id="ai-preset" v-model="preset" :options="presetOptions" :disabled="busy" /><button
                   class="text-action"
                   :disabled="busy"

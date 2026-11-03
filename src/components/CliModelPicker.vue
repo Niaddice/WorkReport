@@ -8,7 +8,7 @@ const props = defineProps<{ modelValue: string; kind: ProviderKind; executable: 
 const emit = defineEmits<{ 'update:modelValue': [value: string] }>()
 const fieldId = useId()
 const manual = ref(false)
-const supportsListing = computed(() => props.kind === 'codex' || props.kind === 'opencode')
+const supportsListing = computed(() => ['codex', 'opencode', 'cursor', 'grok'].includes(props.kind))
 const { models, loading, error, queried, fetchModels } = useCliModels(() => ({
   kind: props.kind,
   executable: props.executable,

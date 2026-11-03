@@ -1,14 +1,19 @@
 // @vitest-environment happy-dom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { mount } from '@vue/test-utils'
+import { flushPromises, mount } from '@vue/test-utils'
 import type { DownloadEvent, Update } from '@tauri-apps/plugin-updater'
-import { UPDATE_DOWNLOAD_URL, useUpdater } from '../src/lib/useUpdater'
+import { DEV_DOWNLOAD_URL, UPDATE_CHANNEL_KEY, UPDATE_DOWNLOAD_URL, useUpdater } from '../src/lib/useUpdater'
 import UpdateSettings from '../src/components/UpdateSettings.vue'
+import AppSelect from '../src/components/AppSelect.vue'
 import { clearMessages, messages } from '../src/lib/messages'
 
 const native = vi.hoisted(() => ({ enabled: true, check: vi.fn(), relaunch: vi.fn(), invoke: vi.fn() }))
 vi.mock('@tauri-apps/api/core', () => ({ isTauri: () => native.enabled, invoke: native.invoke }))
-vi.mock('@tauri-apps/plugin-updater', () => ({ check: native.check }))
+vi.mock('@tauri-apps/plugin-updater', () => ({
+  Update: vi.fn(function (metadata: object) {
+    return metadata
+  }),
+}))
 vi.mock('@tauri-apps/plugin-process', () => ({ relaunch: native.relaunch }))
 
 function deferred<T>() {
@@ -50,10 +55,104 @@ function fixture() {
 beforeEach(() => {
   vi.resetAllMocks()
   native.enabled = true
+  localStorage.clear()
+  native.invoke.mockImplementation(async (command, args) => {
+    if (command === 'check_channel_update')
+      return {
+        update: await native.check(args),
+        published: true,
+        downloadUrl: args.channel === 'dev' ? DEV_DOWNLOAD_URL : UPDATE_DOWNLOAD_URL,
+      }
+  })
 })
 afterEach(clearMessages)
 
 describe('desktop updates', () => {
+  it('defaults to main, persists dev across restarts, and checks only the chosen channel', async () => {
+    const { updater } = fixture()
+    expect(updater.channel.value).toBe('main')
+    await updater.setChannel('dev')
+    expect(native.invoke).toHaveBeenCalledWith('check_channel_update', { channel: 'dev', allowChannelSwitch: true })
+    expect(localStorage.getItem(UPDATE_CHANNEL_KEY)).toBe('dev')
+    const restarted = useUpdater({ beforeInstall: async () => true })
+    expect(restarted.channel.value).toBe('dev')
+    await restarted.checkForUpdates()
+    expect(native.invoke).toHaveBeenLastCalledWith('check_channel_update', { channel: 'dev', allowChannelSwitch: true })
+    updater.dispose()
+    restarted.dispose()
+  })
+
+  it('invalidates the previous update before checking a different channel', async () => {
+    const { updater, update } = fixture()
+    await updater.checkForUpdates()
+    native.check.mockResolvedValueOnce(null)
+    await updater.setChannel('dev')
+    expect(update.close).toHaveBeenCalledOnce()
+    expect(updater.release.value).toBeNull()
+    expect(updater.visible.value).toBe(false)
+    await updater.install()
+    expect(update.download).not.toHaveBeenCalled()
+    expect(updater.status.value).toBe('latest')
+  })
+
+  it('permits a return to an older main release only as part of a chosen channel switch', async () => {
+    const { updater } = fixture()
+    await updater.setChannel('dev')
+    await updater.setChannel('main')
+    expect(native.invoke).toHaveBeenLastCalledWith('check_channel_update', {
+      channel: 'main',
+      allowChannelSwitch: true,
+    })
+    await updater.install()
+    const restarted = useUpdater({ beforeInstall: async () => true })
+    await restarted.checkForUpdates()
+    expect(native.invoke).toHaveBeenLastCalledWith('check_channel_update', {
+      channel: 'main',
+      allowChannelSwitch: false,
+    })
+    restarted.dispose()
+  })
+
+  it('keeps the channel fixed during a check or installation', async () => {
+    const { updater, update } = fixture()
+    const pending = deferred<Update | null>()
+    native.check.mockReturnValueOnce(pending.promise)
+    const checking = updater.checkForUpdates()
+    await updater.setChannel('dev')
+    expect(updater.channel.value).toBe('main')
+    pending.resolve(update as unknown as Update)
+    await checking
+    const saving = deferred<boolean>()
+    const beforeInstall = vi.fn(() => saving.promise)
+    const installingUpdater = useUpdater({ beforeInstall })
+    await installingUpdater.checkForUpdates()
+    const installing = installingUpdater.install()
+    await vi.waitFor(() => expect(beforeInstall).toHaveBeenCalledOnce())
+    await installingUpdater.setChannel('dev')
+    expect(installingUpdater.channel.value).toBe('main')
+    saving.resolve(true)
+    await installing
+  })
+
+  it('shows both branch choices and routes development fallback downloads to dev', async () => {
+    const { updater } = fixture()
+    const wrapper = mount(UpdateSettings, { props: { updater } })
+    try {
+      const select = wrapper.getComponent(AppSelect)
+      expect(select.props('options').map((option) => option.label)).toEqual(['正式版（main）', '开发版（dev）'])
+      native.invoke.mockResolvedValueOnce({ update: null, published: false, downloadUrl: DEV_DOWNLOAD_URL })
+      select.vm.$emit('update:modelValue', 'dev')
+      await flushPromises()
+      expect(updater.status.value).toBe('unpublished')
+      expect(wrapper.get('.update-manual-download a').attributes('href')).toBe(DEV_DOWNLOAD_URL)
+      await wrapper.get('.update-manual-download a').trigger('click')
+      expect(native.invoke).toHaveBeenLastCalledWith('open_update_download', { channel: 'dev' })
+      expect(wrapper.text()).toContain('dev 分支')
+    } finally {
+      wrapper.unmount()
+    }
+  })
+
   it('never checks or downloads from the browser preview', async () => {
     native.enabled = false
     const { updater, update } = fixture()
@@ -93,10 +192,9 @@ describe('desktop updates', () => {
 
   it('reports a legacy release with no manifest as unpublished instead of an error or up to date', async () => {
     const { updater } = fixture()
-    native.check.mockRejectedValueOnce('Could not fetch a valid release JSON from the remote')
-    native.invoke.mockResolvedValueOnce(false)
+    native.invoke.mockResolvedValueOnce({ update: null, published: false, downloadUrl: UPDATE_DOWNLOAD_URL })
     await updater.checkForUpdates()
-    expect(native.invoke).toHaveBeenCalledWith('has_published_update')
+    expect(native.invoke).toHaveBeenCalledWith('check_channel_update', { channel: 'main', allowChannelSwitch: false })
     expect(updater.status.value).toBe('unpublished')
     expect(updater.error.value).toBe('')
     expect(updater.lastChecked.value).not.toBe('')
@@ -108,14 +206,12 @@ describe('desktop updates', () => {
 
   it('reminds once per session when background checks have no update manifest', async () => {
     const { updater } = fixture()
-    native.check.mockRejectedValueOnce('Could not fetch a valid release JSON from the remote')
-    native.invoke.mockResolvedValueOnce(false)
+    native.invoke.mockResolvedValueOnce({ update: null, published: false, downloadUrl: UPDATE_DOWNLOAD_URL })
     await updater.checkForUpdates(false)
     expect(updater.status.value).toBe('unpublished')
     expect(messages.value).toHaveLength(1)
     clearMessages()
-    native.check.mockRejectedValueOnce('Could not fetch a valid release JSON from the remote')
-    native.invoke.mockResolvedValueOnce(false)
+    native.invoke.mockResolvedValueOnce({ update: null, published: false, downloadUrl: UPDATE_DOWNLOAD_URL })
     await updater.checkForUpdates(false)
     expect(messages.value).toHaveLength(0)
     await updater.checkForUpdates()
@@ -127,8 +223,7 @@ describe('desktop updates', () => {
     async (condition) => {
       const { updater } = fixture()
       native.check.mockRejectedValueOnce('Could not fetch a valid release JSON from the remote')
-      if (condition === 'present') native.invoke.mockResolvedValueOnce(true)
-      else native.invoke.mockRejectedValueOnce(new Error('rate limited'))
+      if (condition === 'unreachable') native.invoke.mockRejectedValueOnce(new Error('rate limited'))
       await updater.checkForUpdates()
       expect(updater.status.value).toBe('error')
       expect(updater.error.value).toContain('请检查网络')
@@ -252,7 +347,7 @@ describe('desktop updates', () => {
       expect(link.attributes('href')).toBe(UPDATE_DOWNLOAD_URL)
       expect(wrapper.text()).toContain('手动安装前，请先保存并退出当前应用')
       await link.trigger('click')
-      expect(native.invoke).toHaveBeenCalledWith('open_update_download')
+      expect(native.invoke).toHaveBeenCalledWith('open_update_download', { channel: 'main' })
     } finally {
       wrapper.unmount()
     }

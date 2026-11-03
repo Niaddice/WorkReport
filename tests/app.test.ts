@@ -148,6 +148,47 @@ describe('journal history routing', () => {
     }
   })
 
+  it('restores the editor focus and selection after returning to the app triggers a refresh', async () => {
+    const { wrapper, input } = await mountHistoryApp()
+    try {
+      wrapper.getComponent(JournalEditor).vm.$emit('save')
+      await flushPromises()
+      const date = dayjs().format('YYYYMMDD')
+      const documentValue = { date, filename: `${date}.md`, format: 'md', content: '本次编辑', revision: 'saved' }
+      const invoke = ipcInvoke.getMockImplementation()!
+      let deferReads = true
+      const finishReads: (() => void)[] = []
+      ipcInvoke.mockImplementation((command, args) => {
+        if (command === 'list_entries') return Promise.resolve([documentValue])
+        if (command === 'read_entry')
+          return deferReads
+            ? new Promise((resolve) => {
+                finishReads.push(() => resolve(documentValue))
+              })
+            : Promise.resolve(documentValue)
+        return invoke(command, args)
+      })
+      await new Promise((resolve) => requestAnimationFrame(resolve))
+      const rich = wrapper.getComponent(RichMarkdownEditor)
+      rich.vm.getEditableElement()!.focus()
+      rich.vm.selectAll()
+      const selection = rich.vm.getSelection()
+      window.dispatchEvent(new Event('focus'))
+      await flushPromises()
+      expect(input.attributes('contenteditable')).toBe('false')
+      input.element.blur()
+      deferReads = false
+      finishReads.forEach((finish) => finish())
+      await flushPromises()
+      await new Promise((resolve) => requestAnimationFrame(resolve))
+      expect(input.attributes('contenteditable')).toBe('true')
+      expect(document.activeElement === input.element).toBe(true)
+      expect(rich.vm.getSelection()).toEqual(selection)
+    } finally {
+      wrapper.unmount()
+    }
+  })
+
   it('routes native macOS Edit menu actions while a summary module is open inline', async () => {
     const platform = vi.spyOn(navigator, 'platform', 'get').mockReturnValue('MacIntel')
     const { wrapper, input } = await mountHistoryApp()

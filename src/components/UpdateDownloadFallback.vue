@@ -10,7 +10,7 @@ defineProps<{ updater: AppUpdater }>()
     <p>自动更新暂不可用，可前往下载页面手动下载并安装最新版本。</p>
     <a
       class="text-action"
-      :href="updater.manualDownloadUrl"
+      :href="updater.manualDownloadUrl.value"
       target="_blank"
       rel="noopener noreferrer"
       :aria-disabled="updater.manualDownloadOpening.value"
@@ -19,7 +19,7 @@ defineProps<{ updater: AppUpdater }>()
       <PhArrowSquareOut :size="16" aria-hidden="true" />
       {{ updater.manualDownloadOpening.value ? '正在打开…' : '打开下载页面' }}
     </a>
-    <span class="update-manual-url">{{ updater.manualDownloadUrl }}</span>
+    <span class="update-manual-url">{{ updater.manualDownloadUrl.value }}</span>
     <p>手动安装前，请先保存并退出当前应用。</p>
     <p v-if="updater.manualDownloadError.value" class="update-manual-error" role="alert">
       {{ updater.manualDownloadError.value }}

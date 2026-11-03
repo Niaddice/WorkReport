@@ -1,7 +1,7 @@
 import { computed, ref } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 
-export type ProviderKind = 'codex' | 'claude' | 'opencode' | 'http' | 'anthropic'
+export type ProviderKind = 'codex' | 'claude' | 'opencode' | 'cursor' | 'grok' | 'http' | 'anthropic'
 export interface AiProvider {
   id: string
   name: string
@@ -31,6 +31,9 @@ export interface DetectedCli {
   name: string
   executable: string
   version: string
+  cliAvailable?: boolean
+  appPath?: string
+  message?: string
 }
 export interface AiModel {
   id: string

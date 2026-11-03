@@ -274,10 +274,12 @@ export function useGitWorkbench(scope: () => GitWorkbenchScope) {
       return valid()
     } catch (cause) {
       if (!valid()) return false
-      const origin = ['pull', 'push'].includes(request.operation) ? gitAuthenticationOrigin(cause) : null
+      const origin = ['fetch', 'pull', 'push'].includes(request.operation) ? gitAuthenticationOrigin(cause) : null
       const detail = gitErrorMessage(cause)
       const message = origin
-        ? '远程仓库需要认证，请填写用户名和密码或访问令牌后重试。'
+        ? detail.includes('已保存的凭据认证失败')
+          ? '已保存的账号密码未通过认证，请重新填写用户名和密码或访问令牌后重试。'
+          : '远程仓库需要认证，请填写用户名和密码或访问令牌后重试。'
         : `Git 操作失败：${request.credentials?.password ? detail.split(request.credentials.password).join('[已隐藏]') : detail}`
       // Merge, pull and stash application can leave conflicts even when Git exits with an error.
       await refresh()

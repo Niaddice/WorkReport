@@ -58,7 +58,9 @@ onBeforeUnmount(() => {
       保存凭据（加密保存在本机）
     </label>
     <small>{{
-      save ? '认证成功后加密保存，后续自动使用。可在 Git 设置中清除。' : '仅用于本次操作，不保存凭据。'
+      save
+        ? '认证成功后加密保存，后续优先自动使用，失效后再提示认证。可在 Git 设置中清除。'
+        : '仅用于本次操作，不保存凭据。'
     }}</small>
     <small v-if="url.startsWith('http://')">该服务器使用 HTTP，凭据将通过未加密连接发送。</small>
     <div class="git-authentication-actions">

@@ -2,7 +2,8 @@
 import { computed } from 'vue'
 import dayjs from 'dayjs'
 import { PhArrowClockwise, PhDownloadSimple } from '@phosphor-icons/vue'
-import type { AppUpdater } from '../lib/useUpdater'
+import { UPDATE_CHANNEL_OPTIONS, type AppUpdater } from '../lib/useUpdater'
+import AppSelect from './AppSelect.vue'
 import UpdateDownloadFallback from './UpdateDownloadFallback.vue'
 
 const props = defineProps<{ updater: AppUpdater }>()
@@ -38,6 +39,23 @@ const statusText = computed(() => {
         {{ updater.checking.value ? '正在检查…' : '检查更新' }}
       </button>
     </div>
+    <div class="update-channel-control">
+      <label for="update-channel">更新渠道</label>
+      <AppSelect
+        id="update-channel"
+        :model-value="updater.channel.value"
+        :options="UPDATE_CHANNEL_OPTIONS"
+        :disabled="updater.checking.value || updater.busy.value || updater.status.value === 'installed'"
+        @update:model-value="updater.setChannel"
+      />
+      <p>
+        {{
+          updater.channel.value === 'dev'
+            ? '接收 dev 分支发布的开发版，包含较新的功能和修复。'
+            : '接收 main 分支发布的正式版。'
+        }}
+      </p>
+    </div>
     <button v-if="updater.release.value" type="button" class="text-action" @click="updater.open()">
       <PhDownloadSimple :size="16" aria-hidden="true" />查看更新说明
     </button>
@@ -52,3 +70,20 @@ const statusText = computed(() => {
     </div>
   </div>
 </template>
+
+<style scoped>
+.update-channel-control {
+  display: grid;
+  gap: 10px;
+  margin: 20px 0;
+}
+.update-channel-control label {
+  font-size: var(--text-body);
+  font-weight: 500;
+}
+.update-channel-control p {
+  margin: 0;
+  color: var(--md-sys-color-on-surface-variant);
+  font-size: var(--text-body);
+}
+</style>

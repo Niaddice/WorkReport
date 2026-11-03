@@ -389,6 +389,9 @@ function getSelection() {
 
 defineExpose({
   focus,
+  restoreFocus: () => {
+    if (!props.disabled) editor.value?.view.focus()
+  },
   apply,
   getToolbarState,
   setHeading,

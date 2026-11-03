@@ -101,14 +101,14 @@ async fn command(
     root: &Path,
     values: &[String],
 ) -> Result<std::process::Output, String> {
-    command_with_credentials(settings, root, values, None).await
+    command_with_credentials(settings, root, values, &[]).await
 }
 
 async fn command_with_credentials(
     settings: &Settings,
     root: &Path,
     values: &[String],
-    credentials: Option<&crate::git_auth::Credentials>,
+    credentials: &[&crate::git_auth::Credentials],
 ) -> Result<std::process::Output, String> {
     let mut arguments = args(&[
         "--no-literal-pathspecs",
@@ -123,7 +123,7 @@ async fn command_with_credentials(
         arguments.push("--literal-pathspecs".into());
     }
     arguments.extend_from_slice(values);
-    git::run_with_credentials(settings, root, &arguments, credentials).await
+    git::run_with_credential_set(settings, root, &arguments, credentials).await
 }
 
 fn checked(output: std::process::Output) -> Result<Vec<u8>, String> {
@@ -510,8 +510,52 @@ async fn local_branch(settings: &Settings, root: &Path, reference: &str) -> Resu
     Ok(())
 }
 
-/// Caller holds repository_lock and has revalidated the originating workspace.
+#[cfg(test)]
 pub async fn action(settings: &Settings, id: &str, request: Action) -> Result<String, String> {
+    action_with_credentials(settings, id, request, &[]).await
+}
+
+async fn tracking_target(settings: &Settings, root: &Path) -> Result<(String, String), String> {
+    let branch_ref = utf8(read(settings, root, &["symbolic-ref", "--quiet", "HEAD"]).await?)?.trim().to_string();
+    let tracking = utf8(read(settings, root, &[
+        "for-each-ref", "--format=%(upstream:remotename)%00%(upstream:remoteref)", &branch_ref,
+    ]).await?)?;
+    let (remote, remote_ref) = tracking.trim_end().split_once('\0')
+        .ok_or("当前分支没有上游分支，请先在终端配置 upstream 后再同步")?;
+    if remote.is_empty() || remote.starts_with('-') || remote.chars().any(char::is_control)
+        || !remote_ref.starts_with("refs/heads/") {
+        return Err("当前分支没有有效的上游分支，请先在终端配置 upstream 后再同步".into());
+    }
+    read(settings, root, &["check-ref-format", remote_ref]).await?;
+    Ok((remote.into(), remote_ref.into()))
+}
+
+/// Resolve Git's effective URLs (including insteadOf and pushurl) locally before
+/// any network operation, and return public HTTP origins only.
+pub async fn authentication_origins(settings: &Settings, id: &str, operation: &str) -> Result<Vec<String>, String> {
+    if !matches!(operation, "fetch" | "pull" | "push") { return Ok(Vec::new()); }
+    let root = root(settings, id).await?;
+    let remotes = if operation == "fetch" {
+        utf8(read(settings, &root, &["remote"]).await?)?.lines().map(str::to_owned).collect::<Vec<_>>()
+    } else { vec![tracking_target(settings, &root).await?.0] };
+    let mut origins = Vec::new();
+    for remote in remotes {
+        if remote == "." { continue; }
+        let values = if operation == "push" { vec!["remote", "get-url", "--push", "--all", &remote] }
+            else { vec!["remote", "get-url", &remote] };
+        for address in utf8(read(settings, &root, &values).await?)?.lines() {
+            if let Ok(url) = reqwest::Url::parse(address) {
+                if matches!(url.scheme(), "http" | "https") {
+                    let origin = url.origin().ascii_serialization();
+                    if !origins.contains(&origin) { origins.push(origin); }
+                }
+            }
+        }
+    }
+    Ok(origins)
+}
+
+pub async fn action_with_credentials(settings: &Settings, id: &str, request: Action, saved: &[crate::git_auth::Credentials]) -> Result<String, String> {
     if request.credentials.is_some() && !matches!(request.operation.as_str(), "fetch" | "pull" | "push") {
         return Err("只有 Fetch / Pull / Push 可以使用远程认证".into());
     }
@@ -642,28 +686,13 @@ pub async fn action(settings: &Settings, id: &str, request: Action) -> Result<St
             values = args(&["fetch", "--all", "--prune"]);
         }
         "pull" | "push" => {
-            let symbolic = read(settings, &root, &["symbolic-ref", "--quiet", "HEAD"]).await?;
-            let branch_ref = utf8(symbolic)?.trim().to_string();
-            let tracking = utf8(read(settings, &root, &[
-                "for-each-ref", "--format=%(upstream:remotename)%00%(upstream:remoteref)",
-                &branch_ref,
-            ]).await?)?;
-            let (remote, remote_ref) = tracking.trim_end().split_once('\0')
-                .ok_or("当前分支没有上游分支，请先在终端配置 upstream 后再同步")?;
-            if remote.is_empty()
-                || remote.starts_with('-')
-                || remote.chars().any(char::is_control)
-                || !remote_ref.starts_with("refs/heads/")
-            {
-                return Err("当前分支没有有效的上游分支，请先在终端配置 upstream 后再同步".into());
-            }
-            read(settings, &root, &["check-ref-format", remote_ref]).await?;
+            let (remote, remote_ref) = tracking_target(settings, &root).await?;
             if request.operation == "pull" {
                 if !files(settings, &root).await?.is_empty() {
                     return Err("请先提交或储藏工作区修改，再拉取更新".into());
                 }
                 values = args(&[
-                    "pull", "--ff-only", "--no-rebase", "--no-autostash", "--", remote, remote_ref,
+                    "pull", "--ff-only", "--no-rebase", "--no-autostash", "--", &remote, &remote_ref,
                 ]);
             } else {
                 // Explicitly push one upstream ref. User configuration such as
@@ -671,14 +700,17 @@ pub async fn action(settings: &Settings, id: &str, request: Action) -> Result<St
                 values = args(&[
                     "-c", &format!("remote.{remote}.mirror=false"),
                     "-c", "push.followTags=false",
-                    "push", "--no-force", "--no-follow-tags", "--", remote,
+                    "push", "--no-force", "--no-follow-tags", "--", &remote,
                     &format!("HEAD:{remote_ref}"),
                 ]);
             }
         }
         _ => return Err("不支持的 Git 操作".into()),
     }
-    let output = command_with_credentials(settings, &root, &values, request.credentials.as_ref()).await?;
+    let credentials = request.credentials.iter().chain(saved.iter().filter(|value| {
+        request.credentials.as_ref().is_none_or(|explicit| explicit.url != value.url)
+    })).collect::<Vec<_>>();
+    let output = command_with_credentials(settings, &root, &values, &credentials).await?;
     if !output.status.success() {
         return checked(output).map(|_| String::new());
     }
@@ -746,6 +778,24 @@ mod tests {
         std::fs::write(dir.join("file.txt"), "initial\n").unwrap();
         act(settings, "stage", &["file.txt"], "", "").await;
         act(settings, "commit", &[], "initial", "").await;
+    }
+    #[tokio::test]
+    async fn authentication_uses_effective_fetch_urls_and_all_push_urls_for_the_current_upstream() {
+        let (dir, settings) = setup();
+        first_commit(dir.path(), &settings).await;
+        git(dir.path(), &["remote", "add", "origin", "fetch-alias:team/repo.git"]);
+        git(dir.path(), &["remote", "add", "mirror", "http://fetch.example.test:13000/other.git"]);
+        git(dir.path(), &["remote", "add", "ssh-only", "git@example.test:team/repo.git"]);
+        git(dir.path(), &["config", "url.http://fetch.example.test:13000/.insteadOf", "fetch-alias:"]);
+        git(dir.path(), &["config", "remote.origin.pushurl", "push-alias:team/repo.git"]);
+        git(dir.path(), &["config", "url.https://push.example.test:8443/.insteadOf", "push-alias:"]);
+        git(dir.path(), &["config", "--add", "remote.origin.pushurl", "https://username:password@backup.example.test/repo.git"]);
+        git(dir.path(), &["config", "branch.main.remote", "origin"]);
+        git(dir.path(), &["config", "branch.main.merge", "refs/heads/main"]);
+        assert_eq!(authentication_origins(&settings, "repo", "fetch").await.unwrap(), ["http://fetch.example.test:13000"]);
+        assert_eq!(authentication_origins(&settings, "repo", "pull").await.unwrap(), ["http://fetch.example.test:13000"]);
+        assert_eq!(authentication_origins(&settings, "repo", "push").await.unwrap(), ["https://push.example.test:8443", "https://backup.example.test"]);
+        assert!(authentication_origins(&settings, "missing", "commit").await.unwrap().is_empty());
     }
     #[tokio::test]
     async fn unborn_repository_status_stage_diff_unstage_and_commit() {
