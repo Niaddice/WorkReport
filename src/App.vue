@@ -1369,6 +1369,8 @@ onBeforeUnmount(() => {
         :greeting="greeting"
         :date-label="now.format('M 月 D 日 dddd')"
         :has-workspace="!!workspace"
+        :workspace-name="workspace?.name"
+        :workspace-path="workspace?.path"
         :busy="busy"
         :picking="picking"
         :excel-busy="excelBusy"
@@ -1379,6 +1381,7 @@ onBeforeUnmount(() => {
         :refresh-revision="refreshRevision"
         @navigate="navigate"
         @refresh="refreshHome"
+        @workspace="chooseWorkspace"
       />
       <div class="app-content">
         <main v-if="startupPending" class="workspace-loading" role="status" aria-live="polite">
@@ -1411,6 +1414,16 @@ onBeforeUnmount(() => {
           />
         </Transition>
       </div>
+      <footer v-if="workspace && !startupPending" class="app-statusbar" aria-label="工作空间状态">
+        <span class="app-statusbar-path" :title="workspace.path">{{ workspace.path }}</span>
+        <span>{{ entries.length }} 篇日报</span>
+        <span class="app-statusbar-document" :title="workspaceDocument.path.value || selectedDate">{{
+          workspaceDocument.path.value || activeDocument?.filename || selectedDate
+        }}</span>
+        <span v-if="!workspaceDocument.path.value && activeDocument">{{
+          activeDocument.format === 'txt' ? '纯文本' : 'Markdown'
+        }}</span>
+      </footer>
       <SettingsDialog
         :visible="page === 'settings'"
         :busy="settingsDialogBusy"

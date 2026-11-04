@@ -769,7 +769,7 @@ function statusLabel(file: GitFileChange, staged: boolean) {
           :disabled="repositorySwitchLocked"
           @click="repositoryId = repo.id"
         >
-          <PhFolder :size="17" aria-hidden="true" />
+          <PhFolder :size="15" aria-hidden="true" />
           <span class="repository-item-copy"
             ><strong>{{ repo.name }}</strong
             ><small>{{
@@ -799,7 +799,7 @@ function statusLabel(file: GitFileChange, staged: boolean) {
         :disabled="repositorySwitchLocked"
         @click="emit('configureRepositories')"
       >
-        添加或管理仓库
+        <PhGearSix :size="14" aria-hidden="true" />管理仓库…
       </button>
     </aside>
     <div class="workbench-main">
@@ -835,16 +835,16 @@ function statusLabel(file: GitFileChange, staged: boolean) {
             :title="!repository?.remotes.length ? '请先为仓库配置远程地址' : '获取远程引用（Fetch）'"
             @click="act({ operation: 'fetch' })"
           >
-            <PhCloudArrowDown :size="17" aria-hidden="true" /><span>Fetch 获取</span>
+            <PhCloudArrowDown :size="16" aria-hidden="true" /><span>获取</span>
           </button>
           <button
             type="button"
             :disabled="lock || !canSync"
-            aria-label="Pull 更新"
+            aria-label="Pull 拉取"
             :title="!canSync ? '请先配置跟踪分支并解决工作区冲突' : '仅快进更新当前分支'"
             @click="act({ operation: 'pull' })"
           >
-            <PhArrowDown :size="17" aria-hidden="true" /><span>Pull 更新</span>
+            <PhArrowDown :size="16" aria-hidden="true" /><span>拉取</span>
           </button>
           <button
             type="button"
@@ -853,7 +853,7 @@ function statusLabel(file: GitFileChange, staged: boolean) {
             :title="!canSync ? '请先配置跟踪分支并解决工作区冲突' : '推送当前分支（Push）'"
             @click="act({ operation: 'push' })"
           >
-            <PhArrowUp :size="17" aria-hidden="true" /><span>Push 推送</span>
+            <PhArrowUp :size="16" aria-hidden="true" /><span>推送</span>
           </button>
           <button
             type="button"
@@ -867,48 +867,7 @@ function statusLabel(file: GitFileChange, staged: boolean) {
           </button>
         </div>
       </div>
-      <div v-if="repository" class="repository-caption" role="group" aria-label="当前仓库状态">
-        <code :title="repository.root">{{ repository.root }}</code>
-        <div
-          v-if="repository"
-          class="repository-branch"
-          :class="{ detached: repository.detached }"
-          :title="repository.detached ? '当前处于分离 HEAD' : repository.branch"
-        >
-          <PhGitBranch :size="14" aria-hidden="true" /><span>{{
-            repository.detached ? '分离 HEAD' : repository.branch || '尚无提交'
-          }}</span>
-        </div>
-        <span class="repository-upstream" :title="repository.upstream ?? '未配置跟踪分支'">{{
-          repository.upstream ?? '未配置跟踪分支'
-        }}</span>
-        <span
-          v-if="repository.upstream"
-          class="repository-sync-counts"
-          role="img"
-          :aria-label="`领先 ${repository.ahead} 个提交，落后 ${repository.behind} 个提交`"
-        >
-          <span :class="{ pending: repository.ahead > 0 }" :title="`待推送 ${repository.ahead} 个提交`"
-            ><PhArrowUp :size="12" aria-hidden="true" />{{ repository.ahead }}</span
-          >
-          <span :class="{ pending: repository.behind > 0 }" :title="`待拉取 ${repository.behind} 个提交`"
-            ><PhArrowDown :size="12" aria-hidden="true" />{{ repository.behind }}</span
-          >
-        </span>
-        <span
-          class="repository-worktree-state"
-          :class="{ clean: !repository.files.length, conflicted: conflicts.length > 0 }"
-        >
-          <PhCheckCircle v-if="!repository.files.length" :size="13" aria-hidden="true" /><span>{{
-            conflicts.length
-              ? `${conflicts.length} 个冲突`
-              : repository.files.length
-                ? `${repository.files.length} 个更改`
-                : '工作区干净'
-          }}</span>
-        </span>
-      </div>
-      <nav class="workbench-tabs" aria-label="Git 工作台视图">
+      <nav class="workbench-tabs island-tabs" aria-label="Git 工作台视图">
         <button
           v-for="item in tabs"
           :key="item.id"
@@ -1028,15 +987,27 @@ function statusLabel(file: GitFileChange, staged: boolean) {
                   :title="file.originalPath ? `${file.originalPath} → ${file.path}` : file.path"
                   @click="selectFile(file, group.staged)"
                 >
+                  <PhFileCode :size="15" class="file-icon" aria-hidden="true" />
+                  <span class="file-path"
+                    ><strong>{{ file.path.split('/').at(-1) }}</strong
+                    ><small v-if="file.path.includes('/')">{{ file.path.slice(0, file.path.lastIndexOf('/')) }}</small
+                    ><small v-if="file.originalPath">原路径：{{ file.originalPath }}</small></span
+                  >
                   <span
                     class="file-status"
                     :class="{ conflict: file.conflicted }"
                     :data-status="file.conflicted ? 'U' : group.staged ? file.indexStatus : file.worktreeStatus"
-                    >{{ statusLabel(file, group.staged) }}</span
-                  ><span class="file-path"
-                    ><strong>{{ file.path.split('/').at(-1) }}</strong
-                    ><small v-if="file.path.includes('/')">{{ file.path.slice(0, file.path.lastIndexOf('/')) }}</small
-                    ><small v-if="file.originalPath">原路径：{{ file.originalPath }}</small></span
+                    :title="statusLabel(file, group.staged)"
+                    :aria-label="statusLabel(file, group.staged)"
+                    >{{
+                      file.conflicted
+                        ? 'U'
+                        : isGitUntracked(file)
+                          ? 'A'
+                          : group.staged
+                            ? file.indexStatus
+                            : file.worktreeStatus
+                    }}</span
                   >
                 </button>
                 <button
@@ -1185,7 +1156,7 @@ function statusLabel(file: GitFileChange, staged: boolean) {
               <p v-else class="workbench-empty">没有文本差异，可能是二进制文件或文件权限变化。</p></template
             >
             <div v-else class="workbench-empty diff-placeholder">
-              <PhFileCode :size="34" weight="light" aria-hidden="true" /><strong>选择文件查看差异</strong
+              <PhFileCode :size="24" weight="light" aria-hidden="true" /><strong>选择文件查看差异</strong
               ><span>点击左侧文件，查看工作区或暂存区的更改。</span>
             </div>
           </section>
@@ -1514,6 +1485,47 @@ function statusLabel(file: GitFileChange, staged: boolean) {
         <p v-if="busy" class="workbench-progress" role="status">正在执行 Git 操作，请稍候…</p>
       </template>
       <p v-if="selectionError" class="workbench-message workbench-error" role="alert">{{ selectionError }}</p>
+      <div v-if="repository" class="repository-caption" role="group" aria-label="当前仓库状态">
+        <code :title="repository.root">{{ repository.root }}</code>
+        <div
+          v-if="repository"
+          class="repository-branch"
+          :class="{ detached: repository.detached }"
+          :title="repository.detached ? '当前处于分离 HEAD' : repository.branch"
+        >
+          <PhGitBranch :size="14" aria-hidden="true" /><span>{{
+            repository.detached ? '分离 HEAD' : repository.branch || '尚无提交'
+          }}</span>
+        </div>
+        <span class="repository-upstream" :title="repository.upstream ?? '未配置跟踪分支'">{{
+          repository.upstream ?? '未配置跟踪分支'
+        }}</span>
+        <span
+          v-if="repository.upstream"
+          class="repository-sync-counts"
+          role="img"
+          :aria-label="`领先 ${repository.ahead} 个提交，落后 ${repository.behind} 个提交`"
+        >
+          <span :class="{ pending: repository.ahead > 0 }" :title="`待推送 ${repository.ahead} 个提交`"
+            ><PhArrowUp :size="12" aria-hidden="true" />{{ repository.ahead }}</span
+          >
+          <span :class="{ pending: repository.behind > 0 }" :title="`待拉取 ${repository.behind} 个提交`"
+            ><PhArrowDown :size="12" aria-hidden="true" />{{ repository.behind }}</span
+          >
+        </span>
+        <span
+          class="repository-worktree-state"
+          :class="{ clean: !repository.files.length, conflicted: conflicts.length > 0 }"
+        >
+          <PhCheckCircle v-if="!repository.files.length" :size="13" aria-hidden="true" /><span>{{
+            conflicts.length
+              ? `${conflicts.length} 个冲突`
+              : repository.files.length
+                ? `${repository.files.length} 个更改`
+                : '工作区干净'
+          }}</span>
+        </span>
+      </div>
       <footer v-if="showSelectionBar" class="commit-selection-bar" aria-label="跨仓库提交选择">
         <span
           ><PhChecks :size="17" aria-hidden="true" />已选 {{ selectedEntries.length }} 条<span
@@ -1544,19 +1556,20 @@ function statusLabel(file: GitFileChange, staged: boolean) {
   gap: 8px;
 }
 .generate-commit-message {
-  width: 30px;
-  height: 30px;
+  width: var(--git-control-height);
+  height: var(--git-control-height);
   padding: 0;
   color: var(--skin-accent);
 }
 .git-workbench {
+  --git-control-height: 26px;
   display: flex;
   min-height: 0;
   flex: 1;
   flex-direction: row;
   overflow: hidden;
   color: var(--skin-text);
-  font-size: var(--text-body);
+  font-size: calc(12 * var(--font-unit));
   min-width: 0;
   container: git-workbench / inline-size;
 }
@@ -1572,7 +1585,7 @@ function statusLabel(file: GitFileChange, staged: boolean) {
 .repository-sidebar {
   display: flex;
   flex-direction: column;
-  flex: 0 0 184px;
+  flex: 0 0 174px;
   min-height: 0;
   min-width: 0;
   background: var(--skin-canvas);
@@ -1582,7 +1595,8 @@ function statusLabel(file: GitFileChange, staged: boolean) {
   display: flex;
   align-items: center;
   gap: 7px;
-  padding: 15px 12px 12px;
+  min-height: 36px;
+  padding: 4px 10px;
   color: var(--skin-text-muted);
   font-size: var(--text-small);
 }
@@ -1599,19 +1613,20 @@ function statusLabel(file: GitFileChange, staged: boolean) {
   flex: 1;
   overflow: auto;
   min-height: 0;
-  padding: 0 8px 8px;
+  padding: 2px 0;
 }
 .repository-item {
   display: flex;
   width: 100%;
   justify-content: flex-start;
   gap: 8px;
-  padding: 10px 7px;
-  border: 1px solid transparent;
+  min-height: 40px;
+  padding: 5px 10px;
+  border: 0;
   background: transparent;
-  border-radius: 9px;
+  border-radius: 0;
   text-align: left;
-  margin-bottom: 4px;
+  margin: 0;
 }
 .repository-item > svg {
   flex-shrink: 0;
@@ -1620,11 +1635,11 @@ function statusLabel(file: GitFileChange, staged: boolean) {
 .repository-item.active {
   background: var(--skin-accent-soft);
   color: var(--skin-accent);
-  border-color: var(--skin-accent-border);
+  box-shadow: inset 2px 0 var(--skin-accent);
 }
 .repository-item-copy {
   display: grid;
-  gap: 4px;
+  gap: 1px;
   flex: 1;
   min-width: 0;
 }
@@ -1657,7 +1672,15 @@ function statusLabel(file: GitFileChange, staged: boolean) {
   background: var(--skin-subtle-strong);
 }
 .manage-repositories {
-  margin: 8px;
+  justify-content: flex-start;
+  margin: 0;
+  min-height: 30px;
+  padding: 5px 10px;
+  border: 0;
+  border-top: 1px solid var(--skin-border);
+  border-radius: 0;
+  background: transparent;
+  color: var(--skin-text-muted);
   font-size: var(--text-small);
 }
 .repository-empty {
@@ -1673,10 +1696,18 @@ function statusLabel(file: GitFileChange, staged: boolean) {
   flex: 1;
   min-width: 0;
 }
+.git-workbench :deep(.app-select-trigger) {
+  height: var(--git-control-height);
+  min-height: var(--git-control-height);
+  padding: 3px 7px;
+  border-radius: 4px;
+  box-shadow: none;
+  font-size: inherit;
+}
 .compact-manage {
   flex-shrink: 0;
-  width: 30px;
-  height: 30px;
+  width: var(--git-control-height);
+  height: var(--git-control-height);
   padding: 0;
 }
 .commit-selection-bar {
@@ -1685,10 +1716,9 @@ function statusLabel(file: GitFileChange, staged: boolean) {
   gap: 8px;
   flex-wrap: wrap;
   flex-shrink: 0;
-  padding: 9px 12px;
+  padding: 5px 10px;
   border-top: 1px solid var(--skin-border);
   background: var(--skin-canvas);
-  margin-top: auto;
   font-size: var(--text-small);
 }
 .commit-selection-bar > span {
@@ -1700,14 +1730,14 @@ function statusLabel(file: GitFileChange, staged: boolean) {
   color: var(--skin-text-muted);
 }
 .commit-selection-bar button {
-  padding: 6px 8px;
+  padding: 3px 8px;
 }
 .history-selection-tools {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
   gap: 8px 12px;
-  padding: 8px 12px;
+  padding: 5px 10px;
   border-bottom: 1px solid var(--skin-border);
   font-size: var(--text-small);
   color: var(--skin-text-muted);
@@ -1725,7 +1755,7 @@ function statusLabel(file: GitFileChange, staged: boolean) {
   font-size: var(--text-small);
 }
 .history-selection-tools small {
-  flex-basis: 100%;
+  margin-left: auto;
   font-size: var(--text-caption);
 }
 .history-row {
@@ -1737,7 +1767,7 @@ function statusLabel(file: GitFileChange, staged: boolean) {
   background: var(--skin-accent-soft);
 }
 .history-row > input {
-  margin: 15px 0 0 12px;
+  margin: 11px 0 0 10px;
 }
 .history-row > .history-entry {
   flex: 1;
@@ -1775,9 +1805,10 @@ button {
   align-items: center;
   justify-content: center;
   gap: 6px;
-  padding: 7px 10px;
+  min-height: var(--git-control-height);
+  padding: 3px 8px;
   border: 1px solid var(--skin-border);
-  border-radius: 7px;
+  border-radius: 4px;
   background: var(--skin-surface);
   color: var(--skin-text-body);
   cursor: pointer;
@@ -1807,8 +1838,8 @@ input,
 textarea {
   min-width: 0;
   border: 1px solid var(--skin-border);
-  border-radius: 8px;
-  padding: 9px 10px;
+  border-radius: 4px;
+  padding: 5px 7px;
   background: var(--skin-surface);
   color: inherit;
 }
@@ -1827,8 +1858,11 @@ textarea {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
-  padding: 12px 16px 8px;
+  gap: 6px;
+  min-height: 38px;
+  padding: 5px 10px;
+  border-bottom: 1px solid var(--skin-border);
+  background: var(--skin-canvas);
 }
 .repository-identity {
   display: flex;
@@ -1841,7 +1875,7 @@ textarea {
   color: var(--skin-accent);
 }
 .repository-identity strong {
-  font-size: var(--text-subtitle);
+  font-size: inherit;
   font-weight: 600;
   max-width: 180px;
   overflow: hidden;
@@ -1854,11 +1888,9 @@ textarea {
   gap: 5px;
   min-width: 0;
   max-width: min(220px, 35%);
-  padding: 4px 7px;
-  border-radius: 6px;
-  background: var(--skin-subtle);
+  padding: 0;
   color: var(--skin-text-body);
-  font-size: var(--text-small);
+  font-size: inherit;
 }
 .repository-branch > svg {
   flex-shrink: 0;
@@ -1881,34 +1913,40 @@ textarea {
   gap: 6px;
 }
 .workbench-sync {
-  gap: 0;
+  gap: 2px;
   flex-wrap: nowrap;
   margin-left: auto;
-  padding: 2px;
-  border: 1px solid var(--skin-border);
-  border-radius: 9px;
-  background: var(--skin-canvas);
+  padding: 0;
 }
 .workbench-sync button {
-  padding: 6px 8px;
+  padding: 3px 7px;
   border: 0;
   background: transparent;
-  font-size: var(--text-small);
+  font-size: inherit;
+}
+.workbench-sync .refresh-button {
+  margin-left: 4px;
+  border-left: 1px solid var(--skin-border);
+  border-radius: 0;
 }
 .refresh-button {
-  width: 31px;
-  height: 31px;
+  width: var(--git-control-height);
+  height: var(--git-control-height);
   padding: 0;
 }
 .repository-caption {
   display: flex;
   align-items: center;
-  gap: 8px 12px;
+  flex-shrink: 0;
+  gap: 6px 12px;
   min-width: 0;
-  padding: 0 16px 10px;
+  min-height: 26px;
+  padding: 3px 10px;
+  border-top: 1px solid var(--skin-border);
+  background: var(--skin-canvas);
   color: var(--skin-text-muted);
   font-size: var(--text-caption);
-  line-height: 1.6;
+  line-height: 1.4;
 }
 .repository-caption code {
   flex: 1;
@@ -1949,37 +1987,41 @@ textarea {
 }
 .workbench-tabs {
   display: flex;
-  gap: 16px;
+  gap: 0;
   border-bottom: 1px solid var(--skin-border);
-  padding: 0 16px;
+  padding: 0;
+  background: var(--skin-canvas);
   overflow-x: auto;
   scrollbar-width: none;
-  min-height: 40px;
+  min-height: 32px;
 }
 .workbench-tabs button {
   border: 0;
   border-radius: 0;
-  border-bottom: 2px solid transparent;
-  padding: 7px 3px;
+  border-right: 1px solid var(--skin-border);
+  box-shadow: inset 0 -2px transparent;
+  padding: 5px 12px;
   background: transparent;
   gap: 6px;
 }
 .workbench-tabs button.active {
   color: var(--skin-accent);
-  border-bottom-color: var(--skin-accent);
+  box-shadow: inset 0 -2px var(--skin-accent);
+  background: var(--skin-surface);
 }
 .workbench-tabs button span,
 h4 > span {
-  border-radius: 5px;
-  background: var(--skin-accent-soft);
-  padding: 1px 5px;
+  border-radius: 3px;
+  background: var(--skin-subtle);
+  padding: 0 4px;
   font-size: var(--text-small);
   color: var(--skin-text-muted);
 }
 .workbench-message {
-  margin: 8px 12px;
-  padding: 10px 12px;
-  border-radius: 8px;
+  margin: 0;
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--skin-border);
+  border-radius: 0;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   max-height: 130px;
@@ -1996,11 +2038,11 @@ h4 > span {
   color: var(--skin-success);
 }
 .workbench-confirm {
-  margin: 12px 16px;
+  margin: 0;
   border: 1px solid var(--skin-warning-border);
   background: var(--skin-warning-soft);
-  padding: 14px;
-  border-radius: 10px;
+  padding: 10px;
+  border-radius: 0;
 }
 .workbench-confirm p {
   line-height: 1.7;
@@ -2078,13 +2120,14 @@ h4 > span {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 10px 12px;
+  min-height: 32px;
+  padding: 5px 10px;
   position: sticky;
   top: 0;
   left: 0;
   z-index: 3;
   flex-shrink: 0;
-  background: var(--skin-surface);
+  background: var(--skin-canvas);
   border-bottom: 1px solid var(--skin-border);
 }
 .diff-heading h4 {
@@ -2134,14 +2177,27 @@ h4 > span {
   font-size: inherit;
 }
 .file-path {
-  display: block;
+  display: flex;
+  align-items: baseline;
+  min-width: 0;
+  flex: 1;
+  gap: 7px;
+}
+.file-path strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+  flex-shrink: 0;
+  max-width: 100%;
 }
 .file-path strong {
   font-weight: 500;
 }
 .bulk-actions {
   justify-content: space-between;
-  padding: 10px 12px;
+  padding: 4px 10px;
+  min-height: 32px;
   border-bottom: 1px solid var(--skin-border);
   background: var(--skin-surface);
   position: sticky;
@@ -2164,7 +2220,8 @@ h4 > span {
 }
 .bulk-actions button {
   font-size: var(--text-small);
-  padding: 4px 6px;
+  padding: 2px 4px;
+  border-color: transparent;
   background: transparent;
 }
 .workbench-empty {
@@ -2179,8 +2236,11 @@ h4 > span {
   line-height: 1.8;
   text-align: center;
 }
+.workbench-main > .workbench-empty {
+  flex: 1;
+}
 .file-group {
-  margin: 0 0 8px;
+  margin: 0;
 }
 h4 {
   font-size: var(--text-small);
@@ -2188,83 +2248,76 @@ h4 {
   margin: 0;
 }
 .file-group h4 {
-  padding: 9px 12px 6px;
+  min-height: 27px;
+  padding: 4px 10px;
+  border-bottom: 1px solid var(--skin-border);
+  background: var(--skin-canvas);
   display: flex;
   gap: 7px;
   align-items: center;
   color: var(--skin-text-muted);
 }
-.file-group h4::before {
-  content: '';
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
-  background: var(--skin-text-faint);
-}
-.file-group[data-group='staged'] h4::before {
-  background: var(--skin-success);
-}
-.file-group[data-group='conflict'] h4::before {
-  background: var(--skin-danger);
-}
 .file-row {
   display: flex;
   align-items: center;
-  padding: 1px 5px;
-  margin: 0 5px 2px;
-  border-radius: 7px;
-  border: 1px solid transparent;
+  min-height: 29px;
+  padding: 0 6px 0 10px;
+  margin: 0;
+  border-radius: 0;
   gap: 2px;
 }
 .file-row.selected,
 .history-entry.selected {
   background: var(--skin-accent-soft);
-  border-color: var(--skin-accent-border);
+  box-shadow: inset 2px 0 var(--skin-accent);
+}
+.file-row:hover:not(.selected) {
+  background: var(--skin-subtle);
 }
 .file-select {
   flex: 1;
   min-width: 0;
   border: 0;
-  border-radius: 4px;
-  padding: 8px 5px;
+  border-radius: 0;
+  padding: 4px 0;
   background: transparent;
   justify-content: flex-start;
-  font-size: var(--text-small);
+  font-size: inherit;
   text-align: left;
 }
-.file-select > span:last-child {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.file-select:hover:not(:disabled) {
+  background: transparent;
+  color: inherit;
+}
+.file-icon {
+  flex-shrink: 0;
+  color: var(--skin-text-muted);
 }
 .file-select small {
-  display: block;
   color: var(--skin-text-muted);
   font-size: var(--text-caption);
   overflow: hidden;
   text-overflow: ellipsis;
 }
 .file-status {
-  min-width: 30px;
-  padding: 2px 4px;
-  border-radius: 5px;
+  min-width: 14px;
+  padding: 0;
+  flex-shrink: 0;
   color: var(--skin-success);
-  background: var(--skin-success-soft);
-  font-size: var(--text-caption);
+  background: transparent;
+  font-family: 'SFMono-Regular', Consolas, monospace;
+  font-size: var(--text-small);
   text-align: center;
 }
 .file-status[data-status='M'] {
   color: var(--skin-accent);
-  background: var(--skin-accent-soft);
 }
 .file-status[data-status='D'],
 .file-status.conflict {
   color: var(--skin-danger);
-  background: var(--skin-danger-soft);
 }
 .file-status[data-status='R'] {
   color: var(--skin-warning);
-  background: var(--skin-warning-soft);
 }
 .file-status.conflict {
   color: var(--skin-danger);
@@ -2272,8 +2325,9 @@ h4 {
 .file-action {
   border: 0;
   background: transparent;
-  width: 27px;
-  height: 27px;
+  width: 23px;
+  height: 23px;
+  min-height: 23px;
   padding: 0;
   font-size: 18px;
 }
@@ -2281,21 +2335,30 @@ h4 {
   font-size: 16px;
   color: var(--skin-danger);
 }
+@media (hover: hover) and (pointer: fine) {
+  .file-action {
+    opacity: 0;
+  }
+  .file-row:hover .file-action,
+  .file-row:focus-within .file-action {
+    opacity: 1;
+  }
+}
 .commit-form {
   grid-area: commit;
   min-width: 0;
   display: grid;
   gap: 8px;
   border-top: 1px solid var(--skin-border);
-  padding: 10px 12px;
-  background: color-mix(in srgb, var(--skin-canvas) 60%, var(--skin-surface));
+  padding: 8px 10px;
+  background: var(--skin-canvas);
 }
 .commit-fields {
   display: grid;
   gap: 8px;
 }
 .commit-fields textarea {
-  min-height: 68px;
+  min-height: 60px;
   resize: vertical;
   background: var(--skin-surface);
 }
@@ -2321,7 +2384,8 @@ h4 {
   font-size: var(--text-caption);
 }
 .commit-fields .button-row > .commit-primary {
-  flex: 1;
+  flex: 0 0 auto;
+  min-width: 70px;
   background: var(--skin-accent-fill);
   border-color: var(--skin-accent-fill);
   color: var(--skin-on-accent);
@@ -2356,7 +2420,7 @@ h4 {
   flex: 1;
   min-height: 160px;
   flex-direction: column;
-  gap: 8px;
+  gap: 5px;
 }
 .diff-placeholder > svg {
   color: var(--skin-text-faint);
@@ -2365,7 +2429,7 @@ h4 {
 .diff-placeholder strong {
   color: var(--skin-text-body);
   font-weight: 500;
-  font-size: var(--text-body);
+  font-size: inherit;
 }
 .diff-placeholder > span {
   font-size: var(--text-small);
@@ -2457,7 +2521,7 @@ button.danger-text:hover:not(:disabled) {
   display: flex;
   gap: 8px;
   flex-wrap: wrap;
-  padding: 12px 16px;
+  padding: 5px 10px;
   border-bottom: 1px solid var(--skin-border);
 }
 .search-input {
@@ -2466,7 +2530,7 @@ button.danger-text:hover:not(:disabled) {
   flex: 1;
   min-width: 120px;
   border: 1px solid var(--skin-border);
-  border-radius: 8px;
+  border-radius: 4px;
   padding-left: 9px;
   color: var(--skin-text-muted);
 }
@@ -2481,8 +2545,8 @@ button.danger-text:hover:not(:disabled) {
   display: grid;
   justify-content: stretch;
   width: 100%;
-  gap: 6px;
-  padding: 12px 14px 12px 10px;
+  gap: 3px;
+  padding: 8px 10px;
   text-align: left;
   border: 0;
   border-radius: 0;
@@ -2506,7 +2570,7 @@ button.danger-text:hover:not(:disabled) {
   align-items: center;
   gap: 8px;
   color: var(--skin-text-muted);
-  font-size: var(--text-small);
+  font-size: var(--text-caption);
 }
 .load-more {
   display: flex;
@@ -2517,7 +2581,7 @@ button.danger-text:hover:not(:disabled) {
   flex-wrap: wrap;
   align-items: center;
   gap: 8px 12px;
-  padding: 13px 14px;
+  padding: 7px 10px;
   border-bottom: 1px solid var(--skin-border);
   color: var(--skin-text-muted);
   font-size: var(--text-small);
@@ -2539,8 +2603,10 @@ button.danger-text:hover:not(:disabled) {
 }
 .branch-view,
 .stash-view {
+  flex: 1;
+  min-height: 0;
   overflow: auto;
-  padding: 16px;
+  padding: 10px;
 }
 .inline-form {
   display: flex;
@@ -2552,10 +2618,12 @@ button.danger-text:hover:not(:disabled) {
   flex: 1;
 }
 .branch-group {
-  margin-top: 23px;
+  margin-top: 14px;
 }
 .branch-group > h4 {
-  margin-bottom: 9px;
+  padding: 5px 0;
+  border-bottom: 1px solid var(--skin-border);
+  color: var(--skin-text-muted);
 }
 .branch-row,
 .stash-row {
@@ -2563,12 +2631,17 @@ button.danger-text:hover:not(:disabled) {
   align-items: center;
   justify-content: space-between;
   flex-wrap: wrap;
-  gap: 10px;
-  padding: 12px;
-  margin-top: 6px;
-  border: 1px solid var(--skin-border);
-  border-radius: 9px;
-  background: var(--skin-surface);
+  gap: 8px;
+  padding: 7px 4px;
+  margin: 0;
+  border: 0;
+  border-bottom: 1px solid var(--skin-border);
+  border-radius: 0;
+  background: transparent;
+}
+.branch-row:hover,
+.stash-row:hover {
+  background: var(--skin-subtle);
 }
 .branch-row > div:first-child,
 .stash-row > div:first-child {
@@ -2602,8 +2675,8 @@ button.danger-text:hover:not(:disabled) {
   font-size: var(--text-small);
   background: var(--skin-accent-soft);
   color: var(--skin-accent);
-  border-radius: 5px;
-  padding: 2px 6px;
+  border-radius: 3px;
+  padding: 0 4px;
 }
 .branch-row button,
 .stash-row button {
@@ -2730,11 +2803,7 @@ button.danger-text:hover:not(:disabled) {
 
   .workbench-toolbar {
     gap: 6px 8px;
-    padding-left: 12px;
-    padding-right: 12px;
-  }
-  .workbench-tabs {
-    padding: 0 12px;
+    padding-inline: 8px;
   }
   .inline-form {
     flex-wrap: wrap;
@@ -2764,8 +2833,8 @@ button.danger-text:hover:not(:disabled) {
     display: none;
   }
   .workbench-sync button {
-    width: 29px;
-    height: 29px;
+    width: var(--git-control-height);
+    height: var(--git-control-height);
     padding: 0;
   }
   .repository-picker {
@@ -2775,29 +2844,29 @@ button.danger-text:hover:not(:disabled) {
 @container git-main (max-width: 460px) {
   .workbench-toolbar {
     gap: 6px;
-    padding-top: 10px;
   }
   .repository-branch {
     max-width: 26%;
-    padding: 2px 5px;
   }
   .repository-upstream {
     max-width: 45%;
   }
   .workbench-tabs {
-    gap: 12px;
-    min-height: 36px;
+    min-height: 32px;
+  }
+  .workbench-tabs button {
+    padding-inline: 9px;
   }
   .workbench-tabs button > svg {
     display: none;
   }
   .history-filters {
     gap: 6px;
-    padding: 10px 12px;
+    padding: 5px 8px;
   }
   .branch-view,
   .stash-view {
-    padding: 12px;
+    padding: 8px;
   }
 }
 </style>

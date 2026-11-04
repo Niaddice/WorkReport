@@ -75,7 +75,7 @@ function actionCalls() {
 }
 
 function button(wrapper: VueWrapper, text: string) {
-  const result = wrapper.findAll('button').find((item) => item.text() === text)
+  const result = wrapper.findAll('button').find((item) => (item.attributes('aria-label') ?? item.text()) === text)
   if (!result) throw new Error(`找不到按钮：${text}`)
   return result
 }
@@ -1035,7 +1035,7 @@ describe('Git workbench controls', () => {
 
   it.each([
     ['fetch', 'Fetch 获取'],
-    ['pull', 'Pull 更新'],
+    ['pull', 'Pull 拉取'],
     ['push', 'Push 推送'],
   ])(
     'shows a replacement form after the backend has already tried saved credentials for %s',
@@ -1152,7 +1152,7 @@ describe('Git workbench controls', () => {
 describe('GitHub browser authorization retries', () => {
   it.each([
     ['fetch', 'Fetch 获取'],
-    ['pull', 'Pull 更新'],
+    ['pull', 'Pull 拉取'],
     ['push', 'Push 推送'],
   ])('retries only the pending %s after the native credential has been saved', async (operation, label) => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })

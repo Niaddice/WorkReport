@@ -69,9 +69,11 @@ function openHelp() {
     @focusin="emit('activate')"
   >
     <header class="module-panel-header" @pointerdown="onPointerDown">
-      <component :is="icon" class="module-panel-icon" :size="15" aria-hidden="true" />
-      <h2 class="module-panel-title">{{ title }}</h2>
-      <slot name="subtitle" />
+      <div class="module-panel-tab">
+        <component :is="icon" class="module-panel-icon" :size="15" aria-hidden="true" />
+        <h2 class="module-panel-title">{{ title }}</h2>
+        <slot name="subtitle" />
+      </div>
       <div class="module-panel-actions">
         <button
           v-if="help.length"

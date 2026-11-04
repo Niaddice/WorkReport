@@ -28,8 +28,8 @@ const emit = defineEmits<{
   resize: [path: number[], ratio: number, metrics: LayoutMetrics]
 }>()
 
-/** 挂载前使用默认 0.2rem（16px 根字号下约 3.2px），挂载后读取 CSS 实际像素间距。 */
-const boardGap = ref(3.2)
+/** 挂载前使用默认 6px 的工具窗口间距，挂载后读取 CSS 实际像素间距。 */
+const boardGap = ref(6)
 /** 拖放到模块板最左 / 最右边缘的命中条带宽度。 */
 const EDGE_BAND = 40
 const board = ref<HTMLElement>()

@@ -1,5 +1,7 @@
 export type SkinId =
   | 'default'
+  | 'islands-light'
+  | 'islands-dark'
   | 'apple'
   | 'frosted-glass'
   | 'jade'
@@ -27,6 +29,20 @@ export const SKINS: readonly Skin[] = [
     description: '清透留白，经典蓝灰。',
     mode: 'light',
     swatches: ['#f8fafd', '#ffffff', '#0b57d0'],
+  },
+  {
+    id: 'islands-light',
+    name: 'Islands 浅色',
+    description: 'IDEA 风格，灰白工具窗口与蓝色活动标签。',
+    mode: 'light',
+    swatches: ['#ebecf0', '#ffffff', '#3574f0'],
+  },
+  {
+    id: 'islands-dark',
+    name: 'Islands 深色',
+    description: 'IDEA 风格，石墨工具窗口与独立编辑区。',
+    mode: 'dark',
+    swatches: ['#2b2d30', '#1e1f22', '#6b9bfa'],
   },
   {
     id: 'apple',

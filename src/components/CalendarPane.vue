@@ -198,7 +198,7 @@ watch(
       <div class="view-controls">
         <md-outlined-button class="today-button" :disabled="disabled" @click="goToday">今天</md-outlined-button>
         <div
-          class="view-switch"
+          class="view-switch island-tabs"
           :style="{ '--view-index': modes.findIndex((mode) => mode.value === view) }"
           role="group"
           aria-label="日历视图"

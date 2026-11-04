@@ -71,7 +71,7 @@ save_ui_preferences → workreport.json 的 ui.layout（原子写入）
 | `src-tauri/src/database.rs`                | SQLx 三库连接、工作空间隔离、按 revision 写入                         |
 | `src-tauri/src/settings.rs`                | `workreport.json` 一次性读写，临时文件 + `persist` 原子替换           |
 
-样式统一放在 `src/style.css`，组件不写 scoped 样式；模块样式使用 `.module-*`、`.overview-*`、`.history-module-*`、`.summary-module-*`、`.excel-module-*` 前缀。
+基础组件样式位于 `src/style.css`，语义配色位于 `src/skins.css`；`src/main.ts` 最后加载 `src/desktop.css`，统一 Islands 外壳、工具窗口、Island 标签、设置与弹窗层级。标签容器通过 `.island-tabs` 共享视觉规范，保留各组件原有的 ARIA 与键盘交互；Git 等独立组件的局部 scoped 样式只负责内部布局。模块样式使用 `.module-*`、`.overview-*`、`.history-module-*`、`.summary-module-*`、`.excel-module-*` 前缀。
 
 ## 日报保存链路
 

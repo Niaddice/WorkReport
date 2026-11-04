@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { PhHouse } from '@phosphor-icons/vue'
+import { PhCaretDown, PhHouse } from '@phosphor-icons/vue'
 
 defineProps<{
   page: 'home' | 'settings'
@@ -7,6 +7,8 @@ defineProps<{
   greeting: string
   dateLabel: string
   hasWorkspace: boolean
+  workspaceName?: string
+  workspacePath?: string
   busy: boolean
   picking: boolean
   excelBusy: boolean
@@ -16,7 +18,7 @@ defineProps<{
   databaseBusy: boolean
   refreshRevision: number
 }>()
-const emit = defineEmits<{ navigate: [page: 'home' | 'settings']; refresh: [] }>()
+const emit = defineEmits<{ navigate: [page: 'home' | 'settings']; refresh: []; workspace: [] }>()
 </script>
 
 <template>
@@ -25,7 +27,25 @@ const emit = defineEmits<{ navigate: [page: 'home' | 'settings']; refresh: [] }>
     :class="{ 'is-native-titlebar': nativeTitlebar }"
     :data-tauri-drag-region="nativeTitlebar ? 'deep' : undefined"
   >
-    <span v-if="nativeTitlebar" class="titlebar-app-name" aria-hidden="true">WorkReport</span>
+    <div class="toolbar-workspace">
+      <span class="toolbar-app-mark" aria-hidden="true">W</span>
+      <span class="titlebar-app-name">WorkReport</span>
+      <span v-if="hasWorkspace" class="toolbar-context-divider" aria-hidden="true"></span>
+      <button
+        v-if="hasWorkspace"
+        type="button"
+        class="toolbar-workspace-button"
+        aria-label="切换工作空间"
+        :title="workspacePath || workspaceName || '切换工作空间'"
+        :disabled="
+          busy || excelBusy || picking || settingsSaving || settingsReading || settingsLeaveBusy || databaseBusy
+        "
+        @click="emit('workspace')"
+      >
+        <span>{{ workspaceName || '工作空间' }}</span
+        ><PhCaretDown :size="12" aria-hidden="true" />
+      </button>
+    </div>
     <h1 class="home-greeting" :title="`${greeting}，今天是 ${dateLabel}`">
       <span class="greeting-salutation">{{ greeting }}</span
       ><span class="greeting-date">，今天是 {{ dateLabel }}</span>

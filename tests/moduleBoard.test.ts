@@ -207,9 +207,9 @@ describe('module board', () => {
     const slots = wrapper.findAll('.module-slot')
     expect(slots).toHaveLength(2)
     expect(slots[0]!.attributes('style')).toContain('left: 0px')
-    expect(parseFloat((slots[0]!.element as HTMLElement).style.width)).toBeCloseTo(398.4)
-    expect(parseFloat((slots[1]!.element as HTMLElement).style.left)).toBeCloseTo(401.6)
-    expect(parseFloat((slots[1]!.element as HTMLElement).style.width)).toBeCloseTo(398.4)
+    expect(parseFloat((slots[0]!.element as HTMLElement).style.width)).toBeCloseTo(397)
+    expect(parseFloat((slots[1]!.element as HTMLElement).style.left)).toBeCloseTo(403)
+    expect(parseFloat((slots[1]!.element as HTMLElement).style.width)).toBeCloseTo(397)
     expect(wrapper.find('.module-gutter.is-row').exists()).toBe(true)
     wrapper.unmount()
   })
@@ -225,8 +225,8 @@ describe('module board', () => {
     const wrapper = mountBoard(layout)
     await flushPromises()
     const slots = wrapper.findAll('.module-slot')
-    expect(parseFloat((slots[0]!.element as HTMLElement).style.height)).toBeCloseTo(298.4)
-    expect(parseFloat((slots[1]!.element as HTMLElement).style.top)).toBeCloseTo(301.6)
+    expect(parseFloat((slots[0]!.element as HTMLElement).style.height)).toBeCloseTo(297)
+    expect(parseFloat((slots[1]!.element as HTMLElement).style.top)).toBeCloseTo(303)
     expect(wrapper.find('.module-gutter.is-column').exists()).toBe(true)
     wrapper.unmount()
   })
@@ -333,7 +333,7 @@ describe('module board', () => {
     try {
       await flushPromises()
       const gutter = wrapper.get<HTMLElement>('.module-gutter')
-      expect(parseFloat(gutter.element.style[direction === 'row' ? 'width' : 'height'])).toBeCloseTo(3.2)
+      expect(parseFloat(gutter.element.style[direction === 'row' ? 'width' : 'height'])).toBeCloseTo(6)
       gutter.element.dispatchEvent(pointer('pointerdown', 400, 300, 1))
       const [x, y] = direction === 'row' ? [500, 300] : [400, 400]
       window.dispatchEvent(pointer('pointermove', x!, y!, 1))
@@ -344,7 +344,7 @@ describe('module board', () => {
       expect(wrapper.emitted('resize')).toHaveLength(1)
       const [path, ratio] = wrapper.emitted('resize')![0] as [number[], number]
       expect(path).toEqual([])
-      expect(ratio).toBeCloseTo(direction === 'row' ? 500 / 796.8 : 400 / 596.8, 3)
+      expect(ratio).toBeCloseTo(direction === 'row' ? 500 / 794 : 400 / 594, 3)
       expect(document.body.classList.contains('is-module-resizing')).toBe(false)
     } finally {
       wrapper.unmount()
@@ -404,7 +404,7 @@ describe('module board', () => {
         await flushPromises()
         const before = rect()
         const gutter = wrapper.findAll<HTMLElement>('.module-gutter')[0]!
-        const start = parseFloat(gutter.element.style.left) + 1.6
+        const start = parseFloat(gutter.element.style.left) + 3
         gutter.element.dispatchEvent(pointer('pointerdown', start, 300, 1))
         window.dispatchEvent(pointer('pointermove', 400, 300, 1))
         await nextTick()
@@ -412,7 +412,7 @@ describe('module board', () => {
         const preview = placements()
         window.dispatchEvent(pointer('pointerup', 400, 300, 0))
         const [path, ratio, metrics] = wrapper.emitted('resize')![0] as [number[], number, LayoutMetrics]
-        expect(metrics).toEqual({ width: 800, height: 600, gap: 3.2 })
+        expect(metrics).toEqual({ width: 800, height: 600, gap: 6 })
         await wrapper.setProps({ layout: resizeLayoutLocally(layout, path, ratio, metrics) })
         await flushPromises()
         expect(placements()).toEqual(preview)
@@ -442,7 +442,7 @@ describe('module board', () => {
     'animates the full module to maximum and back to its slot via %s',
     async (action) => {
       const wrapper = mountBoard()
-      const normal = new DOMRect(0, 0, 398.4, 600)
+      const normal = new DOMRect(0, 0, 397, 600)
       const expanded = new DOMRect(20, 20, 760, 560)
       const frames: { keyframes: Keyframe[]; finish: () => void }[] = []
       try {
@@ -465,7 +465,7 @@ describe('module board', () => {
 
         await wrapper.get('[data-module-id="overview"] .module-maximize-button').trigger('click')
         expect(frames).toHaveLength(1)
-        const transform = `translate(-20px, -20px) scale(${398.4 / 760}, ${600 / 560})`
+        const transform = `translate(-20px, -20px) scale(${397 / 760}, ${600 / 560})`
         expect(frames[0]!.keyframes[0]).toMatchObject({ transform, opacity: 1 })
         frames[0]!.finish()
         wrapper

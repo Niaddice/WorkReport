@@ -244,7 +244,7 @@ function styleText(style: ExcelPreviewStyle): string {
           ><span>{{ rangeLabel }}</span
           ><span>{{ displayed.cells.length }} 个填充单元格 · {{ displayed.styles.length }} 处格式设置</span>
         </div>
-        <div class="excel-preview-tabs" role="group" aria-label="Excel 预览方式">
+        <div class="excel-preview-tabs island-tabs" role="group" aria-label="Excel 预览方式">
           <button
             type="button"
             :aria-pressed="view === 'sheet'"

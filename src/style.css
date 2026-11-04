@@ -1,6 +1,6 @@
 @import './skins.css';
 
-/* Pixel-inspired Material 3 surfaces; controls use the official Material Web library. */
+/* Base surfaces and Material Web controls; desktop.css provides the shared Islands shell. */
 :root {
   font-family: 'Google Sans', 'SF Pro Text', 'PingFang SC', 'Microsoft YaHei', system-ui, sans-serif;
   color: var(--skin-text);
@@ -5836,7 +5836,7 @@ dialog[open].has-window-motion.is-closing::backdrop {
 /* ===== 模块化拖放首页 ===== */
 .module-board {
   /* 布局几何读取此间距的实际像素值；模块板本身始终一屏。 */
-  gap: 0.2rem;
+  gap: 6px;
   position: relative;
   flex: 1;
   min-width: 0;

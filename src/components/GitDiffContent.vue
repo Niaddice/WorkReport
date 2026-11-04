@@ -13,9 +13,9 @@ defineProps<{ lines: GitDiffLine[] }>()
 .diff-content {
   font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', monospace;
   font-size: calc(12 * var(--font-unit));
-  line-height: 1.75;
+  line-height: 1.6;
   margin: 0;
-  padding: 8px 0;
+  padding: 4px 0;
   tab-size: 4;
 }
 .diff-content code {
@@ -30,7 +30,7 @@ defineProps<{ lines: GitDiffLine[] }>()
   position: sticky;
   left: 0;
   z-index: 1;
-  background: var(--skin-surface);
+  background: var(--skin-canvas);
   color: var(--skin-text-muted);
   user-select: none;
   text-align: right;

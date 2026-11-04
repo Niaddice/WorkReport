@@ -425,3 +425,78 @@
   border: 1px solid #ffffffb3;
   box-shadow: 0 1px 3px #324d7c0a;
 }
+
+/* IDEA Islands 参考配色：编辑表面与工具窗口分层，导航选中态独立。 */
+:root[data-skin='islands-light'] {
+  color-scheme: light;
+  --skin-canvas: #ebecf0;
+  --skin-surface: #ffffff;
+  --skin-subtle: #f2f3f5;
+  --skin-subtle-strong: #e4e6eb;
+  --skin-text: #27282e;
+  --skin-text-body: #383a42;
+  --skin-text-secondary: #626570;
+  --skin-text-muted: #666974;
+  --skin-text-faint: #898c96;
+  --skin-accent: #315fbd;
+  --skin-accent-strong: #254c9f;
+  --skin-accent-fill: #3574f0;
+  --skin-accent-fill-hover: #2864db;
+  --skin-on-accent: #ffffff;
+  --skin-accent-soft: #edf3ff;
+  --skin-accent-container: #dce8ff;
+  --skin-accent-border: #b7c9ed;
+  --skin-border: #dddfe5;
+  --skin-outline: #b7b9c1;
+  --skin-success: #28774b;
+  --skin-success-soft: #edf7ef;
+  --skin-danger: #bc3442;
+  --skin-danger-soft: #fff0f0;
+  --skin-danger-border: #e8b4ba;
+  --skin-warning: #866018;
+  --skin-warning-soft: #fff7e6;
+  --skin-warning-border: #e9d29e;
+  --skin-scrollbar: #bec0c8;
+  --skin-scrollbar-hover: #9b9da7;
+  --desktop-frame: #ebecf0;
+  --desktop-tool: #f7f8fa;
+  --desktop-tab: #dce8ff;
+}
+
+:root[data-skin='islands-dark'] {
+  color-scheme: dark;
+  --skin-canvas: #2b2d30;
+  --skin-surface: #1e1f22;
+  --skin-subtle: #25262a;
+  --skin-subtle-strong: #393b40;
+  --skin-text: #dfe1e5;
+  --skin-text-body: #ced0d6;
+  --skin-text-secondary: #a8abb4;
+  --skin-text-muted: #a0a3ad;
+  --skin-text-faint: #818590;
+  --skin-accent: #88adf7;
+  --skin-accent-strong: #adc8ff;
+  --skin-accent-fill: #3574f0;
+  --skin-accent-fill-hover: #4682fa;
+  --skin-on-accent: #ffffff;
+  --skin-accent-soft: #2d3546;
+  --skin-accent-container: #354565;
+  --skin-accent-border: #4b638d;
+  --skin-border: #3b3d43;
+  --skin-outline: #626570;
+  --skin-success: #8bc98f;
+  --skin-success-soft: #25392b;
+  --skin-success-solid: #347d46;
+  --skin-success-solid-hover: #3c8d50;
+  --skin-danger: #f19c99;
+  --skin-danger-soft: #40292d;
+  --skin-danger-border: #784a50;
+  --skin-warning: #dabb82;
+  --skin-warning-soft: #3b3428;
+  --skin-warning-border: #75613f;
+  --skin-scrollbar: #565963;
+  --skin-scrollbar-hover: #727681;
+  --desktop-frame: #2b2d30;
+  --desktop-tool: #26282c;
+  --desktop-tab: #354565;
+}

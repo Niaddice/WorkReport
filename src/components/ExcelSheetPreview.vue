@@ -280,7 +280,7 @@ onBeforeUnmount(() => observer?.disconnect())
       <div v-else class="excel-sheet-empty">此工作表没有可预览的单元格，请查看填充明细。</div>
     </div>
     <footer class="excel-sheet-footer">
-      <div ref="sheetTabs" class="excel-sheet-tabs" role="tablist" aria-label="工作表">
+      <div ref="sheetTabs" class="excel-sheet-tabs island-tabs" role="tablist" aria-label="工作表">
         <button
           v-for="(sheet, index) in sheets"
           :key="sheet.name"
