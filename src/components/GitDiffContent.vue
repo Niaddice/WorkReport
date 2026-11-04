@@ -27,11 +27,27 @@ defineProps<{ lines: GitDiffLine[] }>()
   font: inherit;
 }
 .diff-line-number {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  background: var(--skin-surface);
   color: var(--skin-text-muted);
   user-select: none;
   text-align: right;
   padding-right: 1ch;
   border-right: 1px solid var(--skin-border);
+}
+.diff-line-number + .diff-line-number {
+  left: 4ch;
+}
+.diff-add .diff-line-number {
+  background: var(--skin-success-soft);
+}
+.diff-remove .diff-line-number {
+  background: var(--skin-danger-soft);
+}
+.diff-hunk .diff-line-number {
+  background: var(--skin-accent-soft);
 }
 .diff-line-text {
   padding-left: 12px;

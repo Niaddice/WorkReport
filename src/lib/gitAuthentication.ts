@@ -5,6 +5,22 @@ export interface GitCredentials {
   save?: boolean
 }
 
+export function isGithubHttpsOrigin(value: string): boolean {
+  try {
+    const url = new URL(value)
+    return (
+      url.origin === 'https://github.com' &&
+      !url.username &&
+      !url.password &&
+      url.pathname === '/' &&
+      !url.search &&
+      !url.hash
+    )
+  } catch {
+    return false
+  }
+}
+
 export function gitErrorMessage(cause: unknown) {
   const raw = cause instanceof Error ? cause.message : String(cause)
   return raw.replace(/^(?:Error:\s*)?(?:Git 操作失败：\s*)+/, '').trim()

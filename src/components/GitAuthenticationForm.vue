@@ -1,18 +1,26 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, useId } from 'vue'
+import GithubAuthentication from './GithubAuthentication.vue'
+import { isGithubHttpsOrigin } from '../lib/gitAuthentication'
 
-const props = defineProps<{ url: string; operation: string }>()
-const emit = defineEmits<{ confirm: [value: { username: string; password: string; save?: boolean }]; cancel: [] }>()
+const props = withDefaults(defineProps<{ url: string; operation: string; disabled?: boolean }>(), { disabled: false })
+const emit = defineEmits<{
+  confirm: [value: { username: string; password: string; save?: boolean }]
+  cancel: []
+  githubAuthorized: []
+}>()
 const id = useId()
 const username = ref('')
 const password = ref('')
 const save = ref(false)
+const githubBusy = ref(false)
+const formBusy = computed(() => props.disabled || githubBusy.value)
 const input = ref<HTMLInputElement>()
 const action = computed(
   () => ({ fetch: 'Fetch 获取', pull: 'Pull 拉取', push: 'Push 推送' })[props.operation] ?? 'Git 操作',
 )
 function submit() {
-  if (!username.value.trim() || !password.value) return
+  if (formBusy.value || !username.value.trim() || !password.value) return
   const value = { username: username.value.trim(), password: password.value, ...(save.value ? { save: true } : {}) }
   password.value = ''
   emit('confirm', value)
@@ -33,6 +41,13 @@ onBeforeUnmount(() => {
   >
     <strong>登录远程仓库后重试 {{ action }}</strong>
     <p class="git-authentication-server">{{ url }}</p>
+    <GithubAuthentication
+      v-if="isGithubHttpsOrigin(url)"
+      :disabled="disabled"
+      @busy="githubBusy = $event"
+      @authorized="emit('githubAuthorized')"
+    />
+    <strong v-if="isGithubHttpsOrigin(url)">使用访问令牌手动认证</strong>
     <label :for="`${id}-username`">用户名</label>
     <input
       :id="`${id}-username`"
@@ -42,6 +57,7 @@ onBeforeUnmount(() => {
       aria-label="Git 用户名"
       maxlength="512"
       required
+      :disabled="formBusy"
     />
     <label :for="`${id}-password`">密码或访问令牌</label>
     <input
@@ -52,9 +68,16 @@ onBeforeUnmount(() => {
       aria-label="Git 密码或访问令牌"
       maxlength="8192"
       required
+      :disabled="formBusy"
     />
     <label class="git-authentication-remember" :for="`${id}-remember`">
-      <input :id="`${id}-remember`" v-model="save" type="checkbox" aria-label="保存 Git 凭据到本机" />
+      <input
+        :id="`${id}-remember`"
+        v-model="save"
+        type="checkbox"
+        aria-label="保存 Git 凭据到本机"
+        :disabled="formBusy"
+      />
       保存凭据（加密保存在本机）
     </label>
     <small>{{
@@ -65,7 +88,7 @@ onBeforeUnmount(() => {
     <small v-if="url.startsWith('http://')">该服务器使用 HTTP，凭据将通过未加密连接发送。</small>
     <div class="git-authentication-actions">
       <button type="button" @click="emit('cancel')">取消</button>
-      <button type="submit" :disabled="!username.trim() || !password">认证并重试</button>
+      <button type="submit" :disabled="formBusy || !username.trim() || !password">认证并重试</button>
     </div>
   </form>
 </template>

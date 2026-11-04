@@ -5,6 +5,7 @@ mod excel;
 mod git;
 mod git_auth;
 mod git_credentials;
+mod github_auth;
 mod git_client;
 mod history;
 mod holidays;
@@ -1241,6 +1242,7 @@ pub fn run() {
         .plugin(tauri_plugin_clipboard_manager::init())
         .manage(ai::Runtime::default())
         .manage(GitCommitRuntime::default())
+        .manage(github_auth::Runtime::default())
         .manage(excel::Runtime::default())
         .manage(holidays::Runtime::default())
         .manage(AppState::default())
@@ -1287,6 +1289,10 @@ pub fn run() {
             read_git_history,
             read_git_diff,
             git_repository_action,
+            github_auth::start_github_login,
+            github_auth::read_github_login,
+            github_auth::cancel_github_login,
+            github_auth::open_github_login_browser,
             list_git_credentials,
             forget_git_credential,
             generate_git_commit_message,

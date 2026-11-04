@@ -15,6 +15,12 @@ import {
   PhFolder,
   PhGearSix,
   PhChecks,
+  PhClockCounterClockwise,
+  PhFiles,
+  PhStack,
+  PhFileCode,
+  PhCaretDown,
+  PhCheckCircle,
 } from '@phosphor-icons/vue'
 import AppSelect from './AppSelect.vue'
 import GitDiffContent from './GitDiffContent.vue'
@@ -37,6 +43,7 @@ import { api } from '../lib/workspace'
 import { cloneSelectedCommit, useGitCommitSelection, type SelectedGitCommit } from '../lib/gitCommitSelection'
 import GitCommitCollection from './GitCommitCollection.vue'
 import GitAuthenticationForm from './GitAuthenticationForm.vue'
+import { isGithubHttpsOrigin } from '../lib/gitAuthentication'
 
 const props = withDefaults(
   defineProps<{
@@ -80,13 +87,24 @@ const {
 } = client
 const tab = ref<'changes' | 'history' | 'branches' | 'stashes' | 'collection'>('changes')
 const tabs = [
-  { id: 'changes', label: '本地更改' },
-  { id: 'history', label: '提交历史' },
-  { id: 'branches', label: '分支' },
-  { id: 'stashes', label: 'Stash' },
-  { id: 'collection', label: '提交信息' },
+  { id: 'changes', label: '本地更改', icon: PhFiles },
+  { id: 'history', label: '提交历史', icon: PhClockCounterClockwise },
+  { id: 'branches', label: '分支', icon: PhGitBranch },
+  { id: 'stashes', label: 'Stash', icon: PhStack },
+  { id: 'collection', label: '提交信息', icon: PhChecks },
 ] as const
 const commitMessage = ref('')
+const commitExpanded = ref(true)
+const workbenchRoot = ref<HTMLElement>()
+const shortPanel = ref(false)
+let commitExpansionChosen = false
+let sizeObserver: ResizeObserver | undefined
+function toggleCommitForm() {
+  commitExpansionChosen = true
+  commitExpanded.value = !commitExpanded.value
+}
+const currentRepository = computed(() => props.repositories.find((repo) => repo.id === repositoryId.value))
+const showSelectionBar = computed(() => selectedEntries.value.length > 0)
 const branchName = ref('')
 const stashMessage = ref('')
 const stashInput = ref<HTMLInputElement>()
@@ -347,8 +365,22 @@ watch(historyReference, () => {
 function onFocus() {
   if (props.active && available.value && !lock.value) void refresh()
 }
-onMounted(() => window.addEventListener('focus', onFocus))
+onMounted(() => {
+  window.addEventListener('focus', onFocus)
+  if (typeof ResizeObserver === 'undefined' || !workbenchRoot.value) return
+  sizeObserver = new ResizeObserver((entries) => {
+    const height = entries[0]?.contentRect.height
+    if (!height) return
+    shortPanel.value = height < 500
+    const focused = document.activeElement
+    const editing =
+      focused instanceof HTMLElement && workbenchRoot.value?.contains(focused) && focused.matches('textarea')
+    if (!commitExpansionChosen && !commitMessage.value.trim() && !editing) commitExpanded.value = !shortPanel.value
+  })
+  sizeObserver.observe(workbenchRoot.value)
+})
 onBeforeUnmount(() => {
+  sizeObserver?.disconnect()
   copyRevision++
   window.removeEventListener('focus', onFocus)
   client.clear()
@@ -483,6 +515,15 @@ async function authenticate(value: { username: string; password: string; save?: 
   await act({ operation: pending.operation, credentials: { url: pending.url, ...value } })
 }
 
+async function authenticateGithub() {
+  const pending = authentication.value
+  if (!pending || !isGithubHttpsOrigin(pending.url) || props.disabled || busy.value || !props.active) return
+  authentication.value = null
+  // The native login has already committed the credential to the vault. A
+  // normal action now uses it without ever sending a token through the UI.
+  await act({ operation: pending.operation })
+}
+
 async function generateMessage() {
   if (generatingMessage.value) {
     client.cancelCommitMessage()
@@ -497,6 +538,7 @@ async function generateMessage() {
     return
   }
   commitMessage.value = message
+  commitExpanded.value = true
   notice.value = 'AI 提交说明已生成，可修改后再提交。'
 }
 
@@ -691,7 +733,7 @@ function statusLabel(file: GitFileChange, staged: boolean) {
 </script>
 
 <template>
-  <div class="git-workbench" :aria-busy="busy || loading">
+  <div ref="workbenchRoot" class="git-workbench" :class="{ 'is-short': shortPanel }" :aria-busy="busy || loading">
     <GitContextMenu
       v-if="contextMenu"
       kind="git"
@@ -762,38 +804,35 @@ function statusLabel(file: GitFileChange, staged: boolean) {
     </aside>
     <div class="workbench-main">
       <div class="workbench-toolbar">
-        <AppSelect
-          v-model="repositoryId"
-          :options="repositoryOptions"
-          :disabled="repositorySwitchLocked || !repositories.length"
-          aria-label="Git 仓库"
-        />
-        <button
-          type="button"
-          class="compact-manage"
-          aria-label="管理 Git 仓库"
-          title="添加或管理 Git 仓库"
-          :disabled="repositorySwitchLocked"
-          @click="emit('configureRepositories')"
-        >
-          <PhGearSix :size="17" />
-        </button>
-        <div v-if="repository" class="repository-caption" :title="repository.root">
-          <span
-            ><PhGitBranch :size="15" />{{ repository.detached ? '分离 HEAD' : repository.branch || '尚无提交' }}</span
+        <div class="repository-picker" :title="currentRepository?.path">
+          <AppSelect
+            v-model="repositoryId"
+            :options="repositoryOptions"
+            :disabled="repositorySwitchLocked || !repositories.length"
+            aria-label="Git 仓库"
+          />
+          <button
+            type="button"
+            class="compact-manage"
+            aria-label="管理 Git 仓库"
+            title="添加或管理 Git 仓库"
+            :disabled="repositorySwitchLocked"
+            @click="emit('configureRepositories')"
           >
-          <span v-if="repository.upstream"
-            >{{ repository.upstream }} · ↑{{ repository.ahead }} ↓{{ repository.behind }}</span
-          >
-          <span v-else>未配置跟踪分支</span>
-          <code :title="repository.root">{{ repository.root }}</code>
+            <PhGearSix :size="17" aria-hidden="true" />
+          </button>
         </div>
-        <div class="workbench-sync">
+        <div class="repository-identity">
+          <PhFolder :size="19" aria-hidden="true" />
+          <strong :title="currentRepository?.name">{{ currentRepository?.name ?? 'Git 工作台' }}</strong>
+        </div>
+
+        <div class="workbench-sync" role="group" aria-label="Git 远程同步">
           <button
             type="button"
             :disabled="lock || !repository?.remotes.length"
             aria-label="Fetch 获取"
-            title="获取远程引用（Fetch）"
+            :title="!repository?.remotes.length ? '请先为仓库配置远程地址' : '获取远程引用（Fetch）'"
             @click="act({ operation: 'fetch' })"
           >
             <PhCloudArrowDown :size="17" aria-hidden="true" /><span>Fetch 获取</span>
@@ -802,7 +841,7 @@ function statusLabel(file: GitFileChange, staged: boolean) {
             type="button"
             :disabled="lock || !canSync"
             aria-label="Pull 更新"
-            title="仅快进更新当前分支"
+            :title="!canSync ? '请先配置跟踪分支并解决工作区冲突' : '仅快进更新当前分支'"
             @click="act({ operation: 'pull' })"
           >
             <PhArrowDown :size="17" aria-hidden="true" /><span>Pull 更新</span>
@@ -811,7 +850,7 @@ function statusLabel(file: GitFileChange, staged: boolean) {
             type="button"
             :disabled="lock || !canSync"
             aria-label="Push 推送"
-            title="推送当前分支（Push）"
+            :title="!canSync ? '请先配置跟踪分支并解决工作区冲突' : '推送当前分支（Push）'"
             @click="act({ operation: 'push' })"
           >
             <PhArrowUp :size="17" aria-hidden="true" /><span>Push 推送</span>
@@ -824,9 +863,50 @@ function statusLabel(file: GitFileChange, staged: boolean) {
             title="刷新仓库状态"
             @click="refresh"
           >
-            <PhArrowClockwise :size="17" />
+            <PhArrowClockwise :size="17" :class="{ spin: loading }" aria-hidden="true" />
           </button>
         </div>
+      </div>
+      <div v-if="repository" class="repository-caption" role="group" aria-label="当前仓库状态">
+        <code :title="repository.root">{{ repository.root }}</code>
+        <div
+          v-if="repository"
+          class="repository-branch"
+          :class="{ detached: repository.detached }"
+          :title="repository.detached ? '当前处于分离 HEAD' : repository.branch"
+        >
+          <PhGitBranch :size="14" aria-hidden="true" /><span>{{
+            repository.detached ? '分离 HEAD' : repository.branch || '尚无提交'
+          }}</span>
+        </div>
+        <span class="repository-upstream" :title="repository.upstream ?? '未配置跟踪分支'">{{
+          repository.upstream ?? '未配置跟踪分支'
+        }}</span>
+        <span
+          v-if="repository.upstream"
+          class="repository-sync-counts"
+          role="img"
+          :aria-label="`领先 ${repository.ahead} 个提交，落后 ${repository.behind} 个提交`"
+        >
+          <span :class="{ pending: repository.ahead > 0 }" :title="`待推送 ${repository.ahead} 个提交`"
+            ><PhArrowUp :size="12" aria-hidden="true" />{{ repository.ahead }}</span
+          >
+          <span :class="{ pending: repository.behind > 0 }" :title="`待拉取 ${repository.behind} 个提交`"
+            ><PhArrowDown :size="12" aria-hidden="true" />{{ repository.behind }}</span
+          >
+        </span>
+        <span
+          class="repository-worktree-state"
+          :class="{ clean: !repository.files.length, conflicted: conflicts.length > 0 }"
+        >
+          <PhCheckCircle v-if="!repository.files.length" :size="13" aria-hidden="true" /><span>{{
+            conflicts.length
+              ? `${conflicts.length} 个冲突`
+              : repository.files.length
+                ? `${repository.files.length} 个更改`
+                : '工作区干净'
+          }}</span>
+        </span>
       </div>
       <nav class="workbench-tabs" aria-label="Git 工作台视图">
         <button
@@ -838,7 +918,7 @@ function statusLabel(file: GitFileChange, staged: boolean) {
           :disabled="busy || !!confirmation"
           @click="tab = item.id"
         >
-          {{ item.label
+          <component :is="item.icon" :size="15" aria-hidden="true" />{{ item.label
           }}<span v-if="item.id === 'changes' && repository?.files.length">{{ repository.files.length }}</span
           ><span v-if="item.id === 'collection' && collectedEntries.length">{{ collectedEntries.length }}</span>
         </button>
@@ -849,7 +929,9 @@ function statusLabel(file: GitFileChange, staged: boolean) {
         v-if="authentication"
         :url="authentication.url"
         :operation="authentication.operation"
+        :disabled="disabled || busy"
         @confirm="authenticate"
+        @github-authorized="authenticateGithub"
         @cancel="authentication = null"
       />
       <section
@@ -896,25 +978,37 @@ function statusLabel(file: GitFileChange, staged: boolean) {
         >
           <div class="change-pane">
             <div class="bulk-actions">
-              <button
-                type="button"
-                :disabled="lock || (!unstaged.length && !untracked.length)"
-                @click="act({ operation: 'stage', paths: [...unstaged, ...untracked].flatMap(filePaths) })"
+              <strong
+                >更改文件 <span>{{ repository.files.length }}</span></strong
               >
-                全部暂存</button
-              ><button
-                type="button"
-                :disabled="lock || !staged.length"
-                @click="act({ operation: 'unstage', paths: staged.flatMap(filePaths) })"
-              >
-                全部取消暂存
-              </button>
+              <div>
+                <button
+                  type="button"
+                  :disabled="lock || (!unstaged.length && !untracked.length)"
+                  @click="act({ operation: 'stage', paths: [...unstaged, ...untracked].flatMap(filePaths) })"
+                >
+                  全部暂存</button
+                ><button
+                  type="button"
+                  :disabled="lock || !staged.length"
+                  @click="act({ operation: 'unstage', paths: staged.flatMap(filePaths) })"
+                >
+                  全部取消暂存
+                </button>
+              </div>
             </div>
-            <p v-if="!repository.files.length" class="workbench-empty"><PhGitCommit :size="25" />工作区干净</p>
+            <p v-if="!repository.files.length" class="workbench-empty clean-worktree">
+              <PhCheckCircle :size="28" aria-hidden="true" />工作区干净
+            </p>
             <p v-if="conflicts.length" class="workbench-message workbench-error">
               请先在文件中解决冲突，再暂存对应文件。所有冲突解决后才能提交。
             </p>
-            <section v-for="group in groups.filter((group) => group.files.length)" :key="group.id" class="file-group">
+            <section
+              v-for="group in groups.filter((group) => group.files.length)"
+              :key="group.id"
+              class="file-group"
+              :data-group="group.id"
+            >
               <h4>
                 {{ group.label }}<span>{{ group.files.length }}</span>
               </h4>
@@ -934,9 +1028,11 @@ function statusLabel(file: GitFileChange, staged: boolean) {
                   :title="file.originalPath ? `${file.originalPath} → ${file.path}` : file.path"
                   @click="selectFile(file, group.staged)"
                 >
-                  <span class="file-status" :class="{ conflict: file.conflicted }">{{
-                    statusLabel(file, group.staged)
-                  }}</span
+                  <span
+                    class="file-status"
+                    :class="{ conflict: file.conflicted }"
+                    :data-status="file.conflicted ? 'U' : group.staged ? file.indexStatus : file.worktreeStatus"
+                    >{{ statusLabel(file, group.staged) }}</span
                   ><span class="file-path"
                     ><strong>{{ file.path.split('/').at(-1) }}</strong
                     ><small v-if="file.path.includes('/')">{{ file.path.slice(0, file.path.lastIndexOf('/')) }}</small
@@ -980,7 +1076,21 @@ function statusLabel(file: GitFileChange, staged: boolean) {
           </div>
           <form class="commit-form" @submit.prevent="commit()">
             <div class="commit-message-heading">
-              <label :for="`${id}-message`">提交说明</label>
+              <button
+                type="button"
+                class="commit-disclosure"
+                :aria-expanded="commitExpanded"
+                :aria-controls="`${id}-commit-fields`"
+                :aria-label="commitExpanded ? '收起提交区' : '展开提交区'"
+                @click="toggleCommitForm"
+              >
+                <PhGitCommit :size="16" aria-hidden="true" />提交说明<PhCaretDown
+                  :size="13"
+                  class="commit-chevron"
+                  aria-hidden="true"
+                />
+              </button>
+              <span v-if="!commitExpanded && commitMessage.trim()" class="commit-draft-indicator">草稿</span>
               <span v-if="aiProviderName" class="ai-provider" :title="`默认 AI：${aiProviderName}`">{{
                 aiProviderName
               }}</span>
@@ -1002,31 +1112,34 @@ function statusLabel(file: GitFileChange, staged: boolean) {
                   /></button
               ></span>
             </div>
-            <textarea
-              :id="`${id}-message`"
-              v-model="commitMessage"
-              :disabled="disabled || busy || loading || !!confirmation"
-              aria-label="提交说明"
-              placeholder="概述这次更改…"
-              rows="3"
-              @keydown.enter.ctrl.prevent="commit()"
-              @keydown.enter.meta.prevent="commit()"
-            />
-            <p v-if="generatingMessage" class="workbench-hint" role="status">
-              正在根据暂存区更改生成说明，可继续编辑或取消生成…
-            </p>
-            <p :id="`${id}-ai-hint`" class="workbench-hint">
-              <template v-if="aiProviderName === null"
-                ><button type="button" class="configure-ai" :disabled="disabled || busy" @click="emit('configureAi')">
-                  配置默认 AI</button
-                >后可生成提交说明。</template
-              ><template v-else-if="!staged.length || conflicts.length">{{ aiHint }}</template
-              ><template v-else>仅提交已暂存的 {{ staged.length }} 个文件。⌘ / Ctrl + Enter 提交。</template>
-            </p>
-            <p v-if="repository.detached" class="workbench-hint">当前处于分离 HEAD，请先创建或切换本地分支。</p>
-            <div class="button-row">
-              <button type="submit" class="primary-button" :disabled="!canCommit">提交</button
-              ><button type="button" :disabled="!canCommit || !canSync" @click="commit(true)">提交并推送</button>
+            <div v-show="commitExpanded" :id="`${id}-commit-fields`" class="commit-fields">
+              <label class="sr-only" :for="`${id}-message`">提交说明</label>
+              <textarea
+                :id="`${id}-message`"
+                v-model="commitMessage"
+                :disabled="disabled || busy || loading || !!confirmation"
+                aria-label="提交说明"
+                placeholder="概述这次更改…"
+                rows="3"
+                @keydown.enter.ctrl.prevent="commit()"
+                @keydown.enter.meta.prevent="commit()"
+              />
+              <p v-if="generatingMessage" class="workbench-hint" role="status">
+                正在根据暂存区更改生成说明，可继续编辑或取消生成…
+              </p>
+              <p :id="`${id}-ai-hint`" class="workbench-hint">
+                <template v-if="aiProviderName === null"
+                  ><button type="button" class="configure-ai" :disabled="disabled || busy" @click="emit('configureAi')">
+                    配置默认 AI</button
+                  >后可生成提交说明。</template
+                ><template v-else-if="!staged.length || conflicts.length">{{ aiHint }}</template
+                ><template v-else>仅提交已暂存的 {{ staged.length }} 个文件。⌘ / Ctrl + Enter 提交。</template>
+              </p>
+              <p v-if="repository.detached" class="workbench-hint">当前处于分离 HEAD，请先创建或切换本地分支。</p>
+              <div class="button-row">
+                <button type="submit" class="primary-button commit-primary" :disabled="!canCommit">提交</button
+                ><button type="button" :disabled="!canCommit || !canSync" @click="commit(true)">提交并推送</button>
+              </div>
             </div>
           </form>
           <div
@@ -1071,7 +1184,10 @@ function statusLabel(file: GitFileChange, staged: boolean) {
               <GitDiffContent v-if="diff.text" :lines="parsedDiff.lines" />
               <p v-else class="workbench-empty">没有文本差异，可能是二进制文件或文件权限变化。</p></template
             >
-            <p v-else class="workbench-empty">选择文件查看工作区或暂存区差异。</p>
+            <div v-else class="workbench-empty diff-placeholder">
+              <PhFileCode :size="34" weight="light" aria-hidden="true" /><strong>选择文件查看差异</strong
+              ><span>点击左侧文件，查看工作区或暂存区的更改。</span>
+            </div>
           </section>
         </div>
         <div v-else-if="tab === 'history'" class="history-view">
@@ -1242,7 +1358,10 @@ function statusLabel(file: GitFileChange, staged: boolean) {
                 <GitDiffContent v-if="diff.text" :lines="parsedDiff.lines" />
                 <p v-else class="workbench-empty">此提交没有可显示的文本差异。</p></template
               >
-              <p v-else-if="!selectedCommit" class="workbench-empty">选择提交查看完整说明和文件差异。</p>
+              <div v-else-if="!selectedCommit" class="workbench-empty diff-placeholder">
+                <PhGitCommit :size="34" weight="light" aria-hidden="true" /><strong>浏览每一次更改</strong
+                ><span>选择提交查看完整说明和文件差异。</span>
+              </div>
             </section>
           </div>
         </div>
@@ -1395,7 +1514,7 @@ function statusLabel(file: GitFileChange, staged: boolean) {
         <p v-if="busy" class="workbench-progress" role="status">正在执行 Git 操作，请稍候…</p>
       </template>
       <p v-if="selectionError" class="workbench-message workbench-error" role="alert">{{ selectionError }}</p>
-      <footer class="commit-selection-bar" aria-label="跨仓库提交选择">
+      <footer v-if="showSelectionBar" class="commit-selection-bar" aria-label="跨仓库提交选择">
         <span
           ><PhChecks :size="17" aria-hidden="true" />已选 {{ selectedEntries.length }} 条<span
             v-if="selectedEntries.length"
@@ -1438,7 +1557,8 @@ function statusLabel(file: GitFileChange, staged: boolean) {
   overflow: hidden;
   color: var(--skin-text);
   font-size: var(--text-body);
-  container-type: inline-size;
+  min-width: 0;
+  container: git-workbench / inline-size;
 }
 .workbench-main {
   display: flex;
@@ -1447,11 +1567,12 @@ function statusLabel(file: GitFileChange, staged: boolean) {
   min-width: 0;
   min-height: 0;
   overflow: hidden;
+  container: git-main / inline-size;
 }
 .repository-sidebar {
   display: flex;
   flex-direction: column;
-  flex: 0 0 180px;
+  flex: 0 0 184px;
   min-height: 0;
   min-width: 0;
   background: var(--skin-canvas);
@@ -1461,7 +1582,7 @@ function statusLabel(file: GitFileChange, staged: boolean) {
   display: flex;
   align-items: center;
   gap: 7px;
-  padding: 9px 10px;
+  padding: 15px 12px 12px;
   color: var(--skin-text-muted);
   font-size: var(--text-small);
 }
@@ -1478,7 +1599,7 @@ function statusLabel(file: GitFileChange, staged: boolean) {
   flex: 1;
   overflow: auto;
   min-height: 0;
-  padding: 0 6px;
+  padding: 0 8px 8px;
 }
 .repository-item {
   display: flex;
@@ -1488,8 +1609,9 @@ function statusLabel(file: GitFileChange, staged: boolean) {
   padding: 10px 7px;
   border: 1px solid transparent;
   background: transparent;
-  border-radius: 6px;
+  border-radius: 9px;
   text-align: left;
+  margin-bottom: 4px;
 }
 .repository-item > svg {
   flex-shrink: 0;
@@ -1541,9 +1663,21 @@ function statusLabel(file: GitFileChange, staged: boolean) {
 .repository-empty {
   padding: 0 8px;
 }
-.workbench-toolbar > .app-select,
-.compact-manage {
+.repository-picker {
   display: none;
+  align-items: center;
+  min-width: 0;
+  gap: 6px;
+}
+.repository-picker > .app-select {
+  flex: 1;
+  min-width: 0;
+}
+.compact-manage {
+  flex-shrink: 0;
+  width: 30px;
+  height: 30px;
+  padding: 0;
 }
 .commit-selection-bar {
   display: flex;
@@ -1623,15 +1757,7 @@ function statusLabel(file: GitFileChange, staged: boolean) {
 .history-selection-tools input:disabled {
   cursor: default;
 }
-@container (max-width: 760px) {
-  .repository-sidebar {
-    display: none;
-  }
-  .workbench-toolbar > .app-select,
-  .compact-manage {
-    display: inline-flex;
-  }
-}
+
 .workbench-toolbar,
 .repository-caption,
 .workbench-tabs,
@@ -1651,10 +1777,14 @@ button {
   gap: 6px;
   padding: 7px 10px;
   border: 1px solid var(--skin-border);
-  border-radius: 8px;
+  border-radius: 7px;
   background: var(--skin-surface);
   color: var(--skin-text-body);
   cursor: pointer;
+  transition:
+    background-color var(--motion-fast),
+    border-color var(--motion-fast),
+    color var(--motion-fast);
   white-space: nowrap;
 }
 button:hover:not(:disabled) {
@@ -1697,15 +1827,50 @@ textarea {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 10px;
-  justify-content: space-between;
-  padding: 8px 12px 4px;
+  gap: 8px;
+  padding: 12px 16px 8px;
 }
-.workbench-toolbar > .app-select {
-  width: 180px;
-  min-width: 120px;
-  flex: 1;
-  max-width: 280px;
+.repository-identity {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.repository-identity > svg {
+  flex-shrink: 0;
+  color: var(--skin-accent);
+}
+.repository-identity strong {
+  font-size: var(--text-subtitle);
+  font-weight: 600;
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.repository-branch {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  max-width: min(220px, 35%);
+  padding: 4px 7px;
+  border-radius: 6px;
+  background: var(--skin-subtle);
+  color: var(--skin-text-body);
+  font-size: var(--text-small);
+}
+.repository-branch > svg {
+  flex-shrink: 0;
+}
+.repository-branch > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.repository-branch.detached {
+  color: var(--skin-warning);
+  background: var(--skin-warning-soft);
 }
 .workbench-sync,
 .button-row,
@@ -1716,10 +1881,18 @@ textarea {
   gap: 6px;
 }
 .workbench-sync {
-  gap: 5px;
+  gap: 0;
+  flex-wrap: nowrap;
+  margin-left: auto;
+  padding: 2px;
+  border: 1px solid var(--skin-border);
+  border-radius: 9px;
+  background: var(--skin-canvas);
 }
 .workbench-sync button {
-  padding: 7px 8px;
+  padding: 6px 8px;
+  border: 0;
+  background: transparent;
   font-size: var(--text-small);
 }
 .refresh-button {
@@ -1728,36 +1901,60 @@ textarea {
   padding: 0;
 }
 .repository-caption {
-  flex: 1 1 170px;
-  min-width: 0;
   display: flex;
   align-items: center;
-  flex-wrap: wrap;
-  gap: 7px 14px;
-  padding: 0;
+  gap: 8px 12px;
+  min-width: 0;
+  padding: 0 16px 10px;
   color: var(--skin-text-muted);
-  font-size: var(--text-small);
-}
-.repository-caption > span:first-child {
-  display: inline-flex;
-  gap: 6px;
-  align-items: center;
-  color: var(--skin-accent);
+  font-size: var(--text-caption);
+  line-height: 1.6;
 }
 .repository-caption code {
-  display: none;
+  flex: 1;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  max-width: 100%;
+  font: inherit;
+}
+.repository-upstream {
+  max-width: 35%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.repository-sync-counts,
+.repository-sync-counts > span,
+.repository-worktree-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  white-space: nowrap;
+}
+.repository-sync-counts {
+  gap: 8px;
+}
+.repository-sync-counts .pending {
+  color: var(--skin-accent);
+}
+.repository-worktree-state {
+  color: var(--skin-warning);
+}
+.repository-worktree-state.clean {
+  color: var(--skin-success);
+}
+.repository-worktree-state.conflicted {
+  color: var(--skin-danger);
 }
 .workbench-tabs {
   display: flex;
-  gap: 8px;
+  gap: 16px;
   border-bottom: 1px solid var(--skin-border);
   padding: 0 16px;
   overflow-x: auto;
-  min-height: 36px;
+  scrollbar-width: none;
+  min-height: 40px;
 }
 .workbench-tabs button {
   border: 0;
@@ -1780,7 +1977,7 @@ h4 > span {
   color: var(--skin-text-muted);
 }
 .workbench-message {
-  margin: 10px 16px 0;
+  margin: 8px 12px;
   padding: 10px 12px;
   border-radius: 8px;
   white-space: pre-wrap;
@@ -1836,7 +2033,7 @@ h4 > span {
   overflow: auto;
 }
 .changes-view {
-  grid-template-columns: minmax(210px, var(--git-sidebar-width, 32%)) 6px minmax(0, 1fr);
+  grid-template-columns: minmax(250px, var(--git-sidebar-width, 32%)) 6px minmax(0, 1fr);
   grid-template-rows: minmax(0, 1fr) auto;
   grid-template-areas: 'files gutter diff' 'commit gutter diff';
 }
@@ -1855,6 +2052,17 @@ h4 > span {
   touch-action: none;
   background: var(--skin-canvas);
   border-inline: 1px solid var(--skin-border);
+  position: relative;
+}
+.git-splitter::after {
+  content: '';
+  position: absolute;
+  width: 2px;
+  height: 28px;
+  top: calc(50% - 14px);
+  left: 1px;
+  background: var(--skin-outline);
+  border-radius: 2px;
 }
 .git-splitter:hover,
 .git-splitter:focus-visible,
@@ -1873,7 +2081,9 @@ h4 > span {
   padding: 10px 12px;
   position: sticky;
   top: 0;
-  z-index: 1;
+  left: 0;
+  z-index: 3;
+  flex-shrink: 0;
   background: var(--skin-surface);
   border-bottom: 1px solid var(--skin-border);
 }
@@ -1912,9 +2122,6 @@ h4 > span {
   color: var(--skin-text-muted);
   font-size: var(--text-caption);
 }
-.commit-message-heading label {
-  flex: 1;
-}
 .generate-action {
   display: inline-flex;
 }
@@ -1933,11 +2140,32 @@ h4 > span {
   font-weight: 500;
 }
 .bulk-actions {
-  padding: 12px;
+  justify-content: space-between;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--skin-border);
+  background: var(--skin-surface);
+  position: sticky;
+  top: 0;
+  z-index: 2;
+}
+.bulk-actions strong {
+  font-size: var(--text-small);
+  font-weight: 500;
+  white-space: nowrap;
+}
+.bulk-actions strong > span {
+  color: var(--skin-text-muted);
+  margin-left: 3px;
+}
+.bulk-actions > div {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
 }
 .bulk-actions button {
   font-size: var(--text-small);
-  padding: 6px 7px;
+  padding: 4px 6px;
+  background: transparent;
 }
 .workbench-empty {
   display: flex;
@@ -1952,7 +2180,7 @@ h4 > span {
   text-align: center;
 }
 .file-group {
-  margin: 0 0 14px;
+  margin: 0 0 8px;
 }
 h4 {
   font-size: var(--text-small);
@@ -1960,20 +2188,38 @@ h4 {
   margin: 0;
 }
 .file-group h4 {
-  padding: 5px 12px 7px;
+  padding: 9px 12px 6px;
   display: flex;
-  gap: 8px;
+  gap: 7px;
   align-items: center;
+  color: var(--skin-text-muted);
+}
+.file-group h4::before {
+  content: '';
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--skin-text-faint);
+}
+.file-group[data-group='staged'] h4::before {
+  background: var(--skin-success);
+}
+.file-group[data-group='conflict'] h4::before {
+  background: var(--skin-danger);
 }
 .file-row {
   display: flex;
   align-items: center;
-  padding: 0 7px 0 5px;
+  padding: 1px 5px;
+  margin: 0 5px 2px;
+  border-radius: 7px;
+  border: 1px solid transparent;
   gap: 2px;
 }
 .file-row.selected,
 .history-entry.selected {
-  background: var(--skin-canvas);
+  background: var(--skin-accent-soft);
+  border-color: var(--skin-accent-border);
 }
 .file-select {
   flex: 1;
@@ -1999,8 +2245,26 @@ h4 {
   text-overflow: ellipsis;
 }
 .file-status {
-  min-width: 32px;
+  min-width: 30px;
+  padding: 2px 4px;
+  border-radius: 5px;
   color: var(--skin-success);
+  background: var(--skin-success-soft);
+  font-size: var(--text-caption);
+  text-align: center;
+}
+.file-status[data-status='M'] {
+  color: var(--skin-accent);
+  background: var(--skin-accent-soft);
+}
+.file-status[data-status='D'],
+.file-status.conflict {
+  color: var(--skin-danger);
+  background: var(--skin-danger-soft);
+}
+.file-status[data-status='R'] {
+  color: var(--skin-warning);
+  background: var(--skin-warning-soft);
 }
 .file-status.conflict {
   color: var(--skin-danger);
@@ -2024,6 +2288,47 @@ h4 {
   gap: 8px;
   border-top: 1px solid var(--skin-border);
   padding: 10px 12px;
+  background: color-mix(in srgb, var(--skin-canvas) 60%, var(--skin-surface));
+}
+.commit-fields {
+  display: grid;
+  gap: 8px;
+}
+.commit-fields textarea {
+  min-height: 68px;
+  resize: vertical;
+  background: var(--skin-surface);
+}
+.commit-disclosure {
+  flex: 1;
+  min-width: 0;
+  justify-content: flex-start;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font-weight: 500;
+  font-size: var(--text-small);
+}
+.commit-chevron {
+  margin-left: 2px;
+  transition: transform var(--motion-fast);
+}
+.commit-disclosure[aria-expanded='false'] .commit-chevron {
+  transform: rotate(-90deg);
+}
+.commit-draft-indicator {
+  color: var(--skin-warning);
+  font-size: var(--text-caption);
+}
+.commit-fields .button-row > .commit-primary {
+  flex: 1;
+  background: var(--skin-accent-fill);
+  border-color: var(--skin-accent-fill);
+  color: var(--skin-on-accent);
+}
+.commit-fields .button-row > .commit-primary:hover:not(:disabled) {
+  background: var(--skin-accent-fill-hover);
+  border-color: var(--skin-accent-fill-hover);
 }
 .commit-form label {
   font-weight: 500;
@@ -2037,9 +2342,42 @@ h4 {
   overflow-wrap: anywhere;
 }
 .diff-pane {
+  display: flex;
+  flex-direction: column;
   min-width: 0;
   overflow: auto;
+  scrollbar-gutter: stable;
   background: var(--skin-surface);
+}
+.diff-pane :deep(.diff-content) {
+  flex-shrink: 0;
+}
+.diff-placeholder {
+  flex: 1;
+  min-height: 160px;
+  flex-direction: column;
+  gap: 8px;
+}
+.diff-placeholder > svg {
+  color: var(--skin-text-faint);
+  margin-bottom: 4px;
+}
+.diff-placeholder strong {
+  color: var(--skin-text-body);
+  font-weight: 500;
+  font-size: var(--text-body);
+}
+.diff-placeholder > span {
+  font-size: var(--text-small);
+  max-width: 260px;
+}
+.clean-worktree {
+  flex-direction: column;
+  gap: 8px;
+  padding-block: 28px;
+}
+.clean-worktree svg {
+  color: var(--skin-success);
 }
 .diff-pane > h4 {
   padding: 12px 14px;
@@ -2053,7 +2391,7 @@ h4 {
   color: var(--skin-warning);
 }
 .history-split {
-  grid-template-columns: minmax(210px, var(--git-sidebar-width, 32%)) 6px minmax(0, 1fr);
+  grid-template-columns: minmax(250px, var(--git-sidebar-width, 32%)) 6px minmax(0, 1fr);
   grid-template-areas: 'history gutter diff';
 }
 .history-split > .history-list {
@@ -2144,7 +2482,7 @@ button.danger-text:hover:not(:disabled) {
   justify-content: stretch;
   width: 100%;
   gap: 6px;
-  padding: 13px 14px;
+  padding: 12px 14px 12px 10px;
   text-align: left;
   border: 0;
   border-radius: 0;
@@ -2226,8 +2564,11 @@ button.danger-text:hover:not(:disabled) {
   justify-content: space-between;
   flex-wrap: wrap;
   gap: 10px;
-  padding: 12px 0;
-  border-bottom: 1px solid var(--skin-surface);
+  padding: 12px;
+  margin-top: 6px;
+  border: 1px solid var(--skin-border);
+  border-radius: 9px;
+  background: var(--skin-surface);
 }
 .branch-row > div:first-child,
 .stash-row > div:first-child {
@@ -2281,7 +2622,33 @@ button.danger-text:hover:not(:disabled) {
   padding: 10px 16px;
   font-size: var(--text-small);
 }
-@container (max-width: 560px) {
+@container git-workbench (max-width: 960px) {
+  .repository-sidebar,
+  .repository-identity {
+    display: none;
+  }
+  .repository-picker {
+    display: flex;
+    flex: 1 1 180px;
+    max-width: 300px;
+  }
+}
+@container git-main (max-width: 640px) {
+  .history-filters {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(100px, 0.65fr) auto;
+  }
+  .history-filters > .app-select {
+    width: auto;
+    min-width: 0;
+  }
+  .search-input {
+    min-width: 0;
+  }
+  .history-selection-tools small {
+    display: none;
+  }
+
   .workbench-split {
     grid-template-columns: 1fr;
     overflow: auto;
@@ -2314,7 +2681,7 @@ button.danger-text:hover:not(:disabled) {
     display: none;
   }
   .history-split.show-diff > .diff-pane {
-    display: block;
+    display: flex;
   }
   .changes-view {
     display: grid;
@@ -2335,7 +2702,14 @@ button.danger-text:hover:not(:disabled) {
     display: none;
   }
   .changes-view.show-diff > .diff-pane {
-    display: block;
+    display: flex;
+  }
+  .changes-view.show-diff {
+    grid-template-rows: minmax(0, 1fr);
+    grid-template-areas: 'files';
+  }
+  .changes-view.show-diff > .commit-form {
+    display: none;
   }
   .git-splitter {
     display: none;
@@ -2348,18 +2722,12 @@ button.danger-text:hover:not(:disabled) {
   .repository-caption code {
     display: none;
   }
-  .workbench-sync button span {
-    display: none;
-  }
-  .workbench-sync button {
-    width: 32px;
-    height: 32px;
-    padding: 0;
-  }
   .repository-caption {
-    order: 3;
-    flex-basis: 100%;
+    flex-wrap: nowrap;
+    gap: 5px 10px;
+    padding-inline: 12px;
   }
+
   .workbench-toolbar {
     gap: 6px 8px;
     padding-left: 12px;
@@ -2371,8 +2739,65 @@ button.danger-text:hover:not(:disabled) {
   .inline-form {
     flex-wrap: wrap;
   }
-  .history-filters > .app-select {
-    flex: 1;
+}
+.git-workbench.is-short .commit-form {
+  padding-block: 8px;
+  gap: 6px;
+}
+.git-workbench.is-short .commit-fields {
+  gap: 6px;
+}
+.git-workbench.is-short .commit-fields textarea {
+  min-height: 50px;
+  height: 50px;
+  max-height: 80px;
+}
+.git-workbench.is-short .commit-fields .workbench-hint {
+  font-size: var(--text-caption);
+  line-height: 1.5;
+}
+.git-workbench.is-short .history-selection-tools small {
+  display: none;
+}
+@container git-main (max-width: 560px) {
+  .workbench-sync button span {
+    display: none;
+  }
+  .workbench-sync button {
+    width: 29px;
+    height: 29px;
+    padding: 0;
+  }
+  .repository-picker {
+    flex-basis: 120px;
+  }
+}
+@container git-main (max-width: 460px) {
+  .workbench-toolbar {
+    gap: 6px;
+    padding-top: 10px;
+  }
+  .repository-branch {
+    max-width: 26%;
+    padding: 2px 5px;
+  }
+  .repository-upstream {
+    max-width: 45%;
+  }
+  .workbench-tabs {
+    gap: 12px;
+    min-height: 36px;
+  }
+  .workbench-tabs button > svg {
+    display: none;
+  }
+  .history-filters {
+    gap: 6px;
+    padding: 10px 12px;
+  }
+  .branch-view,
+  .stash-view {
+    padding: 12px;
   }
 }
 </style>

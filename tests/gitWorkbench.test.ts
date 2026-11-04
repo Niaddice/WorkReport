@@ -216,12 +216,18 @@ describe('multi-repository workbench', () => {
       await button(wrapper, '获取提交信息').trigger('click')
       await wrapper.setProps({ workspacePath: '/other-workspace' })
       await flushPromises()
-      expect(wrapper.get('.commit-selection-bar').text()).toContain('已选 0 条')
+      expect(wrapper.find('.commit-selection-bar').exists()).toBe(false)
+      expect(wrapper.findAll<HTMLInputElement>('.history-row input').every((input) => !input.element.checked)).toBe(
+        true,
+      )
       expect(wrapper.find('[aria-label="完整提交信息"]').exists()).toBe(false)
       await wrapper.get('[aria-label="选择提交 abc1234"]').setValue(true)
       await wrapper.setProps({ repositories: repositories.map((repo) => ({ ...repo, path: `${repo.path}-moved` })) })
       await flushPromises()
-      expect(wrapper.get('.commit-selection-bar').text()).toContain('已选 0 条')
+      expect(wrapper.find('.commit-selection-bar').exists()).toBe(false)
+      expect(wrapper.findAll<HTMLInputElement>('.history-row input').every((input) => !input.element.checked)).toBe(
+        true,
+      )
     } finally {
       wrapper.unmount()
     }
@@ -1140,5 +1146,174 @@ describe('Git workbench controls', () => {
     expect(invoke).toHaveBeenCalledWith('read_git_repository', { workspacePath: '/tmp/workspace', repositoryId: 'one' })
     expect(wrapper.get<HTMLTextAreaElement>('[aria-label="提交说明"]').element.value).toBe('保留我的提交草稿')
     wrapper.unmount()
+  })
+})
+
+describe('GitHub browser authorization retries', () => {
+  it.each([
+    ['fetch', 'Fetch 获取'],
+    ['pull', 'Pull 更新'],
+    ['push', 'Push 推送'],
+  ])('retries only the pending %s after the native credential has been saved', async (operation, label) => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    const wrapper = await mountReady()
+    let attempts = 0
+    invoke.mockImplementation(async (command: string) => {
+      if (command === 'git_repository_action') {
+        if (attempts++ === 0) throw "fatal: Authentication failed for 'https://github.com/team/repo.git/'"
+        return 'GitHub 操作完成'
+      }
+      if (command === 'read_git_repository') return state()
+      if (command === 'start_github_login')
+        return { requestId: 'github-login', phase: 'waiting', code: 'ABCD-1234', username: null, message: '等待授权' }
+      if (command === 'read_github_login')
+        return {
+          requestId: 'github-login',
+          phase: 'authorized',
+          code: null,
+          username: 'test-user',
+          message: '授权凭据已加密保存',
+        }
+    })
+    try {
+      await button(wrapper, label).trigger('click')
+      await flushPromises()
+      expect(wrapper.text()).toContain('使用浏览器登录 GitHub')
+      await button(wrapper, '使用浏览器登录 GitHub').trigger('click')
+      await flushPromises()
+      expect(wrapper.get('[aria-label="Git 用户名"]').attributes('disabled')).toBeDefined()
+      expect(actionCalls()).toHaveLength(1)
+      await vi.advanceTimersByTimeAsync(1000)
+      await flushPromises()
+      expect(actionCalls().map(([, args]) => args.request.operation)).toEqual([operation, operation])
+      expect(actionCalls().at(-1)![1].request.credentials).toBeUndefined()
+      expect(wrapper.find('[aria-label="Git 远程认证"]').exists()).toBe(false)
+      expect(wrapper.text()).toContain('GitHub 操作完成')
+    } finally {
+      wrapper.unmount()
+      vi.useRealTimers()
+    }
+  })
+
+  it('does not retry a different workspace after a late browser authorization', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    const wrapper = await mountReady()
+    const pending = deferred<unknown>()
+    invoke.mockImplementation(async (command: string) => {
+      if (command === 'git_repository_action')
+        throw "fatal: Authentication failed for 'https://github.com/team/repo.git/'"
+      if (command === 'read_git_repository') return state()
+      if (command === 'start_github_login')
+        return { requestId: 'old-login', phase: 'waiting', code: 'ABCD-1234', username: null, message: '等待授权' }
+      if (command === 'read_github_login') return pending.promise
+    })
+    try {
+      await button(wrapper, 'Fetch 获取').trigger('click')
+      await flushPromises()
+      await button(wrapper, '使用浏览器登录 GitHub').trigger('click')
+      await flushPromises()
+      await vi.advanceTimersByTimeAsync(1000)
+      await wrapper.setProps({ workspacePath: '/tmp/another-workspace' })
+      await flushPromises()
+      pending.resolve({
+        requestId: 'old-login',
+        phase: 'authorized',
+        code: null,
+        username: 'test-user',
+        message: '已保存',
+      })
+      await flushPromises()
+      expect(actionCalls()).toHaveLength(1)
+      expect(
+        invoke.mock.calls.some(
+          ([command, args]) => command === 'cancel_github_login' && args.requestId === 'old-login',
+        ),
+      ).toBe(true)
+    } finally {
+      wrapper.unmount()
+      vi.useRealTimers()
+    }
+  })
+})
+
+describe('Git workbench layout', () => {
+  it('keeps a commit draft while collapsing the composer and inspecting a file', async () => {
+    const wrapper = await mountReady()
+    try {
+      await wrapper.get('[aria-label="提交说明"]').setValue('feat: 保留当前提交草稿')
+      await wrapper.get('[aria-label="收起提交区"]').trigger('click')
+      expect(wrapper.get('.commit-fields').isVisible()).toBe(false)
+      expect(wrapper.text()).toContain('草稿')
+      await wrapper.get('[aria-label="查看暂存差异 partially staged.txt"]').trigger('click')
+      await flushPromises()
+      await wrapper.get('[aria-label="返回文件列表"]').trigger('click')
+      await wrapper.get('[aria-label="展开提交区"]').trigger('click')
+      expect(wrapper.get('.commit-fields').isVisible()).toBe(true)
+      expect(wrapper.get<HTMLTextAreaElement>('[aria-label="提交说明"]').element.value).toBe('feat: 保留当前提交草稿')
+      expect(actionCalls()).toHaveLength(0)
+    } finally {
+      wrapper.unmount()
+    }
+  })
+
+  it('reserves space in short panels and respects a manually expanded draft on later resizes', async () => {
+    let resize!: (height: number) => void
+    vi.stubGlobal(
+      'ResizeObserver',
+      class {
+        callback: ResizeObserverCallback
+        constructor(callback: ResizeObserverCallback) {
+          this.callback = callback
+        }
+        observe(element: Element) {
+          if (element.classList.contains('git-workbench'))
+            resize = (height) =>
+              this.callback(
+                [{ target: element, contentRect: { height } } as ResizeObserverEntry],
+                this as unknown as ResizeObserver,
+              )
+        }
+        unobserve() {}
+        disconnect() {}
+      },
+    )
+    const wrapper = await mountReady()
+    try {
+      resize(360)
+      await wrapper.vm.$nextTick()
+      expect(wrapper.get('.commit-fields').isVisible()).toBe(false)
+      await wrapper.get('[aria-label="展开提交区"]').trigger('click')
+      await wrapper.get('[aria-label="提交说明"]').setValue('fix: 保留编辑内容')
+      resize(280)
+      await wrapper.vm.$nextTick()
+      expect(wrapper.get('.commit-fields').isVisible()).toBe(true)
+      expect(wrapper.get<HTMLTextAreaElement>('[aria-label="提交说明"]').element.value).toBe('fix: 保留编辑内容')
+      expect(actionCalls()).toHaveLength(0)
+    } finally {
+      wrapper.unmount()
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it('shows the selection footer only for selected commits and retains it across views', async () => {
+    const wrapper = await mountReady()
+    try {
+      expect(wrapper.find('.commit-selection-bar').exists()).toBe(false)
+      await button(wrapper, '提交历史').trigger('click')
+      await flushPromises()
+      expect(wrapper.find('.commit-selection-bar').exists()).toBe(false)
+      await wrapper.get('[aria-label="选择提交 abc1234"]').setValue(true)
+      expect(wrapper.get('.commit-selection-bar').text()).toContain('已选 1 条')
+      await wrapper
+        .findAll('.workbench-tabs button')
+        .find((item) => item.text().startsWith('本地更改'))!
+        .trigger('click')
+      expect(wrapper.get('.commit-selection-bar').text()).toContain('已选 1 条')
+      await button(wrapper, '清空选择').trigger('click')
+      expect(wrapper.find('.commit-selection-bar').exists()).toBe(false)
+      expect(actionCalls()).toHaveLength(0)
+    } finally {
+      wrapper.unmount()
+    }
   })
 })

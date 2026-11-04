@@ -8625,3 +8625,60 @@ body.is-preview-window-resizing * {
   gap: 12px;
   margin: 24px 0 12px;
 }
+
+/* GitHub browser/device authorization. Credentials stay in native storage. */
+.github-authentication {
+  display: grid;
+  gap: 10px;
+  padding: 16px;
+  border: 1px solid var(--skin-border);
+  border-radius: 12px;
+  background: var(--skin-surface);
+  color: var(--skin-text-body);
+  font-size: var(--text-body);
+  line-height: 1.6;
+}
+.github-authentication-heading,
+.github-authentication-actions,
+.github-authentication-actions > span {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.github-authentication-heading {
+  color: var(--skin-text);
+}
+.github-authentication p {
+  margin: 0;
+}
+.github-authentication small {
+  color: var(--skin-text-muted);
+  font-size: var(--text-small);
+}
+.github-authentication-actions {
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.github-device-code {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.github-device-code > span {
+  flex-basis: 100%;
+}
+.github-device-code code {
+  padding: 6px 10px;
+  border: 1px solid var(--skin-accent-border);
+  border-radius: 6px;
+  background: var(--skin-accent-soft);
+  color: var(--skin-accent-strong);
+  font-family: 'SFMono-Regular', Consolas, monospace;
+  font-size: var(--text-headline);
+  letter-spacing: 0.1em;
+  user-select: text;
+}
+.git-authentication:has(.github-authentication) {
+  max-height: min(560px, 75%);
+}

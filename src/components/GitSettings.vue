@@ -4,6 +4,7 @@ import { isTauri } from '@tauri-apps/api/core'
 import { open } from '@tauri-apps/plugin-dialog'
 import { PhCaretRight, PhFolderOpen, PhPlus, PhTrash } from '@phosphor-icons/vue'
 import SavedGitCredentials from './SavedGitCredentials.vue'
+import GithubAuthentication from './GithubAuthentication.vue'
 import {
   cloneGitSettings,
   DEFAULT_GIT_COMMIT_PROMPT,
@@ -206,6 +207,7 @@ defineExpose({ validate, focusInvalid })
         <small>默认使用本机 Git；找不到程序时可填写安装路径。</small>
       </label>
     </details>
+    <GithubAuthentication :disabled="formBusy" />
     <SavedGitCredentials :disabled="formBusy" />
     <p v-if="localError" role="alert" class="field-error">{{ localError }}</p>
   </div>
