@@ -1,5 +1,14 @@
 export type SkinId =
-  'default' | 'jade' | 'apricot' | 'wisteria' | 'midnight' | 'graphite' | 'vscode-dark-2026' | 'vscode-light-2026'
+  | 'default'
+  | 'apple'
+  | 'frosted-glass'
+  | 'jade'
+  | 'apricot'
+  | 'wisteria'
+  | 'midnight'
+  | 'graphite'
+  | 'vscode-dark-2026'
+  | 'vscode-light-2026'
 
 export interface Skin {
   id: SkinId
@@ -18,6 +27,20 @@ export const SKINS: readonly Skin[] = [
     description: '清透留白，经典蓝灰。',
     mode: 'light',
     swatches: ['#f8fafd', '#ffffff', '#0b57d0'],
+  },
+  {
+    id: 'apple',
+    name: 'Apple 风格',
+    description: '灰白层次，系统蓝与细腻圆角。',
+    mode: 'light',
+    swatches: ['#f2f2f7', '#ffffff', '#0066cc'],
+  },
+  {
+    id: 'frosted-glass',
+    name: '磨砂玻璃',
+    description: '柔和光影，通透面板与磨砂质感。',
+    mode: 'light',
+    swatches: ['#e7edf7', '#ffffffb8', '#315caa'],
   },
   {
     id: 'jade',

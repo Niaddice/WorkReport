@@ -15,6 +15,7 @@ import {
   PhCalendarCheck,
   PhGitBranch,
   PhArrowCircleDown,
+  PhGlobe,
 } from '@phosphor-icons/vue'
 import { aiApi, type AiProvider, type DetectedCli } from '../lib/ai'
 import type { Workspace } from '../lib/workspace'
@@ -46,6 +47,7 @@ import HolidaySettings from './HolidaySettings.vue'
 import type { HolidayState } from '../lib/holidays'
 import GitSettings from './GitSettings.vue'
 import UpdateSettings from './UpdateSettings.vue'
+import ProxySettings from './ProxySettings.vue'
 import type { AppUpdater } from '../lib/useUpdater'
 
 const props = defineProps<{
@@ -74,7 +76,7 @@ const emit = defineEmits<{
 }>()
 const {
   draft,
-  unchanged,
+  unchanged: workspaceUnchanged,
   save: saveDraft,
   reset: resetDraft,
   saving: draftSaving,
@@ -84,7 +86,18 @@ const {
   () => props.bundle,
   (settings) => props.save(settings),
 )
-const busy = computed(() => props.loading || props.saving || props.databaseBusy || draftSaving.value)
+const proxyForm = ref<InstanceType<typeof ProxySettings>>()
+const savingProxy = computed(() => proxyForm.value?.saving ?? false)
+const unchanged = computed(() => workspaceUnchanged.value && (proxyForm.value?.unchanged ?? true))
+const busy = computed(
+  () =>
+    props.loading ||
+    props.saving ||
+    props.databaseBusy ||
+    draftSaving.value ||
+    (proxyForm.value?.loading ?? false) ||
+    (proxyForm.value?.saving ?? false),
+)
 const railHoldOptions = [
   { key: 'railHoldDelayMs', label: '长按等待时间', description: '按住已打开模块的功能按钮，等待此时长后显示进度圈。' },
   {
@@ -119,7 +132,7 @@ function onHistoryLimitInput(event: Event) {
     Number.isFinite(value) ? value * 1024 * 1024 * 1024 : Number.NaN,
   )
 }
-const saveError = computed(() => validationError.value || props.error || draftError.value)
+const saveError = computed(() => validationError.value || props.error || draftError.value || proxyForm.value?.error)
 const aiReady = computed(() => {
   const provider = draft.value.ai.providers.find((item) => item.id === draft.value.ai.defaultProviderId)
   if (!provider || !provider.name.trim()) return false
@@ -159,11 +172,28 @@ function validateAi(): boolean {
   }
   return true
 }
-async function saveAll(): Promise<boolean> {
-  if (props.loading || props.databaseBusy) return false
-  if (draftSaving.value) return saveDraft()
-  if (props.saving) return false
+let pendingSave: Promise<boolean> | undefined
+function saveAll(): Promise<boolean> {
+  if (pendingSave) return pendingSave
+  pendingSave = performSave().finally(() => {
+    pendingSave = undefined
+  })
+  return pendingSave
+}
+async function saveProxy(): Promise<boolean> {
+  const savedOk = (await proxyForm.value?.save()) ?? true
+  if (!savedOk) await navigate('proxy')
+  else pushMessage({ tone: 'success', text: '设置已保存' })
+  return savedOk
+}
+async function performSave(): Promise<boolean> {
+  if (busy.value) return false
   validationError.value = ''
+  if (proxyForm.value && !proxyForm.value.validate()) {
+    await navigate('proxy')
+    return false
+  }
+  if (workspaceUnchanged.value) return saveProxy()
   if (!props.workspace) {
     validationError.value = '请先选择工作空间，再保存设置。'
     navigate('workspace')
@@ -193,11 +223,11 @@ async function saveAll(): Promise<boolean> {
     return false
   }
   const savedOk = await saveDraft()
-  if (savedOk) pushMessage({ tone: 'success', text: '设置已保存' })
-  return savedOk
+  return savedOk ? saveProxy() : false
 }
 function reset() {
   resetDraft()
+  proxyForm.value?.reset()
   validationError.value = ''
   localError.value = ''
   if (!draft.value.ai.providers.some((provider) => provider.id === editingId.value)) editingId.value = ''
@@ -209,7 +239,7 @@ watch(
   },
   { deep: true, flush: 'sync' },
 )
-defineExpose({ save: saveAll, unchanged, reset, navigate })
+defineExpose({ save: saveAll, unchanged, reset, navigate, savingProxy })
 const detected = ref<DetectedCli[]>([])
 const detecting = ref(false)
 const detectedOnce = ref(false)
@@ -238,6 +268,7 @@ type SettingsSection =
   | 'database'
   | 'git'
   | 'updates'
+  | 'proxy'
 const navigation = [
   {
     label: '基础设置',
@@ -248,6 +279,7 @@ const navigation = [
       { id: 'holidays', title: '放假信息', description: '手动同步放假与调休安排', icon: PhCalendarCheck },
       { id: 'database', title: '数据存储', description: '数据库备份、复制与迁移', icon: PhDatabase },
       { id: 'git', title: 'Git 配置', description: '项目仓库与 AI 提交说明', icon: PhGitBranch },
+      { id: 'proxy', title: '网络代理', description: '本机连接方式与代理服务器', icon: PhGlobe },
       { id: 'updates', title: '应用更新', description: '查看版本与检查更新', icon: PhArrowCircleDown },
     ],
   },
@@ -286,6 +318,7 @@ const sectionChanges = computed<Record<SettingsSection, boolean>>(() => {
     ),
     holidays: false,
     updates: false,
+    proxy: !(proxyForm.value?.unchanged ?? true),
     database: differs(current.database, stored.database),
     git: differs(current.git, stored.git),
     appearance: differs(current.appearance, stored.appearance),
@@ -454,7 +487,7 @@ function remove(id: string) {
         <div class="settings-sidebar-note">
           <PhHardDrives :size="17" aria-hidden="true" /><span
             ><strong>{{ workspace?.name ?? '尚未选择工作空间' }}</strong
-            ><br />设置随工作空间保存</span
+            ><br />设置随工作空间保存，代理仅本机</span
           >
         </div>
       </aside>
@@ -487,6 +520,18 @@ function remove(id: string) {
                 :workspace-path="workspace?.path ?? ''"
                 :journal-format="draft.database.defaultFormat"
               />
+            </section>
+          </Transition>
+          <Transition name="settings-panel">
+            <section
+              v-show="activeSection === 'proxy'"
+              id="settings-panel-proxy"
+              tabindex="0"
+              class="settings-section settings-panel"
+              :inert="activeSection !== 'proxy'"
+              aria-label="网络代理"
+            >
+              <ProxySettings ref="proxyForm" :busy="busy" />
             </section>
           </Transition>
           <Transition name="settings-panel">
@@ -1124,7 +1169,12 @@ function remove(id: string) {
           <p v-else>{{ saved ? '设置已保存' : '所有修改已保存' }}</p>
           <span>{{ unchanged ? '修改设置后，在这里统一保存。' : '切换分类会保留修改，点击保存后统一生效。' }}</span>
         </div>
-        <button type="button" class="settings-save-button" :disabled="busy || unchanged || !workspace" @click="saveAll">
+        <button
+          type="button"
+          class="settings-save-button"
+          :disabled="busy || unchanged || (!workspace && !workspaceUnchanged)"
+          @click="saveAll"
+        >
           <PhFloppyDisk :size="18" aria-hidden="true" /><Transition name="button-label" mode="out-in"
             ><span :key="String(busy)">{{ busy ? '正在保存…' : '保存设置' }}</span></Transition
           >

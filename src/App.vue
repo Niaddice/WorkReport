@@ -171,6 +171,7 @@ const workspaceSettings = computed<WorkspaceSettings>(() => ({
 }))
 const settingsReading = ref(false)
 const settingsSaving = ref(false)
+const settingsCommitting = computed(() => settingsSaving.value || (settingsView.value?.savingProxy ?? false))
 const settingsReady = ref(false)
 const settingsError = ref('')
 const settingsLoading = computed(
@@ -187,7 +188,7 @@ const settingsDialogBusy = computed(
     busy.value ||
     picking.value ||
     settingsLoading.value ||
-    settingsSaving.value ||
+    settingsCommitting.value ||
     settingsLeaveBusy.value ||
     databaseBusy.value ||
     summaryOutput.exporting.value ||
@@ -355,7 +356,7 @@ async function prepareForUpdate(): Promise<boolean> {
     busy.value ||
     picking.value ||
     settingsLoading.value ||
-    settingsSaving.value ||
+    settingsCommitting.value ||
     settingsLeaveBusy.value ||
     databaseBusy.value ||
     requestingAi.value ||
@@ -389,7 +390,7 @@ async function navigate(target: 'home' | 'settings', closeTarget: 'settings' | '
   if (
     busy.value ||
     picking.value ||
-    settingsSaving.value ||
+    settingsCommitting.value ||
     settingsReading.value ||
     databaseBusy.value ||
     settingsLeaveBusy.value ||
@@ -418,7 +419,7 @@ async function toggleSettings() {
     busy.value ||
     picking.value ||
     settingsLoading.value ||
-    settingsSaving.value ||
+    settingsCommitting.value ||
     settingsLeaveBusy.value ||
     databaseBusy.value ||
     summaryOutput.exporting.value ||
@@ -528,7 +529,7 @@ async function onDatabaseTransferred(result: DatabaseTransferResult) {
   }
 }
 async function saveWorkspaceSettings(value: WorkspaceSettings): Promise<boolean> {
-  if (settingsSaving.value || databaseBusy.value) return false
+  if (settingsCommitting.value || databaseBusy.value) return false
   if (!workspace.value || !settingsReady.value) {
     settingsError.value = '请先打开工作空间并完整读取设置后重试。'
     return false
@@ -593,14 +594,14 @@ function requestSettingsExit(action: SettingsExit): boolean {
   return true
 }
 function cancelSettingsExit() {
-  if (settingsLeaveBusy.value || settingsSaving.value) return
+  if (settingsLeaveBusy.value || settingsCommitting.value) return
   pendingSettingsExit.value = null
   settingsCloseTarget.value = 'settings'
   settingsLeaveError.value = ''
   void settingsLeaveDialog.value?.close()
 }
 async function finishSettingsExit(save: boolean) {
-  if (!pendingSettingsExit.value || settingsLeaveBusy.value || settingsSaving.value) return
+  if (!pendingSettingsExit.value || settingsLeaveBusy.value || settingsCommitting.value) return
   settingsLeaveBusy.value = true
   settingsLeaveError.value = ''
   const action = pendingSettingsExit.value
@@ -631,7 +632,7 @@ async function chooseWorkspace() {
   if (
     picking.value ||
     busy.value ||
-    settingsSaving.value ||
+    settingsCommitting.value ||
     settingsReading.value ||
     databaseBusy.value ||
     settingsLeaveBusy.value ||
@@ -1006,7 +1007,7 @@ async function appendGitReport(workspacePath: string, date: string, content: str
     busy.value ||
     saving.value ||
     settingsLoading.value ||
-    settingsSaving.value ||
+    settingsCommitting.value ||
     page.value !== 'home' ||
     workspace.value?.path !== workspacePath ||
     selectedDate.value !== date ||
@@ -1029,7 +1030,7 @@ const moduleDisabled = computed(() => page.value !== 'home' || busy.value || req
 async function changeWorkspaceFiles(path: string, request: FileRequest, token?: string): Promise<FileChangeResult> {
   if (
     busy.value ||
-    settingsSaving.value ||
+    settingsCommitting.value ||
     settingsReading.value ||
     databaseBusy.value ||
     excelBusy.value ||
@@ -1246,7 +1247,7 @@ function beforeUnload(event: BeforeUnloadEvent) {
     saving.value ||
     workspaceDocument.dirty.value ||
     workspaceDocument.saving.value ||
-    settingsSaving.value ||
+    settingsCommitting.value ||
     databaseBusy.value ||
     summaryOutput.exporting.value ||
     excelBusy.value ||
@@ -1312,7 +1313,7 @@ onMounted(async () => {
           updater.busy.value ||
           busy.value ||
           picking.value ||
-          settingsSaving.value ||
+          settingsCommitting.value ||
           settingsReading.value ||
           databaseBusy.value ||
           settingsLeaveBusy.value ||
@@ -1371,7 +1372,7 @@ onBeforeUnmount(() => {
         :busy="busy"
         :picking="picking"
         :excel-busy="excelBusy"
-        :settings-saving="settingsSaving"
+        :settings-saving="settingsCommitting"
         :settings-reading="settingsReading"
         :settings-leave-busy="settingsLeaveBusy"
         :database-busy="databaseBusy"
@@ -1422,7 +1423,7 @@ onBeforeUnmount(() => {
             ref="settingsView"
             :key="workspace?.path ?? 'no-workspace'"
             :workspace="workspace"
-            :picking="picking || busy || excelBusy || settingsSaving"
+            :picking="picking || busy || excelBusy || settingsCommitting"
             :bundle="workspaceSettings"
             :loading="settingsLoading"
             :saving="settingsSaving"
@@ -1498,7 +1499,7 @@ onBeforeUnmount(() => {
       :hold-delay-ms="railHoldDelayMs"
       :hold-duration-ms="railHoldDurationMs"
       :settings-active="page === 'settings'"
-      :settings-busy="settingsLoading || settingsSaving || settingsLeaveBusy || databaseBusy"
+      :settings-busy="settingsLoading || settingsCommitting || settingsLeaveBusy || databaseBusy"
       @module="activateModule"
       @remove="removeModule"
       @refresh="refreshHome"

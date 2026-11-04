@@ -13,6 +13,7 @@ mod settings;
 mod summary;
 mod ui;
 mod updates;
+mod network;
 mod workspace;
 mod file_rules;
 mod directory_ops;
@@ -1186,6 +1187,7 @@ async fn summarize_entries(
 pub fn run() {
     tauri::Builder::default()
         .setup(|_app| {
+            if let Ok(directory) = legacy_config_dir(_app.handle()) { network::initialize(directory); }
             #[cfg(target_os = "macos")]
             {
                 // Native menu key equivalents are handled before WebKit keydown.
@@ -1244,6 +1246,9 @@ pub fn run() {
         .manage(AppState::default())
         .invoke_handler(tauri::generate_handler![
             updates::check_channel_update,
+            network::load_proxy_settings,
+            network::save_proxy_settings,
+            network::test_proxy_settings,
             updates::open_update_download,
             recent_workspace,
             load_holiday_data,

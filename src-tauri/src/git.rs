@@ -180,6 +180,7 @@ pub(super) async fn run_with_credential_set(
     credentials: &[&crate::git_auth::Credentials],
 ) -> Result<std::process::Output, String> {
     let mut command = Command::new(settings.executable.trim());
+    crate::network::current()?.command(&mut command, true)?;
     command
         .current_dir(path)
         .args(["--no-pager", "--no-optional-locks"])

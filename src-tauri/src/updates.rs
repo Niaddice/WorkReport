@@ -75,7 +75,7 @@ fn select_release(releases: &[PublishedRelease], channel: Channel) -> Option<&Pu
 }
 
 async fn published_release(channel: Channel) -> Result<Option<PublishedRelease>, String> {
-    let client = reqwest::Client::builder()
+    let client = crate::network::client()?
         .timeout(Duration::from_secs(10))
         .connect_timeout(Duration::from_secs(5))
         .user_agent(concat!("WorkReport/", env!("CARGO_PKG_VERSION")))
@@ -120,6 +120,7 @@ pub struct ChannelCheck {
 
 #[tauri::command]
 pub async fn check_channel_update(webview: Webview, channel: Channel, allow_channel_switch: bool) -> Result<ChannelCheck, String> {
+    let network = crate::network::current()?;
     let release = published_release(channel).await?;
     let download_url = match &release {
         Some(release) => release.url(false)?.to_string(),
@@ -130,7 +131,12 @@ pub async fn check_channel_update(webview: Webview, channel: Channel, allow_chan
     };
     let mut builder = webview.updater_builder()
         .endpoints(vec![release.url(true)?]).map_err(|error| error.to_string())?
-        .timeout(Duration::from_secs(15));
+        .timeout(Duration::from_secs(15))
+        .configure_client(move |builder| {
+            // Download may start long after checking. Pick up proxy changes
+            // made in settings before the user chooses to install this update.
+            crate::network::current().unwrap_or_else(|_| network.clone()).client(builder)
+        });
     // Switching back from dev may require an older main version. Installation
     // still requires the normal user action and package signature verification.
     if allow_channel_switch {

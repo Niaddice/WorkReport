@@ -357,7 +357,7 @@ fn api_endpoint(base: &str, resource: &str) -> Result<reqwest::Url, String> {
     Ok(url)
 }
 fn http_client(url: &reqwest::Url, request_timeout: Duration) -> Result<reqwest::Client, String> {
-    let mut builder = reqwest::Client::builder()
+    let mut builder = crate::network::client()?
         .timeout(request_timeout)
         .connect_timeout(Duration::from_secs(15))
         .redirect(reqwest::redirect::Policy::none());
@@ -633,6 +633,7 @@ pub async fn list_cli_models(
         return Err("CLI 路径无效，请重新检测或填写绝对路径".into());
     }
     let mut child = command(executable);
+    crate::network::current()?.command(&mut child, false)?;
     child
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -844,6 +845,7 @@ async fn cli_completion(provider: &Provider, prompt: &str, action: &str) -> Resu
     let temp = tempfile::tempdir().map_err(|_| "无法创建 AI 临时目录")?;
     let output_path = temp.path().join("result.txt");
     let mut child = command(&provider.executable);
+    crate::network::current()?.command(&mut child, false)?;
     child
         .current_dir(temp.path())
         .stdin(Stdio::piped())
