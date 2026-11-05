@@ -110,6 +110,22 @@ async function openDemoWorkspace() {
   return wrapper
 }
 
+function panel(wrapper: VueWrapper, id: string) {
+  return wrapper.get(`.module-panel[data-module-id="${id}"]`)
+}
+
+/** 模块设置现在从模块标题栏的齿轮按钮打开，不再占用全局设置页分类。 */
+async function openModuleSettings(wrapper: VueWrapper, id: string) {
+  await panel(wrapper, id).get('.module-settings-button').trigger('click')
+  await flushPromises()
+  await flushPromises()
+}
+
+async function addModule(wrapper: VueWrapper, label: string) {
+  await wrapper.get(`.app-rail [aria-label="${label}"]`).trigger('click')
+  await flushPromises()
+}
+
 describe('additional local AI integrations', () => {
   it('adds a detected Cursor CLI, fetches its models and keeps a desktop-only Grok Bot out of saved providers', async () => {
     invoke.mockImplementation(async (command: string, args?: Record<string, unknown>) => {
@@ -367,22 +383,24 @@ describe('Git journal integration', () => {
     })
     const wrapper = await openDemoWorkspace()
     try {
-      await wrapper.get('.app-rail [aria-label="设置"]').trigger('click')
-      await flushPromises()
-      await wrapper.get('[aria-controls="settings-panel-git"]').trigger('click')
+      await addModule(wrapper, 'Git')
+      await openModuleSettings(wrapper, 'git')
+      const dialog = wrapper.get('.module-settings-dialog')
+      expect(dialog.text()).toContain('Git 设置')
       for (const [name, path] of [
         ['项目仓库', '/tmp/project'],
         ['项目克隆', '/tmp/clone'],
       ]) {
-        await wrapper.get('.git-repositories-heading button').trigger('click')
-        const fields = wrapper.findAll('.git-repository-form').at(-1)!.findAll('input')
+        await dialog.get('.git-repositories-heading button').trigger('click')
+        const fields = dialog.findAll('.git-repository-form').at(-1)!.findAll('input')
         await fields[0]!.setValue(name)
         await fields[1]!.setValue(path)
       }
-      await wrapper.get('.app-rail [aria-label="设置"]').trigger('click')
+      await dialog.get('.module-settings-save').trigger('click')
       await flushPromises()
-      expect(wrapper.get('.settings-dialog').isVisible()).toBe(true)
-      expect(wrapper.get('.settings-viewport').text()).toContain('仓库“项目克隆”与“项目仓库”指向同一 Git 仓库')
+      await flushPromises()
+      expect(wrapper.get('.module-settings-dialog').isVisible()).toBe(true)
+      expect(wrapper.get('.module-settings-footer').text()).toContain('仓库“项目克隆”与“项目仓库”指向同一 Git 仓库')
       expect(wrapper.findAll('.git-repository-form')).toHaveLength(2)
       expect(invoke.mock.calls.filter(([command]) => command === 'save_workspace_settings')).toHaveLength(1)
     } finally {
@@ -396,15 +414,16 @@ describe('Git journal integration', () => {
     )
     const wrapper = await openDemoWorkspace()
     try {
-      await wrapper.get('.app-rail [aria-label="设置"]').trigger('click')
-      await flushPromises()
-      await wrapper.get('[aria-controls="settings-panel-git"]').trigger('click')
-      await wrapper.get('.git-repositories-heading button').trigger('click')
-      const fields = wrapper.findAll('.git-repository-form input')
+      await addModule(wrapper, 'Git')
+      await openModuleSettings(wrapper, 'git')
+      const dialog = wrapper.get('.module-settings-dialog')
+      await dialog.get('.git-repositories-heading button').trigger('click')
+      const fields = dialog.findAll('.git-repository-form input')
       await fields[0]!.setValue('项目仓库')
       await fields[1]!.setValue('/tmp/project')
       expect(invoke.mock.calls.some(([command]) => command === 'save_workspace_settings')).toBe(false)
-      await wrapper.get('.app-rail [aria-label="设置"]').trigger('click')
+      await dialog.get('.module-settings-save').trigger('click')
+      await flushPromises()
       await flushPromises()
       const saves = invoke.mock.calls.filter(([command]) => command === 'save_workspace_settings')
       expect(saves).toHaveLength(1)
@@ -418,10 +437,9 @@ describe('Git journal integration', () => {
           },
         },
       })
-      await wrapper.get('.app-rail [aria-label="Git"]').trigger('click')
-      await flushPromises()
-      expect(wrapper.find('.git-views').exists()).toBe(false)
-      expect(wrapper.get('.git-module').text()).not.toContain('提交日报')
+      // 保存成功后模块设置弹窗关闭，但 Git 模块保持打开并立即使用新配置。
+      expect(wrapper.get('.module-settings-dialog').isVisible()).toBe(false)
+      expect(wrapper.find('.git-module').exists()).toBe(true)
       expect(wrapper.find('.git-workbench').exists()).toBe(true)
     } finally {
       wrapper.unmount()
@@ -1698,18 +1716,18 @@ describe('modular home integration', () => {
       })
       const wrapper = await openDemoWorkspace()
       try {
-        await wrapper.get('.app-rail [aria-label="设置"]').trigger('click')
-        await flushPromises()
-        await wrapper.get('[aria-controls="settings-panel-directories"]').trigger('click')
-        await wrapper.get('#journal-filename-template').setValue('工作_{date}')
-        expect(wrapper.get<HTMLButtonElement>('.settings-savebar .settings-save-button').element.disabled).toBe(false)
-        await wrapper.get('.settings-savebar .settings-save-button').trigger('click')
+        await openModuleSettings(wrapper, 'editor')
+        const dialog = wrapper.get('.module-settings-dialog')
+        await dialog.get('#journal-filename-template').setValue('工作_{date}')
+        expect(wrapper.get<HTMLButtonElement>('.module-settings-save').element.disabled).toBe(false)
+        await wrapper.get('.module-settings-save').trigger('click')
         await flushPromises()
         expect(invoke.mock.calls.map(([command]) => command)).toContain('preview_file_settings')
         expect(wrapper.get<HTMLDialogElement>('.file-changes-dialog').element.open).toBe(true)
         expect(invoke.mock.calls.some(([command]) => command === 'save_workspace_settings')).toBe(false)
         if (rename) await wrapper.findAll('.file-change-choices input')[1]!.setValue(true)
         await wrapper.get('.file-changes-dialog md-filled-button').trigger('click')
+        await flushPromises()
         await flushPromises()
         expect(invoke).toHaveBeenCalledWith('save_workspace_settings', {
           workspacePath: DEMO_WORKSPACE,
@@ -1722,7 +1740,8 @@ describe('modular home integration', () => {
           },
         })
         expect(wrapper.get<HTMLDialogElement>('.file-changes-dialog').element.open).toBe(false)
-        expect(wrapper.find('.settings-save-error').exists()).toBe(false)
+        expect(wrapper.get('.module-settings-dialog').isVisible()).toBe(false)
+        expect(wrapper.find('.settings-error').exists()).toBe(false)
       } finally {
         wrapper.unmount()
       }
@@ -1745,19 +1764,20 @@ describe('modular home integration', () => {
     })
     const wrapper = await openDemoWorkspace()
     try {
-      await wrapper.get('.app-rail [aria-label="设置"]').trigger('click')
-      await flushPromises()
-      await wrapper.get('[aria-controls="settings-panel-directories"]').trigger('click')
-      await wrapper.get('#excel-save-directory').setValue('表格')
-      await wrapper.get('.settings-savebar .settings-save-button').trigger('click')
+      await addModule(wrapper, 'Excel报告')
+      await openModuleSettings(wrapper, 'excel')
+      const dialog = wrapper.get('.module-settings-dialog')
+      await dialog.get('#excel-save-directory').setValue('表格')
+      await dialog.get('.module-settings-save').trigger('click')
       await flushPromises()
       expect(wrapper.get('.file-changes-dialog').text()).toContain('目标目录已有 3 个文件')
       await wrapper.get('.file-changes-dialog md-text-button').trigger('click')
       await flushPromises()
       expect(invoke.mock.calls.some(([command]) => command === 'save_workspace_settings')).toBe(false)
       expect(wrapper.get<HTMLInputElement>('#excel-save-directory').element.value).toBe('表格')
-      expect(wrapper.find('.settings-save-error').exists()).toBe(false)
-      expect(wrapper.get<HTMLButtonElement>('.settings-savebar .settings-save-button').element.disabled).toBe(false)
+      expect(wrapper.get('.module-settings-dialog').isVisible()).toBe(true)
+      expect(wrapper.get('.module-settings-footer').find('.settings-error').exists()).toBe(false)
+      expect(wrapper.get<HTMLButtonElement>('.module-settings-save').element.disabled).toBe(false)
     } finally {
       wrapper.unmount()
     }

@@ -22,12 +22,22 @@ const props = defineProps<{
   busy: boolean
   workspacePath: string
   journalFormat?: FileFormat
+  /** 只渲染指定功能；模块自己的设置弹窗只展示本模块的目录规则。 */
+  features?: FileFeature[]
+  /** 在模块弹窗中直接展示字段，避免重复的卡片与功能标题。 */
+  compact?: boolean
 }>()
 const emit = defineEmits<{ 'update:modelValue': [value: FileSettings] }>()
 const editing = reactive<Record<FileFeature, boolean>>({ journal: false, excel: false, summary: false })
 const errors = reactive<Record<FileFeature, string>>({ journal: '', excel: '', summary: '' })
+/** 跨功能冲突（例如 Excel 与总结使用同一目录）可能不在当前展示的功能上，单独在顶部提示。 */
+const globalError = ref('')
 const root = ref<HTMLElement>()
 const disabled = computed(() => props.busy || !props.workspacePath)
+/** 模块设置弹窗只显示本模块负责的功能，全局目录管理已拆分到各模块。 */
+const activeFeatures = computed(() =>
+  FILE_FEATURES.filter((feature) => !props.features?.length || props.features.includes(feature.id)),
+)
 const context = computed(() => ({
   date: dayjs().format('YYYYMMDD'),
   startDate: dayjs().startOf('month').format('YYYYMMDD'),
@@ -37,7 +47,8 @@ const context = computed(() => ({
 watch(
   () => props.workspacePath,
   () => {
-    for (const { id } of FILE_FEATURES) {
+    globalError.value = ''
+    for (const { id } of activeFeatures.value) {
       editing[id] = false
       errors[id] = ''
     }
@@ -46,6 +57,7 @@ watch(
 function update(feature: FileFeature, key: 'directory' | 'filenameTemplate', value: string) {
   if (disabled.value) return
   errors[feature] = ''
+  globalError.value = ''
   const settings = cloneFileSettings(props.modelValue)
   settings[feature][key] = value
   emit('update:modelValue', settings)
@@ -95,22 +107,26 @@ function restore(feature: FileFeature) {
   const settings = cloneFileSettings(props.modelValue)
   settings[feature] = { ...DEFAULT_FILE_SETTINGS[feature] }
   errors[feature] = ''
+  globalError.value = ''
   editing[feature] = false
   emit('update:modelValue', settings)
 }
 function validate() {
-  for (const { id } of FILE_FEATURES) errors[id] = ''
+  globalError.value = ''
+  for (const { id } of activeFeatures.value) errors[id] = ''
   if (!props.workspacePath) {
-    errors.journal = '请先选择工作空间。'
+    errors[activeFeatures.value[0]?.id ?? 'journal'] = '请先选择工作空间。'
     return false
   }
   const invalid = fileSettingsError(props.modelValue)
   if (invalid) {
-    errors[invalid.feature] = invalid.message
+    if (activeFeatures.value.some((feature) => feature.id === invalid.feature))
+      errors[invalid.feature] = invalid.message
+    else globalError.value = invalid.message
     return false
   }
   const settings = cloneFileSettings(props.modelValue)
-  for (const { id } of FILE_FEATURES) {
+  for (const { id } of activeFeatures.value) {
     settings[id].directory = settings[id].directory.trim().replace(/\\/g, '/')
     settings[id].filenameTemplate = settings[id].filenameTemplate.trim()
   }
@@ -118,8 +134,14 @@ function validate() {
   return true
 }
 function focusInvalid() {
-  const feature = FILE_FEATURES.find(({ id }) => errors[id])?.id
-  if (!feature) return
+  const feature = activeFeatures.value.find(({ id }) => errors[id])?.id
+  if (!feature) {
+    if (globalError.value)
+      root.value
+        ?.querySelector<HTMLInputElement>(`#${activeFeatures.value[0]?.id ?? 'journal'}-filename-template`)
+        ?.focus()
+    return
+  }
   const field = filenameTemplateError(feature, props.modelValue[feature].filenameTemplate)
     ? 'filename-template'
     : 'save-directory'
@@ -129,16 +151,17 @@ defineExpose({ validate, focusInvalid })
 </script>
 
 <template>
-  <div ref="root" class="directory-settings">
-    <p class="field-hint">目录和文件名随当前工作空间保存。编辑完成后，点击底部“保存设置”统一应用。</p>
+  <div ref="root" class="directory-settings" :class="{ 'is-compact': compact }">
+    <p v-if="!compact" class="field-hint">目录和文件名随当前工作空间保存。编辑完成后，点击“保存设置”统一应用。</p>
+    <p v-if="globalError" class="settings-error" role="alert">{{ globalError }}</p>
     <section
-      v-for="feature in FILE_FEATURES"
+      v-for="feature in activeFeatures"
       :key="feature.id"
       class="directory-settings-card"
       :aria-labelledby="`${feature.id}-files-title`"
     >
       <header class="directory-settings-card-heading">
-        <h3 :id="`${feature.id}-files-title`">{{ feature.label }}</h3>
+        <h3 :id="`${feature.id}-files-title`" :class="{ 'sr-only': compact }">{{ feature.label }}</h3>
         <button type="button" class="text-action" :disabled="disabled" @click="restore(feature.id)">恢复默认</button>
       </header>
       <div class="excel-path-field">

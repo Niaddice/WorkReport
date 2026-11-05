@@ -11,6 +11,7 @@ import AppRail from './components/AppRail.vue'
 import SkinDialog from './components/SkinDialog.vue'
 import SettingsView from './components/SettingsView.vue'
 import SettingsDialog from './components/SettingsDialog.vue'
+import ModuleSettingsDialog from './components/ModuleSettingsDialog.vue'
 import WorkspaceGate from './components/WorkspaceGate.vue'
 import ConfirmDialog from './components/ConfirmDialog.vue'
 import SettingsLeaveDialog from './components/SettingsLeaveDialog.vue'
@@ -28,7 +29,7 @@ import { aiSummarySource, plainTextSummary } from './lib/summary'
 import { useAi } from './lib/ai'
 import ModuleBoard from './components/ModuleBoard.vue'
 import LayoutDialog from './components/LayoutDialog.vue'
-import type { DropSide, LayoutMetrics, ModuleId } from './modules/types'
+import type { DropSide, LayoutMetrics, ModuleId, ModuleType } from './modules/types'
 import { moduleType } from './modules/types'
 import { MODULE_CONTEXT, type CalendarHandle, type EditorHandle, type ModuleActions } from './modules/context'
 import { useModuleLayout } from './modules/useModuleLayout'
@@ -38,6 +39,7 @@ import { validExcelDates, useExcel } from './lib/useExcel'
 import { useSummaryOutput } from './lib/useSummaryOutput'
 import { workspaceFilesApi, type FileRequest, type FileChangeResult } from './lib/workspaceFiles'
 import { settingsApi, type WorkspaceSettings } from './lib/settingsDraft'
+import type { GlobalSettingsSection } from './lib/settingsSections'
 import {
   cloneFileSettings,
   fileSettingsApi,
@@ -107,6 +109,7 @@ watch(
 // Settings live inside the workspace, so a newly opened workspace brings its own values.
 watch(workspace, (value, previous) => {
   if (!value || value.path === previous?.path) return
+  moduleSettingsModule.value = null
   workspaceDocument.clear()
   fileOpenRevision++
   fileSettings.value = cloneFileSettings()
@@ -126,6 +129,11 @@ const excelBusy = computed(() => excelPreparing.value || excelExporting.value)
 const summarySelectionDates = ref<string[]>([])
 const refreshRevision = ref(0)
 const settingsView = ref<InstanceType<typeof SettingsView>>()
+const moduleSettingsDialog = ref<InstanceType<typeof ModuleSettingsDialog>>()
+/** 当前从模块标题栏打开设置的模块；为空表示没有模块设置弹窗。 */
+const moduleSettingsModule = ref<ModuleType | null>(null)
+const moduleSettingsVisible = computed(() => moduleSettingsModule.value !== null)
+const moduleSettingsBusy = computed(() => settingsLoading.value || settingsSaving.value || databaseBusy.value)
 const appRail = ref<InstanceType<typeof AppRail>>()
 const settingsCloseTarget = ref<'settings' | 'close'>('settings')
 function settingsButtonRect() {
@@ -240,6 +248,10 @@ function closeLayoutDialog() {
 }
 function removeModule(id: ModuleId) {
   moduleLayout.remove(id)
+}
+/** 模块标题栏齿轮：按模块类型打开对应的模块设置弹窗。 */
+function openModuleFromBoard(id: ModuleId) {
+  void openModuleSettings(moduleType(id))
 }
 async function activateModule(id: ModuleId) {
   if (page.value !== 'home') {
@@ -363,6 +375,7 @@ async function prepareForUpdate(): Promise<boolean> {
     ai.summaryGenerating.value ||
     summaryOutput.exporting.value ||
     excelBusy.value ||
+    moduleSettingsVisible.value ||
     pendingWorkspaceSwitch.value
   )
     return false
@@ -387,6 +400,8 @@ async function restoreRecentWorkspace() {
 }
 
 async function navigate(target: 'home' | 'settings', closeTarget: 'settings' | 'close' = 'settings') {
+  // 模块设置弹窗是模态的；关闭它之后再切换页面。
+  if (moduleSettingsModule.value) return
   if (
     busy.value ||
     picking.value ||
@@ -410,6 +425,7 @@ async function navigate(target: 'home' | 'settings', closeTarget: 'settings' | '
   }
 }
 async function toggleSettings() {
+  if (moduleSettingsModule.value) return
   if (page.value !== 'settings') {
     await navigate('settings')
     return
@@ -435,21 +451,46 @@ async function toggleSettings() {
     settingsLeaveBusy.value = false
   }
 }
-async function openHolidaySettings() {
+/** 打开模块自己的设置弹窗；模块标题栏齿轮与模块内「设置」入口共用。 */
+async function openModuleSettings(module: ModuleType) {
+  if (busy.value || picking.value || settingsCommitting.value || databaseBusy.value || excelBusy.value) return
+  if (page.value !== 'home') {
+    await navigate('home')
+    if ((page.value as string) !== 'home') return
+  }
+  settingsError.value = ''
+  if (!settingsReady.value) await loadWorkspaceSettings(false)
+  if (busy.value || picking.value) return
+  moduleSettingsModule.value = module
+}
+function closeModuleSettings() {
+  moduleSettingsModule.value = null
+}
+/** 模块设置里点「前往模型配置」等入口时，先关闭弹窗再去全局设置对应分类。 */
+async function openModuleGlobalSettings(section: GlobalSettingsSection) {
+  moduleSettingsModule.value = null
+  await nextTick()
   await navigate('settings')
-  if (page.value === 'settings') await settingsView.value?.navigate('holidays')
+  if (page.value === 'settings') await settingsView.value?.navigate(section)
+}
+async function saveModuleSettings(settings: WorkspaceSettings): Promise<boolean> {
+  if (settingsCommitting.value || databaseBusy.value) return false
+  const savedOk = await saveWorkspaceSettings(settings)
+  if (savedOk) pushMessage({ tone: 'success', text: '设置已保存' })
+  return savedOk
+}
+async function openHolidaySettings() {
+  await openModuleSettings('calendar')
 }
 async function openAiSettings() {
   await navigate('settings')
   if ((page.value as string) === 'settings') await settingsView.value?.navigate('ai')
 }
 async function openExcelSettings() {
-  await navigate('settings')
-  if ((page.value as string) === 'settings') await settingsView.value?.navigate('excel')
+  await openModuleSettings('excel')
 }
 async function openGitSettings() {
-  await navigate('settings')
-  if ((page.value as string) === 'settings') await settingsView.value?.navigate('git')
+  await openModuleSettings('git')
 }
 async function loadWorkspaceSettings(reload: boolean): Promise<boolean> {
   const revision = ++settingsLoadRevision
@@ -936,7 +977,7 @@ async function prepareExcel(dates: string[], prompt?: string) {
   summarySelectionDates.value = [...dates].sort()
   excel.exportError.value = ''
   if (!excelSettings.value.enabled) {
-    excel.exportError.value = '请先在设置中启用 Excel 输出。'
+    excel.exportError.value = '请先在 Excel 设置中启用输出。'
     return
   }
   const blockedReason = excelBlockedReason.value
@@ -1251,6 +1292,7 @@ function beforeUnload(event: BeforeUnloadEvent) {
     databaseBusy.value ||
     summaryOutput.exporting.value ||
     excelBusy.value ||
+    (moduleSettingsVisible.value && moduleSettingsDialog.value?.unchanged === false) ||
     (page.value === 'settings' && !settingsView.value?.unchanged)
   ) {
     event.preventDefault()
@@ -1308,6 +1350,11 @@ onMounted(async () => {
           cancelWorkspaceSwitch()
           return
         }
+        // 模块设置弹窗优先关闭；有未保存修改时先弹出弹窗内的放弃确认。
+        if (moduleSettingsVisible.value) {
+          moduleSettingsDialog.value?.requestClose()
+          return
+        }
         if (
           journal.appendingGit.value ||
           updater.busy.value ||
@@ -1363,7 +1410,7 @@ onBeforeUnmount(() => {
   >
     <div class="app-main">
       <AppToolbar
-        :inert="page === 'settings'"
+        :inert="page === 'settings' || moduleSettingsVisible"
         :page="page"
         :native-titlebar="nativeApp && isMac"
         :greeting="greeting"
@@ -1388,7 +1435,7 @@ onBeforeUnmount(() => {
           <PhCircleNotch class="spin" :size="18" aria-hidden="true" /><span>正在打开工作空间…</span>
         </main>
         <Transition name="page-switch">
-          <main v-if="workspace && !startupPending" class="home" :inert="page !== 'home'">
+          <main v-if="workspace && !startupPending" class="home" :inert="page !== 'home' || moduleSettingsVisible">
             <ModuleBoard
               ref="moduleBoard"
               :layout="layoutTree"
@@ -1398,6 +1445,7 @@ onBeforeUnmount(() => {
               @edge="moveModuleToEdge"
               @resize="resizeModules"
               @remove="removeModule"
+              @settings="openModuleFromBoard"
             />
           </main>
         </Transition>
@@ -1444,20 +1492,32 @@ onBeforeUnmount(() => {
             :before-database-transfer="journal.flush"
             :error="settingsError"
             :save="saveWorkspaceSettings"
-            :holidays="holidayState"
-            :holiday-loading="holidayLoading"
-            :holiday-syncing="holidaySyncing"
-            :holiday-error="holidayError"
-            :current-year="now.year()"
             :updater="updater"
             @database-busy="databaseActivity = $event"
             @database-transferred="onDatabaseTransferred"
-            @sync-holidays="syncHolidays"
             @back="navigate('home')"
             @workspace="chooseWorkspace"
           />
         </div>
       </SettingsDialog>
+      <ModuleSettingsDialog
+        ref="moduleSettingsDialog"
+        :visible="moduleSettingsVisible"
+        :module="moduleSettingsModule"
+        :workspace="workspace"
+        :bundle="workspaceSettings"
+        :busy="moduleSettingsBusy"
+        :error="settingsError"
+        :save="saveModuleSettings"
+        :holidays="holidayState"
+        :holiday-loading="holidayLoading"
+        :holiday-syncing="holidaySyncing"
+        :holiday-error="holidayError"
+        :current-year="now.year()"
+        @close="closeModuleSettings"
+        @open-global-settings="openModuleGlobalSettings"
+        @sync-holidays="syncHolidays"
+      />
       <FileChangesDialog ref="fileChangesDialog" />
       <SettingsLeaveDialog
         ref="settingsLeaveDialog"
@@ -1507,12 +1567,14 @@ onBeforeUnmount(() => {
       v-if="workspace"
       :key="workspace.path"
       ref="appRail"
-      :disabled="busy || excelBusy || picking"
+      :disabled="busy || excelBusy || picking || moduleSettingsVisible"
       :active="layoutItems.map((item) => item.id)"
       :hold-delay-ms="railHoldDelayMs"
       :hold-duration-ms="railHoldDurationMs"
       :settings-active="page === 'settings'"
-      :settings-busy="settingsLoading || settingsCommitting || settingsLeaveBusy || databaseBusy"
+      :settings-busy="
+        settingsLoading || settingsCommitting || settingsLeaveBusy || databaseBusy || moduleSettingsVisible
+      "
       @module="activateModule"
       @remove="removeModule"
       @refresh="refreshHome"

@@ -136,21 +136,11 @@ it('includes proxy edits in the settings save/discard flow and saves without a w
       beforeDatabaseTransfer: async () => true,
       error: '',
       save: persist,
-      holidays: { years: [], failures: [] },
-      holidayLoading: false,
-      holidaySyncing: false,
-      holidayError: '',
-      currentYear: 2026,
     },
     global: {
       stubs: {
         AppSelect: select,
-        DirectorySettings: true,
         DatabaseSettings: true,
-        ExcelSettings: true,
-        GitSettings: true,
-        SummaryOutputSettings: true,
-        HolidaySettings: true,
       },
     },
   })

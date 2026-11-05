@@ -74,8 +74,8 @@ const visibleExports = computed(() => {
 const localBlockedReason = computed(() => {
   if (!validExcelDates(dates.value)) return '请选择有效的日期或日期范围。'
   if (!defaultProvider.value) return '请先在设置中配置并选择默认 AI。'
-  if (!settings.value.enabled) return '请先在设置中启用 Excel 输出。'
-  if (!settings.value.templatePath) return '请先在设置中选择 Excel 模板。'
+  if (!settings.value.enabled) return '请先在 Excel 设置中启用输出。'
+  if (!settings.value.templatePath) return '请先在 Excel 设置中选择模板。'
   return ''
 })
 const blockedReason = localBlockedReason

@@ -370,6 +370,218 @@ md-filled-tonal-button svg[slot='icon'] {
     transform: none;
   }
 }
+
+/* 模块自己的设置：由模块标题栏的齿轮按钮打开的小型弹窗。
+   草稿、保存与校验沿用全局设置的 useSettingsDraft 与保存链路。 */
+.module-settings-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 95;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--app-gap);
+}
+.module-settings-backdrop {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  background: rgba(17, 29, 46, 0.3);
+  backdrop-filter: blur(4px);
+}
+.module-settings-dialog {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  width: min(780px, 100%);
+  /* 模块设置弹窗最高不超过 App 高度的 60%，超出内容在弹窗内部滚动。 */
+  max-height: 60%;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  border: 1px solid var(--skin-border);
+  border-radius: 16px;
+  background: var(--skin-canvas);
+  color: var(--md-sys-color-on-surface);
+  box-shadow:
+    0 24px 72px rgba(15, 28, 48, 0.24),
+    0 6px 20px rgba(15, 28, 48, 0.12);
+  outline: none;
+}
+.module-settings-heading {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 42px;
+  padding: 6px 10px 6px 18px;
+  border-bottom: 1px solid var(--skin-border);
+  background: var(--skin-surface);
+  color: var(--skin-text-secondary);
+}
+.module-settings-heading > svg {
+  flex: 0 0 auto;
+}
+.module-settings-heading h2 {
+  margin: 0;
+  font-size: var(--text-title);
+  font-weight: 500;
+}
+.module-settings-close {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  margin-left: auto;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--skin-text-muted);
+  transition:
+    background-color var(--motion-fast) ease,
+    color var(--motion-fast) ease,
+    transform var(--motion-fast) var(--motion-ease);
+}
+.module-settings-close:hover:not(:disabled) {
+  background: var(--skin-accent-soft);
+  color: var(--skin-accent);
+}
+.module-settings-close:active:not(:disabled) {
+  transform: scale(0.92);
+}
+.module-settings-body {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+  align-content: start;
+  gap: 12px;
+  overflow-y: auto;
+  padding: 16px 22px 20px;
+}
+.module-settings-description {
+  margin: 0;
+  color: var(--skin-text-muted);
+  font-size: var(--text-small);
+  line-height: 1.7;
+}
+.module-settings-section {
+  display: grid;
+  gap: 14px;
+  padding-block: 16px;
+}
+.module-settings-section:first-child {
+  padding-top: 2px;
+}
+.module-settings-section + .module-settings-section {
+  border-top: 1px solid var(--skin-border);
+}
+.module-settings-section > .settings-section-heading {
+  margin-bottom: 0;
+}
+
+/* 模块设置弹窗里的表单控件与下拉框统一为设置页的控制尺寸和对齐方式。 */
+.module-settings-body .holiday-sync-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 12px;
+}
+.module-settings-body .holiday-sync-controls > label {
+  margin-right: 2px;
+}
+.module-settings-body .holiday-sync-controls > .app-select {
+  width: 150px;
+}
+.module-settings-body .holiday-sync-button {
+  min-width: 140px;
+}
+.module-settings-body .app-select-trigger {
+  min-height: var(--control-height);
+  border-radius: 9px;
+}
+.module-settings-footer {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 10px 16px;
+  border-top: 1px solid var(--skin-border);
+  background: var(--skin-surface);
+}
+.module-settings-status {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+.module-settings-status p {
+  margin: 0;
+  font-size: var(--text-body);
+  color: var(--skin-text-secondary);
+}
+.module-settings-status p.settings-error {
+  color: var(--skin-danger);
+}
+.module-settings-actions,
+.module-settings-confirm {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 10px;
+}
+.module-settings-confirm span {
+  color: var(--skin-text-muted);
+  font-size: var(--text-small);
+}
+.module-settings-actions .settings-save-button,
+.module-settings-confirm .settings-save-button {
+  min-height: 30px;
+}
+.module-settings-fade-enter-active,
+.module-settings-fade-leave-active {
+  transition: opacity 160ms ease;
+}
+.module-settings-fade-enter-active .module-settings-dialog,
+.module-settings-fade-leave-active .module-settings-dialog {
+  transition: transform 160ms var(--motion-ease);
+}
+.module-settings-fade-enter-from,
+.module-settings-fade-leave-to {
+  opacity: 0;
+}
+.module-settings-fade-enter-from .module-settings-dialog,
+.module-settings-fade-leave-to .module-settings-dialog {
+  transform: translateY(8px) scale(0.98);
+}
+@media (max-width: 640px) {
+  .module-settings-layer {
+    padding: 6px;
+  }
+  .module-settings-body {
+    padding: 14px 14px 16px;
+  }
+  .module-settings-footer {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+  }
+  .module-settings-actions,
+  .module-settings-confirm {
+    justify-content: flex-end;
+    flex-wrap: wrap;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .module-settings-fade-enter-active,
+  .module-settings-fade-leave-active,
+  .module-settings-fade-enter-active .module-settings-dialog,
+  .module-settings-fade-leave-active .module-settings-dialog {
+    transition: none;
+  }
+}
 .settings-layout {
   flex: 1;
   min-height: 0;
@@ -2452,7 +2664,8 @@ input[type='radio'] {
   padding: 30px 12px;
 }
 /* Settings controls share one surface, size, and focus treatment. */
-.settings-page :is(input:not([type='radio']):not([type='checkbox']), textarea),
+:is(.settings-page, .module-settings-body)
+  :is(input:not([type='radio']):not([type='checkbox']):not([type='range']), textarea),
 .app-select-trigger {
   min-width: 0;
   width: 100%;
@@ -2470,23 +2683,26 @@ input[type='radio'] {
     box-shadow var(--motion-fast) ease,
     color var(--motion-fast) ease;
 }
-.settings-page input:not([type='radio']):not([type='checkbox']),
+:is(.settings-page, .module-settings-body) input:not([type='radio']):not([type='checkbox']):not([type='range']),
 .app-select-trigger {
   height: var(--control-height);
   line-height: 1.4;
 }
-.settings-page textarea {
+:is(.settings-page, .module-settings-body) textarea {
   padding-block: 9px;
 }
-.settings-page :is(input:not([type='radio']):not([type='checkbox']), textarea)::placeholder {
+:is(.settings-page, .module-settings-body)
+  :is(input:not([type='radio']):not([type='checkbox']):not([type='range']), textarea)::placeholder {
   color: var(--skin-text-faint);
 }
-.settings-page :is(input:not([type='radio']):not([type='checkbox']), textarea):hover:not(:disabled),
+:is(.settings-page, .module-settings-body)
+  :is(input:not([type='radio']):not([type='checkbox']):not([type='range']), textarea):hover:not(:disabled),
 .app-select-trigger:hover:not(:disabled) {
   border-color: var(--control-border-hover);
   background: var(--skin-surface);
 }
-.settings-page :is(input:not([type='radio']):not([type='checkbox']), textarea):focus,
+:is(.settings-page, .module-settings-body)
+  :is(input:not([type='radio']):not([type='checkbox']):not([type='range']), textarea):focus,
 .app-select-trigger[aria-expanded='true'],
 .app-select-trigger:focus-visible {
   outline: none;
@@ -2494,7 +2710,8 @@ input[type='radio'] {
   background: var(--skin-surface);
   box-shadow: 0 0 0 3px var(--control-focus-ring);
 }
-.settings-page :is(input:not([type='radio']):not([type='checkbox']), textarea):disabled,
+:is(.settings-page, .module-settings-body)
+  :is(input:not([type='radio']):not([type='checkbox']):not([type='range']), textarea):disabled,
 .app-select-trigger:disabled {
   background: var(--skin-canvas);
   border-color: var(--skin-border);
@@ -2503,14 +2720,14 @@ input[type='radio'] {
   cursor: not-allowed;
   opacity: 1;
 }
-.settings-page input[readonly]:not(:disabled) {
+:is(.settings-page, .module-settings-body) input[readonly]:not(:disabled) {
   color: var(--skin-text-secondary);
   background: var(--skin-surface);
 }
-.settings-page input[type='number'] {
+:is(.settings-page, .module-settings-body) input[type='number'] {
   font-variant-numeric: tabular-nums;
 }
-.settings-page input:is([type='radio'], [type='checkbox']) {
+:is(.settings-page, .module-settings-body) input:is([type='radio'], [type='checkbox']) {
   appearance: none;
   display: inline-grid;
   place-items: center;
@@ -2527,22 +2744,22 @@ input[type='radio'] {
     border-color var(--motion-fast) ease,
     box-shadow var(--motion-fast) ease;
 }
-.settings-page input[type='radio'] {
+:is(.settings-page, .module-settings-body) input[type='radio'] {
   border-radius: 50%;
 }
-.settings-page input[type='checkbox'] {
+:is(.settings-page, .module-settings-body) input[type='checkbox'] {
   border-radius: 5px;
 }
-.settings-page input:is([type='radio'], [type='checkbox']):hover:not(:disabled) {
+:is(.settings-page, .module-settings-body) input:is([type='radio'], [type='checkbox']):hover:not(:disabled) {
   border-color: var(--skin-accent-border);
 }
-.settings-page input:is([type='radio'], [type='checkbox']):checked {
+:is(.settings-page, .module-settings-body) input:is([type='radio'], [type='checkbox']):checked {
   border-color: var(--skin-accent);
 }
-.settings-page input[type='radio']:checked {
+:is(.settings-page, .module-settings-body) input[type='radio']:checked {
   background: var(--skin-canvas);
 }
-.settings-page input[type='radio']::after {
+:is(.settings-page, .module-settings-body) input[type='radio']::after {
   content: '';
   width: 6px;
   height: 6px;
@@ -2551,10 +2768,10 @@ input[type='radio'] {
   transform: scale(0);
   transition: transform var(--motion-fast) var(--motion-ease);
 }
-.settings-page input[type='radio']:checked::after {
+:is(.settings-page, .module-settings-body) input[type='radio']:checked::after {
   transform: scale(1);
 }
-.settings-page input[type='checkbox']::after {
+:is(.settings-page, .module-settings-body) input[type='checkbox']::after {
   content: '';
   width: 4px;
   height: 7px;
@@ -2565,17 +2782,17 @@ input[type='radio'] {
   transform: rotate(45deg) scale(0);
   transition: transform var(--motion-fast) var(--motion-ease);
 }
-.settings-page input[type='checkbox']:checked {
+:is(.settings-page, .module-settings-body) input[type='checkbox']:checked {
   background: var(--skin-accent);
 }
-.settings-page input[type='checkbox']:checked::after {
+:is(.settings-page, .module-settings-body) input[type='checkbox']:checked::after {
   transform: rotate(45deg) scale(1);
 }
-.settings-page input:is([type='radio'], [type='checkbox']):focus-visible {
+:is(.settings-page, .module-settings-body) input:is([type='radio'], [type='checkbox']):focus-visible {
   outline: none;
   box-shadow: 0 0 0 3px var(--skin-accent-border);
 }
-.settings-page input:is([type='radio'], [type='checkbox']):disabled {
+:is(.settings-page, .module-settings-body) input:is([type='radio'], [type='checkbox']):disabled {
   opacity: 0.5;
   cursor: not-allowed;
 }

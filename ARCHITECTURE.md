@@ -5,7 +5,7 @@
 ## 分层
 
 ```text
-Vue 界面层      AppRail / ModuleBoard / ModulePanel / 模块内容组件 / 布局与设置弹窗
+Vue 界面层      AppRail / ModuleBoard / ModulePanel / 模块内容组件 / 布局、全局设置与模块设置弹窗
       │
 状态编排层      useJournal  useAi  useExcel  useSummaryOutput  useAppearance  useModuleLayout
       │
@@ -34,11 +34,12 @@ useModuleLayout.ts   归一化、增删、分栏、比例、皮肤 + 串行持�
 save_ui_preferences → workreport.json 的 ui.layout（原子写入）
 ```
 
-- 模块声明与渲染分离：新增模块只需登记 `ModuleId`、实现一个通过 `useModuleContext()` 取状态的组件，并在 `src/modules/registry.ts` 注册；模块 id 在 Rust 侧按安全字符串保存，新增模块不需要改后端 schema。模块 id 固定为日历、日报编辑、数据概览、历史记录、AI 总结、Excel 周报；最近日报、放假与调休模块已移除，放假信息保留在设置中。
+- 模块声明与渲染分离：新增模块只需登记 `ModuleId`、实现一个通过 `useModuleContext()` 取状态的组件，并在 `src/modules/registry.ts` 注册；模块 id 在 Rust 侧按安全字符串保存，新增模块不需要改后端 schema。模块 id 固定为日历、日报编辑、数据概览、历史记录、AI 总结、Excel 周报；最近日报、放假与调休模块已移除，放假信息保留在日历模块设置中。
 - 右侧功能栏固定存在，进入设置页也不隐藏；设置按钮使用 `margin-top: auto` 固定在侧栏最下方，进入设置时高亮。点击模块/布局按钮会先切回首页，避免在设置页添加模块。原“布局与模块”目录弹窗改为只负责分栏操作提示与恢复默认的 `LayoutDialog`。
+- 模块设置入口由注册表驱动：`ModuleDefinition.settings` 存在时，`ModulePanel` 标题栏渲染齿轮按钮（aria-label 为“打开「模块名」设置”），点击经 `ModuleBoard` 透传到 `App.vue`，由 `ModuleSettingsDialog` 打开对应内容组件。弹窗统一提供草稿、校验、保存、未保存关闭确认与“前往模型配置”跨入口；内容组件通过 `useModuleSettingsContext()` 注入的 `draft` 读写草稿，并暴露 `validate()` / `focusInvalid()` 声明校验。新增模块只需在 registry 登记 `settings` 即可获得入口；数据概览与工作空间目录没有设置，不显示齿轮。
 - 布局是嵌套分栏树：叶子 `{ type:'leaf', id }`，分支 `{ type:'split', direction:'row'|'column', ratio, first, second }`；根节点始终填满模块板，split 的 ratio 表示 first 的占比。`src/modules/layout.ts` 用纯函数完成递归归一化、旧 `columns`/`modules`/`axis`/`order` 迁移、增删/分栏/比例计算、几何切分与拖放命中判定，由 `tests/layout.test.ts` 覆盖。保存时携带工作空间路径，Rust 校验通过才写入，切换工作空间后迟到的保存会被拒绝。
 - 拖放使用 Pointer Events 和几何计算，无第三方拖放库：按下手柄移动超过 4px 后开始拖动；指针进入另一个模块时按归一化偏移判定目标的上/下/左/右半边，渲染半区预览和“上方分栏/下方分栏”等标签；松开后 `splitLayout` 把目标叶子替换成新的 split。指针落在模块间的 gutter 上时改为高亮滑块并提示“插入此处”，松开后 `insertLayoutModuleAtGutter` 按边界叶子定位 split，把拖动模块插到相邻两个模块之间（三块各占 1/3）。目标不存在、拖回自身、拖出窗口、`Esc`、`pointercancel` 或窗口失焦都会取消，并带 aria-live 播报。
-- AI 总结模块打开后由 `SummaryModule` 自动读取所选日期原文，`AiSummaryDialog` 内嵌视图直接显示 AI/直接总结按钮，不再有准备步骤或 setup 界面；未配置默认 AI 时隐藏 AI 按钮。右上角 AI 状态图标（已配置蓝色/未配置红色）跳转设置中的 AI 分类；结果区复制使用与日报编辑一致的图标按钮，footer 只保留导出与输出目录。历史记录、Excel 周报在模块内完成，不再弹窗：`AiSummaryDialog` / `ExcelPreviewDialog` 提供 `inline` 模式复用原有内容与交互，内嵌时渲染为普通文档流 `<dialog open>`，不进入顶层 modal。模块板不再为某类模块保留固定行高，所有模块共享一屏空间，内容在模块内部滚动。
+- AI 总结模块打开后由 `SummaryModule` 自动读取所选日期原文，`AiSummaryDialog` 内嵌视图直接显示 AI/直接总结按钮，不再有准备步骤或 setup 界面；未配置默认 AI 时隐藏 AI 按钮。右上角 AI 状态图标（已配置蓝色/未配置红色）跳转全局设置的 AI 分类；结果区复制使用与日报编辑一致的图标按钮，footer 只保留导出与输出目录。历史记录、Excel 周报在模块内完成，不再弹窗：`AiSummaryDialog` / `ExcelPreviewDialog` 提供 `inline` 模式复用原有内容与交互，内嵌时渲染为普通文档流 `<dialog open>`，不进入顶层 modal。模块板不再为某类模块保留固定行高，所有模块共享一屏空间，内容在模块内部滚动。
 - 分栏之间的间隙同时是比例手柄：`layoutGeometry` 为每个 split 计算覆盖 gap 区域的 gutter（含 0/1 路径、方向、parent 矩形）。拖动 gutter 时 ModuleBoard 用 `resizeLayoutLocally` 实时生成预览布局，松手才 emit 新比例并持久化；gutter 可聚焦后用方向键微调。
 - `resizeLayoutLocally` 把 split 比例变化换算成根坐标位移，只增减间隙左右/上下两个边界叶子的占比，其他叶子占比不变，因此只改变相邻两个模块。仅当边界叶子到根的路径方向都与间隙一致时才生效；若路径穿过相反方向的嵌套分栏，无法同时保持其他叶子和几何对齐，会回退到整块子树缩放。
 - 模块板不再用 CSS grid 排布：布局树递归切分出一个无滚动的矩形区域，模块面板按像素位置绝对定位。同一个 panel 组件始终以模块 id 为 key 复用，分栏和调整比例只改变它所在的绝对矩形，不会重建日历/编辑器或丢失内部状态。模块板本身 `overflow: hidden`，不出现滚动条；每个模块面板内部独立滚动。
@@ -48,28 +49,35 @@ save_ui_preferences → workreport.json 的 ui.layout（原子写入）
 
 ## 关键文件
 
-| 文件                                       | 职责                                                                  |
-| ------------------------------------------ | --------------------------------------------------------------------- |
-| `src/App.vue`                              | 页面编排：工作空间门槛、首页/设置切换、框选总结、Excel 输出、弹窗协调 |
-| `src/components/ModuleBoard.vue`           | 分栏几何、绝对定位、拖放分栏预览、间隙拖动、最大化与无障碍播报        |
-| `src/components/ModulePanel.vue`           | 模块外壳：拖动手柄、放大/还原、移除                                   |
-| `src/components/AppRail.vue`               | 固定右侧功能栏：模块入口、布局、皮肤、刷新，设置固定在底部            |
-| `src/components/LayoutDialog.vue`          | 布局弹窗：分栏操作提示、恢复默认布局                                  |
-| `src/components/modules/HistoryModule.vue` | 历史记录模块：当天版本列表与全文预览                                  |
-| `src/components/modules/SummaryModule.vue` | AI 总结模块：自动读取原文、AI 状态入口、内嵌总结面板与导出            |
-| `src/components/modules/ExcelModule.vue`   | Excel 周报模块：同周范围、生成预览、内嵌确认输出                      |
-| `src/modules/registry.ts`                  | 模块注册表；`src/modules/layout.ts`：布局纯函数与旧布局迁移           |
-| `src/modules/context.ts`                   | 模块运行上下文（composable、动作与 handles 的注入契约）               |
-| `src/modules/useModuleLayout.ts`           | 布局状态、操作与串行持久化                                            |
-| `src/lib/useJournal.ts`                    | 日报草稿、串行自动保存、撤销栈、格式切换、索引与预览失效              |
-| `src/lib/useExcel.ts`                      | Excel 设置、日期范围校验、预览与确认两步调用                          |
-| `src-tauri/src/workspace.rs`               | 年份目录索引、按需预览、原子保存、冲突检测、双存储与迁移              |
-| `src-tauri/src/history.rs`                 | 日报版本快照：内容去重、按容量上限清理最旧日期、每天 100 份上限       |
-| `src-tauri/src/ui.rs`                      | 模块布局偏好：layout 树透传、皮肤、旧布局迁移                         |
-| `src-tauri/src/ai.rs`                      | CLI 检测与调用、HTTP 兼容接口、取消与超时、提示词拼装                 |
-| `src-tauri/src/excel.rs`                   | 模板解析、AI 填表计划校验、样式写入、预览缓存与发布                   |
-| `src-tauri/src/database.rs`                | SQLx 三库连接、工作空间隔离、按 revision 写入                         |
-| `src-tauri/src/settings.rs`                | `workreport.json` 一次性读写，临时文件 + `persist` 原子替换           |
+| 文件                                       | 职责                                                                                                            |
+| ------------------------------------------ | --------------------------------------------------------------------------------------------------------------- |
+| `src/App.vue`                              | 页面编排：工作空间门槛、首页/设置切换、框选总结、Excel 输出、模块设置弹窗与弹窗协调                             |
+| `src/components/SettingsView.vue`          | 全局设置页：工作空间、外观与字体、数据存储、网络代理、应用更新与模型配置；手动统一保存                          |
+| `src/components/ModuleSettingsDialog.vue`  | 模块设置弹窗外壳：草稿、校验、保存、未保存确认、前往全局设置                                                    |
+| `src/components/moduleSettings/`           | 六个模块设置内容组件：日历、编辑、历史记录、总结、Excel、Git                                                    |
+| `src/modules/settingsContext.ts`           | 模块设置内容组件的注入契约（draft / workspace / busy / aiReady / holidays / openGlobalSettings / syncHolidays） |
+| `src/lib/settingsSections.ts`              | 全局设置页保留的分类类型                                                                                        |
+| `src/components/ModuleBoard.vue`           | 分栏几何、绝对定位、拖放分栏预览、间隙拖动、最大化与无障碍播报                                                  |
+| `src/components/ModulePanel.vue`           | 模块外壳：拖动手柄、设置齿轮、放大/还原、移除                                                                   |
+| `src/components/AppRail.vue`               | 固定右侧功能栏：模块入口、布局、皮肤、刷新，设置固定在底部                                                      |
+| `src/components/LayoutDialog.vue`          | 布局弹窗：分栏操作提示、恢复默认布局                                                                            |
+| `src/components/modules/HistoryModule.vue` | 历史记录模块：当天版本列表与全文预览                                                                            |
+| `src/components/modules/SummaryModule.vue` | AI 总结模块：自动读取原文、AI 状态入口、内嵌总结面板与导出                                                      |
+| `src/components/modules/ExcelModule.vue`   | Excel 周报模块：同周范围、生成预览、内嵌确认输出                                                                |
+| `src/modules/registry.ts`                  | 模块注册表与模块设置元数据、帮助文案                                                                            |
+| `src/modules/types.ts`                     | 模块定义：`ModuleId`、`ModuleDefinition`（含 `settings` 元数据）与布局类型                                      |
+| `src/modules/layout.ts`                    | 布局纯函数与旧布局迁移                                                                                          |
+| `src/modules/context.ts`                   | 模块运行上下文（composable、动作与 handles 的注入契约）                                                         |
+| `src/modules/useModuleLayout.ts`           | 布局状态、操作与串行持久化                                                                                      |
+| `src/lib/useJournal.ts`                    | 日报草稿、串行自动保存、撤销栈、格式切换、索引与预览失效                                                        |
+| `src/lib/useExcel.ts`                      | Excel 设置、日期范围校验、预览与确认两步调用                                                                    |
+| `src-tauri/src/workspace.rs`               | 年份目录索引、按需预览、原子保存、冲突检测、双存储与迁移                                                        |
+| `src-tauri/src/history.rs`                 | 日报版本快照：内容去重、按容量上限清理最旧日期、每天 100 份上限                                                 |
+| `src-tauri/src/ui.rs`                      | 模块布局偏好：layout 树透传、皮肤、旧布局迁移                                                                   |
+| `src-tauri/src/ai.rs`                      | CLI 检测与调用、HTTP 兼容接口、取消与超时、提示词拼装                                                           |
+| `src-tauri/src/excel.rs`                   | 模板解析、AI 填表计划校验、样式写入、预览缓存与发布                                                             |
+| `src-tauri/src/database.rs`                | SQLx 三库连接、工作空间隔离、按 revision 写入                                                                   |
+| `src-tauri/src/settings.rs`                | `workreport.json` 一次性读写，临时文件 + `persist` 原子替换                                                     |
 
 基础组件样式位于 `src/style.css`，语义配色位于 `src/skins.css`；`src/main.ts` 最后加载 `src/desktop.css`，统一 Islands 外壳、工具窗口、Island 标签、设置与弹窗层级。标签容器通过 `.island-tabs` 共享视觉规范，保留各组件原有的 ARIA 与键盘交互；Git 等独立组件的局部 scoped 样式只负责内部布局。模块样式使用 `.module-*`、`.overview-*`、`.history-module-*`、`.summary-module-*`、`.excel-module-*` 前缀。
 
@@ -93,10 +101,12 @@ flush() → 若已有保存任务则排队 → 循环直到 draft 与已保存�
 
 工作空间设置通过 `save_workspace_settings` 写入；本机网络代理通过 `save_proxy_settings` 独立保存。
 
-1. 设置页把改动保存在 `useSettingsDraft` 的草稿中，切换分类不丢失。
-2. 点击“保存设置”时统一校验，通过后一次写入工作空间根目录的 `workreport.json`。
-3. 写入成功后才调用各模块的 `acceptSaved()`，把草稿转为基线。
-4. 未保存就离开会弹出确认框，可选择保存、放弃或继续编辑。
+1. 全局设置页只保留应用级分类——工作空间、外观与字体、数据存储、网络代理、应用更新与模型配置；改动仍保存在 `useSettingsDraft` 的草稿中，切换分类不丢失，点击“保存设置”时统一校验并一次写入工作空间根目录的 `workreport.json`。
+2. 模块设置弹窗同样使用 `useSettingsDraft`：打开时以已保存设置复制一份 `WorkspaceSettings` 草稿，内容组件通过 `useModuleSettingsContext()` 读写同一份草稿；保存仍走 `save_workspace_settings`，写入成功后才调用各模块的 `acceptSaved()` 把草稿转为基线。
+3. 校验由各模块设置内容组件暴露的 `validate()` / `focusInvalid()` 完成；目录与文件名规则复用 `DirectorySettings`，可用 `features` 只渲染本模块负责的功能（日报、Excel、总结）。
+4. 有未保存修改时，关闭模块设置弹窗会在弹窗内确认；“前往模型配置”等跨入口会先处理未保存修改，再关闭弹窗并跳转全局设置的对应分类。
+5. 放假与调休信息不在 `WorkspaceSettings` 草稿中：日历设置只提供按年份同步的动作，同步后立即写入并更新日历；网络代理仍独立保存到本机应用配置目录的 `proxy-settings.json`，不随工作空间迁移。
+6. 目录/文件名变更的迁移预览确认、数据库连接与复制迁移、AI 配置与提示词、Git 与 Excel 设置等规则不变，仍由同一保存链路处理。
 
 `ProxySettings` 的草稿接入同一套保存和离开确认流程，但保存到应用配置目录的 `proxy-settings.json`，不随工作空间迁移。`network.rs` 统一校验、原子保存和读取系统／直连／手动代理策略，供 AI、Git、更新和假日同步使用；CLI 通过子进程环境变量接收覆盖，不修改应用进程环境。更新下载开始时重新读取配置，允许用户检查更新后再调整代理。保存代理期间阻止关闭设置、切换工作空间与安装更新。
 
@@ -104,7 +114,7 @@ flush() → 若已有保存任务则排队 → 循环直到 draft 与已保存�
 
 ## GitHub 授权
 
-`github_auth.rs` 调用本机 GitHub CLI 的设备授权流程，并在收到一次性授权码后通过系统浏览器打开固定的 GitHub 授权页面。IPC 仅返回会话 ID、授权码、账号名称和进度；登录成功后从 CLI 凭据助手读取 HTTPS 凭据，直接提交到现有加密凭据存储。保存成功才发布已授权状态，Git 工作台随后通过普通 Git 操作自动读取凭据并重试，不修改全局 Git 凭据助手。会话具有取消标记、超时和输出长度限制；仓库或工作空间切换会停止轮询和取消旧会话，迟到的结果不会自动操作新仓库。`GithubAuthentication` 在设置和远程认证表单复用，GitHub CLI 自身的登录状态由 CLI 管理。
+`github_auth.rs` 调用本机 GitHub CLI 的设备授权流程，并在收到一次性授权码后通过系统浏览器打开固定的 GitHub 授权页面。IPC 仅返回会话 ID、授权码、账号名称和进度；登录成功后从 CLI 凭据助手读取 HTTPS 凭据，直接提交到现有加密凭据存储。保存成功才发布已授权状态，Git 工作台随后通过普通 Git 操作自动读取凭据并重试，不修改全局 Git 凭据助手。会话具有取消标记、超时和输出长度限制；仓库或工作空间切换会停止轮询和取消旧会话，迟到的结果不会自动操作新仓库。`GithubAuthentication` 在 Git 设置和远程认证表单复用，GitHub CLI 自身的登录状态由 CLI 管理。
 
 ## AI 与 Excel
 
@@ -113,12 +123,12 @@ flush() → 若已有保存任务则排队 → 循环直到 draft 与已保存�
 
 ## 测试策略
 
-| 层                         | 数量 | 覆盖重点                                                                                                                                                                                                   |
-| -------------------------- | ---- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 前端（Vitest）             | 280  | 分栏树归一化/迁移/几何、PointerEvent 拖放分栏与预览、间隙拖动比例、模块面板/模块板、布局动画、顶部 Message、历史/总结/Excel 内嵌模块、右侧功能栏集成、日历与农历、保存串行化、设置草稿、AI 生命周期、Excel |
-| Rust（`cargo test --lib`） | 165  | 路径穿越与符号链接、原子保存、冲突、双存储与迁移回滚、Excel 预览与发布、历史容量清理、UI 偏好迁移、AI 模拟接口                                                                                             |
+| 层                         | 数量 | 覆盖重点                                                                                                                                                                                                                                                                             |
+| -------------------------- | ---- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 前端（Vitest）             | 280  | 分栏树归一化/迁移/几何、PointerEvent 拖放分栏与预览、间隙拖动比例、模块面板/模块板、布局动画、顶部 Message、历史/总结/Excel 内嵌模块、右侧功能栏集成、日历与农历、保存串行化、设置草稿、模块设置入口与弹窗（打开、保存载荷、校验失败、未保存确认、前往全局设置）、AI 生命周期、Excel |
+| Rust（`cargo test --lib`） | 165  | 路径穿越与符号链接、原子保存、冲突、双存储与迁移回滚、Excel 预览与发布、历史容量清理、UI 偏好迁移、AI 模拟接口                                                                                                                                                                       |
 
-`tests/appModules.test.ts` 在模拟的 Tauri IPC 下打开工作空间、从右侧功能栏添加模块并核对写回的分栏布局载荷；`tests/inlineModules.test.ts` 覆盖历史版本预览、总结准备与内嵌面板、Excel 预览内嵌；`tests/moduleBoard.test.ts` 用真实 PointerEvent 覆盖拖放分栏、半区预览、Escape 取消、间隙拖动比例与浮层放大/还原；`tests/layout.test.ts` 覆盖几何与迁移纯函数；`tests/app.test.ts` 覆盖首页骨架、工作空间引导与设置页切换。另外用无头 Chromium + CDP 做过拖动/键盘/取消的渲染验收，原生 WebKit 窗口仍建议人工复核。
+`tests/appModules.test.ts` 在模拟的 Tauri IPC 下打开工作空间、从右侧功能栏添加模块并核对写回的分栏布局载荷；`tests/inlineModules.test.ts` 覆盖历史版本预览、总结准备与内嵌面板、Excel 预览内嵌；`tests/moduleBoard.test.ts` 用真实 PointerEvent 覆盖拖放分栏、半区预览、Escape 取消、间隙拖动比例与浮层放大/还原；`tests/layout.test.ts` 覆盖几何与迁移纯函数；`tests/app.test.ts` 覆盖首页骨架、工作空间引导与设置页切换；`tests/moduleSettingsDialog.test.ts` 覆盖模块设置入口与弹窗，`tests/moduleSettings*.test.ts` 覆盖六个模块设置内容组件的草稿与校验。另外用无头 Chromium + CDP 做过拖动/键盘/取消的渲染验收，原生 WebKit 窗口仍建议人工复核。
 
 ## 已知取舍
 

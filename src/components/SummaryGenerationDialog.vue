@@ -155,7 +155,9 @@ async function copy() {
             @input="emit('update:prompt', ($event.target as HTMLTextAreaElement).value)"
           />
           <div class="summary-generation-editor-hint">
-            <p id="summary-session-prompt-hint">修改仅用于本次生成，不会同步到设置；关闭后恢复设置中的提示词。</p>
+            <p id="summary-session-prompt-hint">
+              修改仅用于本次生成，不会同步到模块设置；关闭后恢复总结设置中的提示词。
+            </p>
             <span>{{ prompt.length }} / 2000</span>
           </div>
           <p v-if="blockedReason" class="settings-error" role="alert">

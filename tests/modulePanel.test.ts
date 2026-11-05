@@ -144,6 +144,38 @@ describe('module panel', () => {
     last.unmount()
   })
 
+  it('renders the settings button only when the module has its own settings', async () => {
+    const plain = mountPanel()
+    try {
+      expect(plain.find('.module-settings-button').exists()).toBe(false)
+    } finally {
+      plain.unmount()
+    }
+
+    const configured = mountPanel({ hasSettings: true })
+    try {
+      const button = configured.get('.module-settings-button')
+      expect(button.attributes('aria-label')).toBe('打开「数据概览」设置')
+      expect(button.attributes('title')).toBe('模块设置')
+      await button.trigger('click')
+      expect(configured.emitted('settings')).toHaveLength(1)
+    } finally {
+      configured.unmount()
+    }
+  })
+
+  it('keeps the settings gear out of the drag area', async () => {
+    const wrapper = mountPanel({ hasSettings: true })
+    try {
+      for (const selector of ['.module-settings-button', '.module-settings-button svg']) {
+        await wrapper.get(selector).trigger('pointerdown', { button: 0 })
+      }
+      expect(wrapper.emitted('drag-start')).toBeUndefined()
+    } finally {
+      wrapper.unmount()
+    }
+  })
+
   it('emits maximize, remove and drag gestures', async () => {
     const wrapper = mountPanel()
     await wrapper.find('.module-maximize-button').trigger('click')

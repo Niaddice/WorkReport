@@ -51,7 +51,9 @@ export interface ModuleActions {
   requestFormat(format: FileFormat): void
   requestReload(): void
   requestRestore(): void
+  /** 打开全局设置的模型配置分类（AI 为所有模块共用）。 */
   openAiSettings(): void
+  /** 以下打开对应模块自己的设置弹窗，不再跳转全局设置页。 */
   openExcelSettings(): void
   openHolidaySettings(): void
   openGitSettings(): void

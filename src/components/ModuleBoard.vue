@@ -22,6 +22,7 @@ const props = defineProps<{
 }>()
 const emit = defineEmits<{
   remove: [id: ModuleId]
+  settings: [id: ModuleId]
   split: [dragged: ModuleId, target: ModuleId, side: DropSide]
   insert: [dragged: ModuleId, path: number[]]
   edge: [dragged: ModuleId, side: 'left' | 'right']
@@ -638,6 +639,7 @@ onBeforeUnmount(() => {
         :title="moduleById(slot.id).title"
         :icon="moduleById(slot.id).icon"
         :help="moduleById(slot.id).help"
+        :has-settings="!!moduleById(slot.id).settings"
         :can-remove="true"
         :dragging="drag?.id === slot.id"
         :active="activeModule === slot.id"
@@ -645,6 +647,7 @@ onBeforeUnmount(() => {
         @activate="activateModule(slot.id)"
         @drag-start="startDrag(slot.id, $event)"
         @remove="emit('remove', slot.id)"
+        @settings="emit('settings', slot.id)"
         @toggle-maximize="toggleMaximize(slot.id)"
       >
         <template v-if="moduleById(slot.id).titleExtra" #subtitle>

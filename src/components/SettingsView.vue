@@ -1,23 +1,18 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from 'vue'
 import {
-  PhChatText,
-  PhFolderOpen,
-  PhHardDrives,
-  PhSparkle,
-  PhMonitor,
-  PhMinus,
-  PhPlus,
-  PhFileXls,
-  PhFileText,
-  PhFloppyDisk,
-  PhDatabase,
-  PhCalendarCheck,
-  PhGitBranch,
   PhArrowCircleDown,
+  PhDatabase,
+  PhFloppyDisk,
+  PhFolderOpen,
   PhGlobe,
+  PhHardDrives,
+  PhMinus,
+  PhMonitor,
+  PhPlus,
+  PhSparkle,
 } from '@phosphor-icons/vue'
-import { aiApi, type AiProvider, type DetectedCli } from '../lib/ai'
+import { aiApi, aiSettingsReady, type AiProvider, type DetectedCli } from '../lib/ai'
 import type { Workspace } from '../lib/workspace'
 import { useSettingsDraft, type WorkspaceSettings } from '../lib/settingsDraft'
 import { pushMessage } from '../lib/messages'
@@ -31,24 +26,13 @@ import {
   RAIL_HOLD_STEP_MS,
   normalizeRailHoldMs,
 } from '../lib/railHoldSettings'
-import ExcelSettings from './ExcelSettings.vue'
-import SummaryOutputSettings from './SummaryOutputSettings.vue'
-import DirectorySettings from './DirectorySettings.vue'
-import { cloneFileSettings } from '../lib/fileSettings'
 import DatabaseSettings from './DatabaseSettings.vue'
 import AppSelect from './AppSelect.vue'
-import {
-  clampHistoryLimit,
-  MAX_HISTORY_LIMIT_BYTES,
-  MIN_HISTORY_LIMIT_BYTES,
-  type DatabaseTransferResult,
-} from '../lib/database'
-import HolidaySettings from './HolidaySettings.vue'
-import type { HolidayState } from '../lib/holidays'
-import GitSettings from './GitSettings.vue'
+import type { DatabaseTransferResult } from '../lib/database'
 import UpdateSettings from './UpdateSettings.vue'
 import ProxySettings from './ProxySettings.vue'
 import type { AppUpdater } from '../lib/useUpdater'
+import type { GlobalSettingsSection } from '../lib/settingsSections'
 
 const props = defineProps<{
   workspace: Workspace | null
@@ -60,11 +44,6 @@ const props = defineProps<{
   beforeDatabaseTransfer: () => Promise<boolean>
   error: string
   save: (settings: WorkspaceSettings) => Promise<boolean>
-  holidays: HolidayState
-  holidayLoading: boolean
-  holidaySyncing: boolean
-  holidayError: string
-  currentYear: number
   updater?: AppUpdater
 }>()
 const emit = defineEmits<{
@@ -72,7 +51,6 @@ const emit = defineEmits<{
   workspace: []
   databaseBusy: [value: boolean]
   databaseTransferred: [result: DatabaseTransferResult]
-  syncHolidays: [year: number]
 }>()
 const {
   draft,
@@ -112,43 +90,14 @@ function onRailHoldInput(event: Event, key: (typeof railHoldOptions)[number]['ke
   draft.value.appearance[key] = normalizeRailHoldMs(milliseconds)
 }
 const databaseForm = ref<InstanceType<typeof DatabaseSettings>>()
-const excelForm = ref<InstanceType<typeof ExcelSettings>>()
-const summaryForm = ref<InstanceType<typeof SummaryOutputSettings>>()
-const directoryForm = ref<InstanceType<typeof DirectorySettings>>()
-const filesDraft = computed({
-  get: () => cloneFileSettings(draft.value.files, draft.value.summary.outputDirectory),
-  set: (value) => {
-    draft.value.files = value
-  },
-})
-const gitForm = ref<InstanceType<typeof GitSettings>>()
 const validationError = ref('')
-const historyLimitGb = computed(() => Math.round(draft.value.database.historyLimitBytes / (1024 * 1024 * 1024)))
-const historyLimitMinGb = MIN_HISTORY_LIMIT_BYTES / (1024 * 1024 * 1024)
-const historyLimitMaxGb = MAX_HISTORY_LIMIT_BYTES / (1024 * 1024 * 1024)
-function onHistoryLimitInput(event: Event) {
-  const value = Number((event.target as HTMLInputElement).value)
-  draft.value.database.historyLimitBytes = clampHistoryLimit(
-    Number.isFinite(value) ? value * 1024 * 1024 * 1024 : Number.NaN,
-  )
-}
 const saveError = computed(() => validationError.value || props.error || draftError.value || proxyForm.value?.error)
-const aiReady = computed(() => {
-  const provider = draft.value.ai.providers.find((item) => item.id === draft.value.ai.defaultProviderId)
-  if (!provider || !provider.name.trim()) return false
-  if (provider.kind !== 'http' && provider.kind !== 'anthropic') return provider.executable.trim().startsWith('/')
-  try {
-    const url = new URL(provider.baseUrl)
-    return !!provider.model.trim() && ['http:', 'https:'].includes(url.protocol) && !!url.hostname
-  } catch {
-    return false
-  }
-})
+const aiReady = computed(() => aiSettingsReady(draft.value.ai))
 function validateAi(): boolean {
   const ai = draft.value.ai
   if (ai.generationPreference.length > 2000 || ai.summaryPrompt.length > 2000) {
     validationError.value = 'AI 提示词不能超过 2000 字。'
-    navigate('prompts')
+    navigate('ai')
     return false
   }
   for (const provider of ai.providers) {
@@ -205,23 +154,6 @@ async function performSave(): Promise<boolean> {
     return false
   }
   if (!validateAi()) return false
-  if (gitForm.value && !gitForm.value.validate()) {
-    validationError.value = '请检查 Git 配置。'
-    await navigate('git')
-    gitForm.value?.focusInvalid()
-    return false
-  }
-  if (directoryForm.value && !directoryForm.value.validate()) {
-    validationError.value = '请检查保存目录和文件名规则。'
-    await navigate('directories')
-    directoryForm.value?.focusInvalid()
-    return false
-  }
-  if (excelForm.value && !excelForm.value.validate()) {
-    validationError.value = '请检查 Excel 输出配置。'
-    navigate('excel')
-    return false
-  }
   const savedOk = await saveDraft()
   return savedOk ? saveProxy() : false
 }
@@ -256,86 +188,48 @@ const presetOptions = [
 ]
 const pageRoot = ref<HTMLElement>()
 const contentHeading = ref<HTMLElement>()
-type SettingsSection =
-  | 'workspace'
-  | 'directories'
-  | 'appearance'
-  | 'holidays'
-  | 'ai'
-  | 'prompts'
-  | 'summary'
-  | 'excel'
-  | 'database'
-  | 'git'
-  | 'updates'
-  | 'proxy'
 const navigation = [
   {
     label: '基础设置',
     items: [
       { id: 'workspace', title: '工作空间', description: '日报与配置的保存位置', icon: PhFolderOpen },
-      { id: 'directories', title: '目录设置', description: '保存目录与日期文件名规则', icon: PhFolderOpen },
       { id: 'appearance', title: '外观与字体', description: '字号、功能栏与长按关闭', icon: PhMonitor },
-      { id: 'holidays', title: '放假信息', description: '手动同步放假与调休安排', icon: PhCalendarCheck },
       { id: 'database', title: '数据存储', description: '数据库备份、复制与迁移', icon: PhDatabase },
-      { id: 'git', title: 'Git 配置', description: '项目仓库与 AI 提交说明', icon: PhGitBranch },
       { id: 'proxy', title: '网络代理', description: '本机连接方式与代理服务器', icon: PhGlobe },
       { id: 'updates', title: '应用更新', description: '查看版本与检查更新', icon: PhArrowCircleDown },
     ],
   },
   {
     label: 'AI 助手',
-    items: [
-      { id: 'ai', title: '模型配置', description: '管理模型与默认 AI', icon: PhSparkle },
-      { id: 'prompts', title: '生成提示词', description: '设置润色与总结规则', icon: PhChatText },
-    ],
-  },
-  {
-    label: '文件输出',
-    items: [
-      { id: 'summary', title: '总结文件', description: 'Markdown 与 TXT 导出目录', icon: PhFileText },
-      { id: 'excel', title: 'Excel报告', description: '模板与填充规则', icon: PhFileXls },
-    ],
+    items: [{ id: 'ai', title: '模型配置', description: '管理模型与默认 AI', icon: PhSparkle }],
   },
 ] satisfies {
   label: string
-  items: { id: SettingsSection; title: string; description: string; icon: typeof PhFolderOpen }[]
+  items: { id: GlobalSettingsSection; title: string; description: string; icon: typeof PhFolderOpen }[]
 }[]
-const activeSection = ref<SettingsSection>('workspace')
+const activeSection = ref<GlobalSettingsSection>('workspace')
 const activeGroup = computed(() =>
   navigation.find((group) => group.items.some((item) => item.id === activeSection.value))!,
 )
 const activeItem = computed(() => activeGroup.value.items.find((item) => item.id === activeSection.value)!)
-const sectionChanges = computed<Record<SettingsSection, boolean>>(() => {
+const sectionChanges = computed<Record<GlobalSettingsSection, boolean>>(() => {
   const current = draft.value
   const stored = props.bundle
   const differs = (left: unknown, right: unknown) => JSON.stringify(left) !== JSON.stringify(right)
   return {
     workspace: false,
-    directories: differs(
-      cloneFileSettings(current.files, current.summary.outputDirectory),
-      cloneFileSettings(stored.files, stored.summary.outputDirectory),
-    ),
-    holidays: false,
     updates: false,
     proxy: !(proxyForm.value?.unchanged ?? true),
     database: differs(current.database, stored.database),
-    git: differs(current.git, stored.git),
     appearance: differs(current.appearance, stored.appearance),
     ai: differs(
       [current.ai.providers, current.ai.defaultProviderId],
       [stored.ai.providers, stored.ai.defaultProviderId],
     ),
-    prompts: differs(
-      [current.ai.generationPreference, current.ai.summaryPrompt],
-      [stored.ai.generationPreference, stored.ai.summaryPrompt],
-    ),
-    summary: differs(current.summary, stored.summary),
-    excel: differs(current.excel, stored.excel),
   }
 })
 const changedSections = computed(() => Object.values(sectionChanges.value).filter(Boolean).length)
-async function navigate(section: SettingsSection, targetId?: string) {
+async function navigate(section: GlobalSettingsSection, targetId?: string) {
   activeSection.value = section
   await nextTick()
   const scroller = pageRoot.value?.querySelector<HTMLElement>(`#settings-panel-${section}`)
@@ -500,54 +394,6 @@ function remove(id: string) {
         <div class="settings-panels">
           <Transition name="settings-panel">
             <section
-              v-show="activeSection === 'directories'"
-              id="settings-panel-directories"
-              tabindex="0"
-              class="settings-section settings-panel"
-              :inert="activeSection !== 'directories'"
-              aria-labelledby="directory-settings-title"
-            >
-              <div class="settings-section-heading">
-                <div>
-                  <h3 id="directory-settings-title">功能文件保存规则</h3>
-                  <p>分别设置日报、Excel 报告和总结的保存目录及文件名称，所有目录都位于当前工作空间内。</p>
-                </div>
-              </div>
-              <DirectorySettings
-                ref="directoryForm"
-                v-model="filesDraft"
-                :busy="busy"
-                :workspace-path="workspace?.path ?? ''"
-                :journal-format="draft.database.defaultFormat"
-              />
-            </section>
-          </Transition>
-          <Transition name="settings-panel">
-            <section
-              v-show="activeSection === 'proxy'"
-              id="settings-panel-proxy"
-              tabindex="0"
-              class="settings-section settings-panel"
-              :inert="activeSection !== 'proxy'"
-              aria-label="网络代理"
-            >
-              <ProxySettings ref="proxyForm" :busy="busy" />
-            </section>
-          </Transition>
-          <Transition name="settings-panel">
-            <section
-              v-show="activeSection === 'updates'"
-              id="settings-panel-updates"
-              tabindex="0"
-              class="settings-section settings-panel"
-              :inert="activeSection !== 'updates'"
-              aria-label="应用更新"
-            >
-              <UpdateSettings v-if="updater" :updater="updater" />
-            </section>
-          </Transition>
-          <Transition name="settings-panel">
-            <section
               v-show="activeSection === 'workspace'"
               id="settings-panel-workspace"
               tabindex="0"
@@ -704,31 +550,6 @@ function remove(id: string) {
           </Transition>
           <Transition name="settings-panel">
             <section
-              v-show="activeSection === 'holidays'"
-              id="settings-panel-holidays"
-              tabindex="0"
-              class="settings-section settings-panel"
-              :inert="activeSection !== 'holidays'"
-              aria-labelledby="holiday-settings-title"
-            >
-              <div class="settings-section-heading">
-                <div>
-                  <h3 id="holiday-settings-title">放假与调休安排</h3>
-                  <p>按需同步，让日历显示最新的年度安排。</p>
-                </div>
-              </div>
-              <HolidaySettings
-                :state="holidays"
-                :current-year="currentYear"
-                :loading="holidayLoading"
-                :syncing="holidaySyncing"
-                :error="holidayError"
-                @sync="emit('syncHolidays', $event)"
-              />
-            </section>
-          </Transition>
-          <Transition name="settings-panel">
-            <section
               v-show="activeSection === 'database'"
               id="settings-panel-database"
               tabindex="0"
@@ -739,58 +560,12 @@ function remove(id: string) {
               <div class="settings-section-heading">
                 <div>
                   <h3 id="database-settings-title">日报存储</h3>
-                  <p>设置新日报的默认格式，并按需选择文件、数据库或双存储。</p>
+                  <p>按需选择文件、数据库或双存储，并管理数据库备份与迁移。</p>
                 </div>
               </div>
-              <div class="database-field database-default-format">
-                <span id="default-format-label" class="database-field-label">新日报默认格式</span>
-                <div class="database-mode-options" role="radiogroup" aria-labelledby="default-format-label">
-                  <label :class="{ selected: draft.database.defaultFormat === 'md' }" class="database-mode-label"
-                    ><input
-                      type="radio"
-                      name="default-entry-format"
-                      value="md"
-                      :checked="draft.database.defaultFormat === 'md'"
-                      :disabled="busy"
-                      @change="draft.database.defaultFormat = 'md'"
-                    /><span class="database-mode-copy"
-                      ><strong>Markdown（.md）</strong><span>支持标题、列表与加粗，适合结构化日报。</span></span
-                    ></label
-                  ><label :class="{ selected: draft.database.defaultFormat === 'txt' }" class="database-mode-label"
-                    ><input
-                      type="radio"
-                      name="default-entry-format"
-                      value="txt"
-                      :checked="draft.database.defaultFormat === 'txt'"
-                      :disabled="busy"
-                      @change="draft.database.defaultFormat = 'txt'"
-                    /><span class="database-mode-copy"
-                      ><strong>纯文本（.txt）</strong><span>只保留纯文本，适合直接粘贴或打印。</span></span
-                    ></label
-                  >
-                </div>
-                <p class="field-hint">只影响之后新建的日报；已有日报保持原格式，可在编辑区单独切换。</p>
-              </div>
-              <div class="database-field">
-                <label class="database-field-label" for="history-limit">历史版本存储上限</label>
-                <div class="history-limit">
-                  <input
-                    id="history-limit"
-                    type="range"
-                    :min="historyLimitMinGb"
-                    :max="historyLimitMaxGb"
-                    step="1"
-                    :value="historyLimitGb"
-                    :disabled="busy"
-                    :aria-valuetext="`${historyLimitGb} GB`"
-                    @input="onHistoryLimitInput"
-                  /><output for="history-limit">{{ historyLimitGb }} GB</output>
-                </div>
-                <p class="field-hint">
-                  默认 1 GB，滑块每格 1 GB（最大 10 GB）。历史版本超过该容量时，从最旧的一天开始整天清理；单日最多保留
-                  100 个版本。
-                </p>
-              </div>
+              <p class="field-hint">
+                新日报默认格式在「编辑」模块的设置中调整，历史版本存储上限在「历史记录」模块的设置中调整。
+              </p>
               <DatabaseSettings
                 ref="databaseForm"
                 v-model="draft.database"
@@ -805,20 +580,26 @@ function remove(id: string) {
           </Transition>
           <Transition name="settings-panel">
             <section
-              v-show="activeSection === 'git'"
-              id="settings-panel-git"
+              v-show="activeSection === 'proxy'"
+              id="settings-panel-proxy"
               tabindex="0"
               class="settings-section settings-panel"
-              :inert="activeSection !== 'git'"
-              aria-labelledby="git-settings-title"
+              :inert="activeSection !== 'proxy'"
+              aria-label="网络代理"
             >
-              <div class="settings-section-heading">
-                <div>
-                  <h3 id="git-settings-title" class="sr-only">项目仓库与提交说明</h3>
-                  <p>关联项目仓库，管理提交与日报；修改后点击底部保存设置。</p>
-                </div>
-              </div>
-              <GitSettings ref="gitForm" v-model="draft.git" :busy="busy" :workspace-path="workspace?.path ?? ''" />
+              <ProxySettings ref="proxyForm" :busy="busy" />
+            </section>
+          </Transition>
+          <Transition name="settings-panel">
+            <section
+              v-show="activeSection === 'updates'"
+              id="settings-panel-updates"
+              tabindex="0"
+              class="settings-section settings-panel"
+              :inert="activeSection !== 'updates'"
+              aria-label="应用更新"
+            >
+              <UpdateSettings v-if="updater" :updater="updater" />
             </section>
           </Transition>
           <Transition name="settings-panel">
@@ -1037,117 +818,14 @@ function remove(id: string) {
               </p>
               <div class="ai-settings-footer">
                 <span
-                  >AI 润色与 AI 总结会向默认 AI 发送相关日报；Excel 输出经确认后，会发送所选日报、模板信息和 Excel
-                  输出提示词；Git 提交说明生成会发送已暂存的文件差异和提交说明提示词。</span
+                  >默认 AI 就绪：{{
+                    aiReady ? '是' : '否'
+                  }}。日报润色提示词在「编辑」模块设置中调整，框选总结提示词在「总结」模块设置中调整。</span
                 >
               </div>
               <Transition name="status-fade"
                 ><p v-if="localError" class="settings-error" role="alert">{{ localError }}</p></Transition
               >
-            </section>
-          </Transition>
-          <Transition name="settings-panel">
-            <section
-              v-show="activeSection === 'prompts'"
-              id="settings-panel-prompts"
-              tabindex="0"
-              class="settings-section settings-panel"
-              :inert="activeSection !== 'prompts'"
-              aria-labelledby="ai-prompts-title"
-            >
-              <div class="settings-section-heading">
-                <div>
-                  <h3 id="ai-prompts-title">生成规则</h3>
-                  <p>留空时使用默认规则，对所有 AI 模型生效。</p>
-                </div>
-              </div>
-              <div class="generation-preference">
-                <label for="polish-prompt">日报润色提示词</label>
-                <p id="polish-prompt-hint">追加在固定的事实、安全和格式规则之后；留空时使用默认润色规则。</p>
-                <textarea
-                  id="polish-prompt"
-                  v-model="draft.ai.generationPreference"
-                  :disabled="busy"
-                  maxlength="2000"
-                  rows="4"
-                  aria-describedby="polish-prompt-hint"
-                  placeholder="例如：简洁客观，突出已完成事项和下一步计划，保留原有条目结构。"
-                  spellcheck="false"
-                ></textarea
-                ><span class="preference-count">{{ draft.ai.generationPreference.length }} / 2000</span>
-              </div>
-              <div class="generation-preference">
-                <label for="summary-prompt">框选总结提示词</label>
-                <p id="summary-prompt-hint">用于对选中日期内的日报生成总结；留空时使用默认总结规则。</p>
-                <textarea
-                  id="summary-prompt"
-                  v-model="draft.ai.summaryPrompt"
-                  :disabled="busy"
-                  maxlength="2000"
-                  rows="4"
-                  aria-describedby="summary-prompt-hint"
-                  placeholder="例如：按项目归类，提炼成果、风险和下一步计划，控制在 500 字内。"
-                  spellcheck="false"
-                ></textarea
-                ><span class="preference-count">{{ draft.ai.summaryPrompt.length }} / 2000</span>
-              </div>
-              <p class="field-hint prompt-note">
-                提示词会追加在固定的安全与格式规则之后，对所有 AI 生效。日报内容始终作为待处理数据，不会被当作指令。
-              </p>
-              <p class="field-hint">提示词只在本机 AI 请求时使用，不会写入日报。</p>
-            </section>
-          </Transition>
-          <Transition name="settings-panel">
-            <section
-              v-show="activeSection === 'summary'"
-              id="settings-panel-summary"
-              tabindex="0"
-              class="settings-section settings-panel"
-              :inert="activeSection !== 'summary'"
-              aria-labelledby="summary-output-settings-title"
-            >
-              <div class="settings-section-heading">
-                <div>
-                  <h3 id="summary-output-settings-title">导出位置</h3>
-                  <p>Markdown 和 TXT 格式共用一个输出目录。</p>
-                </div>
-              </div>
-              <SummaryOutputSettings
-                ref="summaryForm"
-                v-model="draft.summary"
-                :workspace-path="workspace?.path ?? ''"
-                :busy="busy"
-                :directory="filesDraft.summary.directory"
-                :filename-template="filesDraft.summary.filenameTemplate"
-                @configure-directories="navigate('directories')"
-              />
-            </section>
-          </Transition>
-          <Transition name="settings-panel">
-            <section
-              v-show="activeSection === 'excel'"
-              id="settings-panel-excel"
-              tabindex="0"
-              class="settings-section settings-panel"
-              :inert="activeSection !== 'excel'"
-              aria-labelledby="excel-settings-title"
-            >
-              <div class="settings-section-heading">
-                <div>
-                  <h3 id="excel-settings-title">模板填充</h3>
-                  <p>使用默认 AI，将所选日报整理为 Excel报告。</p>
-                </div>
-              </div>
-              <ExcelSettings
-                ref="excelForm"
-                v-model="draft.excel"
-                :busy="busy"
-                :ai-ready="aiReady"
-                :workspace-path="workspace?.path ?? ''"
-                :output-directory="filesDraft.excel.directory"
-                @configure-ai="navigate('ai')"
-                @configure-directories="navigate('directories')"
-              />
             </section>
           </Transition>
         </div>

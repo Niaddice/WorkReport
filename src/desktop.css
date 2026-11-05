@@ -436,6 +436,28 @@
   font-size: var(--text-subtitle);
 }
 
+/* 模块自己的设置弹窗沿用工具窗口外观，只承载当前模块的设置。 */
+:root .app-shell .module-settings-dialog {
+  border-radius: 10px;
+  background: var(--desktop-tool);
+}
+:root .app-shell .module-settings-heading {
+  min-height: 36px;
+  padding: 4px 8px 4px 14px;
+  background: var(--desktop-frame);
+}
+.app-shell .module-settings-heading h2 {
+  font-size: var(--text-body);
+}
+.app-shell .module-settings-footer {
+  background: var(--desktop-tool);
+}
+.app-shell .module-settings-body :is(input:not([type='radio']):not([type='checkbox']):not([type='range']), textarea),
+.app-shell .module-settings-body .app-select-trigger {
+  border-radius: var(--desktop-control-radius);
+  box-shadow: none;
+}
+
 /* 偏好设置使用 IDE 式侧栏与连续表单，保留现有分类导航及保存行为。 */
 :root .app-shell .settings-dialog {
   border-radius: 10px;
@@ -618,7 +640,7 @@
   border-radius: var(--desktop-control-radius);
   min-height: 28px;
 }
-.app-shell .settings-page :is(input:not([type='radio']):not([type='checkbox']), textarea),
+.app-shell .settings-page :is(input:not([type='radio']):not([type='checkbox']):not([type='range']), textarea),
 :root .app-select-trigger {
   border-radius: var(--desktop-control-radius);
   box-shadow: none;

@@ -1,0 +1,462 @@
+/* 模块设置共用一条说明栏和一条表单栏；所有颜色跟随当前皮肤。 */
+.module-settings-dialog {
+  --module-settings-label-width: 152px;
+  --control-height: 32px;
+  width: min(860px, 100%);
+}
+:root .app-shell .module-settings-heading {
+  align-items: flex-start;
+  gap: 12px;
+  padding: 18px 20px;
+  background: var(--skin-surface);
+}
+.module-settings-icon {
+  display: grid;
+  place-items: center;
+  flex: 0 0 36px;
+  height: 36px;
+  border: 1px solid var(--skin-accent-border);
+  border-radius: 9px;
+  color: var(--skin-accent);
+  background: var(--skin-accent-soft);
+}
+.module-settings-heading-copy {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+.app-shell .module-settings-heading h2 {
+  color: var(--skin-text);
+  font-size: var(--text-title);
+  font-weight: 600;
+  line-height: 1.5;
+}
+.module-settings-heading .module-settings-description {
+  font-size: var(--text-body);
+  line-height: 1.6;
+}
+.module-settings-heading .module-settings-close {
+  flex: 0 0 28px;
+  margin-top: -4px;
+}
+.module-settings-body {
+  container: module-settings / inline-size;
+  display: block;
+  padding: 0 24px;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+.module-settings-stack,
+.module-settings-body > .git-settings {
+  display: grid;
+  gap: 0;
+}
+.module-settings-body .module-settings-section {
+  display: grid;
+  grid-template-columns: var(--module-settings-label-width) minmax(0, 1fr);
+  align-items: start;
+  gap: 24px;
+  min-width: 0;
+  padding: 22px 0;
+  scroll-margin-top: 16px;
+}
+.module-settings-section > .settings-section-heading {
+  min-width: 0;
+  padding-top: 3px;
+  margin: 0;
+}
+.module-settings-section .settings-section-heading h3 {
+  color: var(--skin-text);
+  font-size: var(--text-subtitle);
+  font-weight: 600;
+  line-height: 1.6;
+}
+.module-settings-section .settings-section-heading p {
+  margin: 6px 0 0;
+  font-size: var(--text-small);
+  line-height: 1.75;
+}
+.module-settings-section-content {
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+}
+.module-settings-body :is(.field-hint, .settings-muted, .git-hint, .settings-error) {
+  margin: 0;
+  line-height: 1.7;
+  overflow-wrap: anywhere;
+}
+.module-settings-body :is(.database-field, .excel-path-field, .generation-preference, .git-field) {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  margin: 0;
+}
+.module-settings-body
+  :is(
+    .excel-path-field > label,
+    .database-field-label,
+    .generation-preference > label,
+    .git-field > span:first-child,
+    .git-prompt-heading > label,
+    .excel-prompt-heading > label
+  ) {
+  color: var(--skin-text-body);
+  font-size: var(--text-body);
+  font-weight: 500;
+  line-height: 1.5;
+}
+.module-settings-body .generation-preference > p {
+  margin: 0;
+  color: var(--skin-text-muted);
+  font-size: var(--text-small);
+  line-height: 1.7;
+}
+.module-settings-body :is(.generation-preference > textarea, .git-field textarea) {
+  min-height: 116px;
+  padding: 9px 11px;
+  font-size: var(--text-body);
+  line-height: 1.8;
+  resize: vertical;
+}
+.module-settings-body input:not([type='range']):not([type='checkbox']):not([type='radio']),
+.module-settings-body .app-select-trigger {
+  height: var(--control-height);
+  font-size: var(--text-body);
+}
+.module-settings-body .preference-count {
+  justify-self: end;
+  color: var(--skin-text-muted);
+  font-size: var(--text-caption);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.5;
+}
+.module-settings-field-footer {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+.module-settings-body .text-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  flex-shrink: 0;
+  min-height: 28px;
+  padding: 4px 7px;
+  border-radius: var(--desktop-control-radius);
+  font-size: var(--text-small);
+  line-height: 1.5;
+}
+.module-settings-body .text-action:hover:not(:disabled) {
+  background: var(--skin-accent-soft);
+}
+.module-settings-body :is(.excel-path-control, .git-path-input) {
+  gap: 8px;
+}
+.module-settings-body :is(.excel-path-control, .git-path-input) > .text-action {
+  min-height: var(--control-height);
+  padding-inline: 10px;
+  border: 1px solid var(--skin-border);
+  background: var(--skin-surface);
+}
+.module-settings-body .database-mode-options {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+.module-settings-body .database-mode-options > label {
+  align-items: flex-start;
+  gap: 9px;
+  padding: 12px;
+  border-radius: 7px;
+  background: var(--skin-surface);
+}
+.module-settings-body .database-mode-options > label.selected {
+  background: var(--skin-accent-soft);
+}
+.module-settings-body .database-mode-options strong {
+  font-size: var(--text-body);
+}
+.module-settings-body .database-mode-copy > span {
+  font-size: var(--text-small);
+  line-height: 1.7;
+}
+.module-settings-body .directory-settings.is-compact {
+  position: relative;
+  gap: 0;
+}
+.module-settings-body .directory-settings.is-compact .directory-settings-card {
+  position: relative;
+  gap: 16px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+.directory-settings.is-compact .directory-settings-card-heading {
+  position: absolute;
+  top: -6px;
+  right: -4px;
+}
+.directory-settings.is-compact .directory-settings-card > .excel-path-field:first-of-type > label {
+  min-height: 22px;
+  padding-right: 76px;
+}
+.module-settings-body .directory-settings-preview {
+  gap: 9px;
+  padding: 10px 12px;
+  border-radius: 6px;
+  border: 1px solid var(--skin-border);
+  background: var(--skin-surface);
+}
+.module-settings-body .directory-settings-preview svg {
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+.module-settings-body .directory-settings-preview strong {
+  font-size: var(--text-small);
+  font-weight: 500;
+}
+.module-settings-body .directory-settings-preview span {
+  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', monospace;
+  font-size: var(--text-caption);
+  line-height: 1.75;
+}
+.module-settings-body .filename-placeholder-options {
+  gap: 5px;
+}
+.module-settings-body .filename-placeholder-options button {
+  padding: 3px 7px;
+  border-radius: 4px;
+  font-family: 'SFMono-Regular', Consolas, monospace;
+}
+.module-settings-ai-status {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px 12px;
+  min-width: 0;
+  padding: 8px 12px;
+  border: 1px solid var(--skin-border);
+  border-radius: 6px;
+  background: var(--skin-surface);
+  color: var(--skin-text-muted);
+  font-size: var(--text-small);
+}
+.module-settings-ai-status > span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.module-settings-ai-status.is-ready > span {
+  color: var(--skin-text-body);
+}
+.module-settings-body .holiday-sync-controls {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px 12px;
+}
+.module-settings-body .holiday-sync-controls > label {
+  grid-column: 1 / -1;
+  margin: 0;
+  font-weight: 500;
+}
+.module-settings-body .holiday-sync-controls > .app-select {
+  width: 100%;
+}
+.module-settings-body .holiday-sync-button {
+  min-height: var(--control-height);
+  min-width: 128px;
+}
+.module-settings-body .holiday-sync-status {
+  padding: 12px;
+  margin-top: 16px;
+  gap: 10px;
+  border-radius: 6px;
+}
+.module-settings-body .settings-details-list {
+  margin-top: 12px;
+}
+.module-settings-body .settings-details-list > div {
+  grid-template-columns: 82px minmax(0, 1fr);
+  gap: 12px;
+  padding-block: 10px;
+  font-size: var(--text-small);
+}
+.module-settings-body .history-limit {
+  gap: 16px;
+  padding-block: 8px;
+}
+.module-settings-dialog .history-limit input[type='range'] {
+  min-width: 0;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+.module-settings-dialog .history-limit input[type='range']:focus-visible {
+  outline: 2px solid var(--control-focus);
+  outline-offset: 4px;
+}
+.module-settings-body .history-limit output {
+  flex: 0 0 60px;
+  padding: 5px 8px;
+  border: 1px solid var(--skin-border);
+  border-radius: 5px;
+  background: var(--skin-surface);
+  text-align: center;
+  font-size: var(--text-body);
+}
+.module-settings-body .excel-enable-row {
+  gap: 16px;
+  padding: 12px;
+  border: 1px solid var(--skin-border);
+  border-radius: 7px;
+  background: var(--skin-surface);
+}
+.module-settings-body .excel-enable-copy h3 {
+  font-size: var(--text-body);
+}
+.module-settings-body .excel-enable-copy p {
+  font-size: var(--text-small);
+  line-height: 1.7;
+}
+.module-settings-body .excel-settings > .field-hint {
+  margin-top: 12px;
+}
+.module-settings-body .excel-settings-fields {
+  gap: 16px;
+  padding-top: 18px;
+}
+.module-settings-body :is(.excel-prompt-heading, .git-prompt-heading, .git-repositories-heading, .saved-git-heading) {
+  flex-wrap: wrap;
+  gap: 6px 12px;
+}
+.module-settings-body .git-repository-form {
+  border-radius: 7px;
+  background: var(--skin-surface);
+}
+.module-settings-body .git-repository-form > summary {
+  padding: 12px;
+}
+.module-settings-body .git-repository-body {
+  gap: 12px;
+  padding: 0 12px 12px;
+}
+.module-settings-body .git-repository-form summary small {
+  font-family: 'SFMono-Regular', Consolas, monospace;
+  font-size: var(--text-caption);
+}
+.module-settings-body .git-advanced {
+  padding: 0;
+  border: 0;
+}
+.module-settings-body .github-authentication {
+  gap: 10px;
+  padding: 14px;
+  border-radius: 7px;
+  background: var(--skin-surface);
+}
+.module-settings-body .github-authentication-heading {
+  font-size: var(--text-body);
+}
+.module-settings-body .github-authentication-actions {
+  flex-wrap: wrap;
+}
+.module-settings-body .saved-git-credentials {
+  gap: 10px;
+  padding-top: 14px;
+}
+.module-settings-body .saved-git-credentials h4 {
+  font-size: var(--text-body);
+}
+.app-shell .module-settings-footer {
+  flex-direction: row;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px 20px;
+  padding: 12px 20px;
+  background: var(--skin-surface);
+}
+.module-settings-footer .module-settings-status {
+  flex: 1 1 180px;
+}
+.module-settings-status p {
+  font-size: var(--text-small);
+  line-height: 1.6;
+}
+.module-settings-status.has-changes p {
+  color: var(--skin-accent);
+}
+.module-settings-status.has-error p {
+  color: var(--skin-danger);
+}
+.module-settings-footer .module-settings-confirm {
+  flex: 1 1 100%;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+.module-settings-confirm span {
+  flex: 1 1 180px;
+  line-height: 1.6;
+}
+.module-settings-actions > button {
+  min-width: 64px;
+}
+.module-settings-footer .module-settings-actions {
+  justify-content: flex-end;
+  margin-left: auto;
+}
+.module-settings-actions .module-settings-save {
+  min-width: 92px;
+  min-height: 32px;
+}
+.module-settings-dialog :is(button, summary):focus-visible {
+  outline: 2px solid var(--control-focus);
+  outline-offset: 2px;
+}
+@container module-settings (max-width: 640px) {
+  .module-settings-body .module-settings-section {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 14px;
+    padding-block: 18px;
+  }
+  .module-settings-section > .settings-section-heading {
+    padding-top: 0;
+  }
+  .module-settings-section .settings-section-heading p {
+    margin-top: 3px;
+  }
+}
+@container module-settings (max-width: 400px) {
+  .module-settings-body .database-mode-options {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .module-settings-body :is(.excel-path-control, .git-path-input) {
+    flex-wrap: wrap;
+  }
+  .module-settings-body :is(.excel-path-control, .git-path-input) input {
+    flex-basis: 100%;
+  }
+  .module-settings-body .holiday-sync-controls {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .module-settings-body .holiday-sync-button {
+    justify-self: start;
+  }
+}
+@media (max-width: 560px) {
+  :root .app-shell .module-settings-heading {
+    padding: 14px;
+  }
+  .module-settings-body {
+    padding-inline: 16px;
+  }
+  .app-shell .module-settings-footer {
+    align-items: stretch;
+    padding: 12px 14px;
+  }
+}

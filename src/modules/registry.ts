@@ -17,6 +17,12 @@ import HistoryModule from '../components/modules/HistoryModule.vue'
 import SummaryModule from '../components/modules/SummaryModule.vue'
 import OverviewModule from '../components/modules/OverviewModule.vue'
 import GitModule from '../components/modules/GitModule.vue'
+import CalendarModuleSettings from '../components/moduleSettings/CalendarModuleSettings.vue'
+import EditorModuleSettings from '../components/moduleSettings/EditorModuleSettings.vue'
+import HistoryModuleSettings from '../components/moduleSettings/HistoryModuleSettings.vue'
+import SummaryModuleSettings from '../components/moduleSettings/SummaryModuleSettings.vue'
+import ExcelModuleSettings from '../components/moduleSettings/ExcelModuleSettings.vue'
+import GitModuleSettings from '../components/moduleSettings/GitModuleSettings.vue'
 import { moduleType, type ModuleDefinition, type ModuleId } from './types'
 
 /**
@@ -32,10 +38,17 @@ export const MODULE_REGISTRY: readonly ModuleDefinition[] = [
     description: '周 / 月 / 年视图、农历与节假日、框选日报。',
     icon: PhCalendarDots,
     component: CalendarModule,
+    settings: {
+      title: '日历设置',
+      description: '同步放假与调休安排，让日历显示最新的节假日信息。',
+      component: CalendarModuleSettings,
+      savable: false,
+    },
     help: [
       '点击任意日期，切换日报编辑区显示的当天内容。',
       '在日期上按下并拖到另一天，可框选一段连续日期，用于批量查看或生成总结。',
       '顶部可切换周 / 月 / 年视图；日期上的圆点表示当天已有日报。',
+      '标题栏的齿轮按钮可打开日历设置，手动同步放假与调休信息；同步后立即应用到日历。',
     ],
     defaultEnabled: true,
   },
@@ -46,6 +59,11 @@ export const MODULE_REGISTRY: readonly ModuleDefinition[] = [
     icon: PhNotePencil,
     component: EditorModule,
     titleExtra: EditorModuleSubtitle,
+    settings: {
+      title: '编辑设置',
+      description: '设置新日报默认格式、日报保存位置与文件名规则，以及 AI 润色提示词。',
+      component: EditorModuleSettings,
+    },
     help: [
       '直接在正文区输入内容，停止输入后会自动保存；底部显示保存状态和字数。',
       '右上角「MD / TXT」切换文件格式；「复制」复制全文。',
@@ -53,6 +71,7 @@ export const MODULE_REGISTRY: readonly ModuleDefinition[] = [
       'Markdown 工具栏宽度充足时完整显示，宽度不足时从右侧依次收起到「⋯」中，变宽后自动恢复。',
       '按 ⌘S / Ctrl+S 可立即保存。',
       '目录中的文本文件会在此模块查看和编辑，Excel / CSV 以只读表格预览；通过「返回日报」回到当前日期。',
+      '标题栏的齿轮按钮可调整新日报默认格式、日报保存目录与文件名、AI 润色提示词。',
     ],
     defaultEnabled: true,
   },
@@ -76,10 +95,16 @@ export const MODULE_REGISTRY: readonly ModuleDefinition[] = [
     description: '查看当前日报的历史版本，并预览任意版本全文。',
     icon: PhClockCounterClockwise,
     component: HistoryModule,
+    settings: {
+      title: '历史记录设置',
+      description: '调整历史版本占用的存储上限，并查看快照生成与清理规则。',
+      component: HistoryModuleSettings,
+    },
     help: [
       '自动保存的历史快照每分钟最多生成一份；手动保存、切换日报或关闭应用时补存最终版本，相同内容与格式不重复记录。',
       '鼠标指向或键盘聚焦某个版本可预览全文，右侧复制图标可复制该版本原文。',
       '右键历史版本可预览、复制内容、查看当日日报或刷新；空白处右键可刷新，也支持 Shift + F10 打开菜单。',
+      '标题栏的齿轮按钮可调整历史版本存储上限。',
     ],
     defaultEnabled: false,
   },
@@ -89,12 +114,17 @@ export const MODULE_REGISTRY: readonly ModuleDefinition[] = [
     description: '对当前选中日期或当天日报生成 AI 总结或直接合并总结。',
     icon: PhSparkle,
     component: SummaryModule,
+    settings: {
+      title: '总结设置',
+      description: '管理总结导出位置、框选总结提示词，并查看默认 AI 状态。',
+      component: SummaryModuleSettings,
+    },
     help: [
       '打开模块后会自动合并所选日期的日报，直接显示为可复制的文本。',
       '点右上角「总结」直接打开生成窗口，核对日期、临时修改提示词后确认生成，在同一窗口查看进度与结果。',
-      '临时提示词只对本次生成有效，关闭后恢复设置中的内容；可修改提示词后重试。',
-      '还可以复制结果，或导出为 Markdown / TXT 到设置的总结目录。',
-      '未配置默认 AI 时，点「总结」会引导前往设置。',
+      '临时提示词只对本次生成有效，关闭后恢复总结设置中的内容；可修改提示词后重试。',
+      '还可以复制结果，或导出为 Markdown / TXT 到总结设置指定的保存位置。',
+      '未配置默认 AI 时，点「总结」会引导前往模型配置；标题栏的齿轮按钮可调整总结提示词与导出位置。',
     ],
     defaultEnabled: false,
   },
@@ -104,12 +134,17 @@ export const MODULE_REGISTRY: readonly ModuleDefinition[] = [
     description: '把所选日期范围的日报整理进 Excel 模板，预览确认后输出。',
     icon: PhFileXls,
     component: ExcelModule,
+    settings: {
+      title: 'Excel 设置',
+      description: '启用 Excel 输出，配置模板、提示词、保存位置与依赖的默认 AI。',
+      component: ExcelModuleSettings,
+    },
     help: [
       '读取当前选中的单日或日历框选范围，支持跨周、跨月和跨年。',
       '点「Xls」直接打开生成窗口，核对日期并临时编辑提示词，确认后在同一窗口查看 AI 进度和预览，再确认输出。',
-      '窗口中的提示词只对本次生成有效，关闭后恢复设置中的内容。',
+      '窗口中的提示词只对本次生成有效，关闭后恢复 Excel 设置中的内容。',
       '已导出列表自动显示与日历选择有日期交集的报告，点击文件即可预览。',
-      '首次使用需在「设置 → Excel报告」配置模板和提示词；保存目录和文件名可在「设置 → 目录设置」调整。',
+      '首次使用需点标题栏的齿轮按钮，在「Excel 设置」中启用输出并配置模板、提示词、保存位置和默认 AI。',
     ],
     defaultEnabled: false,
   },
@@ -138,13 +173,18 @@ export const MODULE_REGISTRY: readonly ModuleDefinition[] = [
     description: '多仓库 Git 工作台，管理更改、分支与同步，跨仓库多选提交并获取信息。',
     icon: PhGitBranch,
     component: GitModule,
+    settings: {
+      title: 'Git 设置',
+      description: '管理本地仓库、AI 提交说明提示词、GitHub 授权与本机凭据。',
+      component: GitModuleSettings,
+    },
     help: [
       '默认打开多仓库 Git 工作台。在仓库列表或窄屏下拉框中切换项目，点击「管理仓库」打开 Git 配置。',
       '点击「提交说明」可收起或展开提交区，较矮面板默认收起。窄面板中选择文件后展开 Diff，点击「返回文件列表」返回，提交草稿会保留。',
       '「提交历史」可勾选多条提交，支持全选当前列表、⌘ / Ctrl 单击切换选择、Shift 单击连续选择；可跨仓库选择，搜索和翻页会保留已选项。',
       '点击「获取提交信息」按仓库分组查看完整哈希、作者、时间、引用、父提交和原始说明；可复制完整信息，或编辑工作记录后追加到日历所选单日的日报。最多同时选择 500 条提交。',
       '「本地更改」查看工作区和暂存区 Diff，暂存或取消暂存文件后填写说明，只提交暂存区内容；切换仓库会保留各仓库的提交说明草稿。',
-      '提交说明旁的 AI 图标可根据已暂存更改生成说明，沿用默认 AI；在「设置 → Git 配置」自定义提示词，生成后可修改再提交。',
+      '提交说明旁的 AI 图标可根据已暂存更改生成说明，沿用默认 AI；在标题栏的「Git 设置」中自定义提示词，生成后可修改再提交。',
       '工作台支持搜索和分页浏览历史、查看提交 Diff、创建或切换分支、快进合并，以及保存和恢复 Stash。',
       'Fetch 更新远程引用，Pull 仅允许快进，Push 使用当前分支的上游；丢弃修改、删除分支和删除 Stash 需要确认。',
       'Fetch / Pull / Push 遇到 HTTP / HTTPS 认证错误时，在工作台填写用户名和密码或访问令牌后重试。可勾选加密保存到本机，后续优先自动尝试、失效后再提示认证，也可在 Git 设置中清除；不勾选则仅用于本次操作。提交后推送失败会保留本地提交。',

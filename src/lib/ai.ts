@@ -35,6 +35,21 @@ export interface DetectedCli {
   appPath?: string
   message?: string
 }
+/** 单个 AI 配置是否可直接用于总结、Excel 填充与 Git 提交说明。 */
+export function aiProviderReady(provider: AiProvider | undefined): boolean {
+  if (!provider || !provider.name.trim()) return false
+  if (provider.kind !== 'http' && provider.kind !== 'anthropic') return provider.executable.trim().startsWith('/')
+  try {
+    const url = new URL(provider.baseUrl)
+    return !!provider.model.trim() && ['http:', 'https:'].includes(url.protocol) && !!url.hostname
+  } catch {
+    return false
+  }
+}
+/** 默认 AI 是否配置完整；模块设置弹窗与全局设置页共用同一判定。 */
+export function aiSettingsReady(settings: AiSettings): boolean {
+  return aiProviderReady(settings.providers.find((provider) => provider.id === settings.defaultProviderId))
+}
 export interface AiModel {
   id: string
   name: string
