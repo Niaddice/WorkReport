@@ -132,6 +132,7 @@ const settingsView = ref<InstanceType<typeof SettingsView>>()
 const moduleSettingsDialog = ref<InstanceType<typeof ModuleSettingsDialog>>()
 /** 当前从模块标题栏打开设置的模块；为空表示没有模块设置弹窗。 */
 const moduleSettingsModule = ref<ModuleType | null>(null)
+const moduleSettingsSource = ref<ModuleId | null>(null)
 const moduleSettingsVisible = computed(() => moduleSettingsModule.value !== null)
 const moduleSettingsBusy = computed(() => settingsLoading.value || settingsSaving.value || databaseBusy.value)
 const appRail = ref<InstanceType<typeof AppRail>>()
@@ -251,7 +252,10 @@ function removeModule(id: ModuleId) {
 }
 /** 模块标题栏齿轮：按模块类型打开对应的模块设置弹窗。 */
 function openModuleFromBoard(id: ModuleId) {
-  void openModuleSettings(moduleType(id))
+  void openModuleSettings(moduleType(id), id)
+}
+function moduleSettingsButtonRect() {
+  return moduleSettingsSource.value ? (moduleBoard.value?.getSettingsRect(moduleSettingsSource.value) ?? null) : null
 }
 async function activateModule(id: ModuleId) {
   if (page.value !== 'home') {
@@ -452,7 +456,7 @@ async function toggleSettings() {
   }
 }
 /** 打开模块自己的设置弹窗；模块标题栏齿轮与模块内「设置」入口共用。 */
-async function openModuleSettings(module: ModuleType) {
+async function openModuleSettings(module: ModuleType, source: ModuleId = module) {
   if (busy.value || picking.value || settingsCommitting.value || databaseBusy.value || excelBusy.value) return
   if (page.value !== 'home') {
     await navigate('home')
@@ -461,6 +465,7 @@ async function openModuleSettings(module: ModuleType) {
   settingsError.value = ''
   if (!settingsReady.value) await loadWorkspaceSettings(false)
   if (busy.value || picking.value) return
+  moduleSettingsSource.value = source
   moduleSettingsModule.value = module
 }
 function closeModuleSettings() {
@@ -1504,6 +1509,7 @@ onBeforeUnmount(() => {
         ref="moduleSettingsDialog"
         :visible="moduleSettingsVisible"
         :module="moduleSettingsModule"
+        :button-rect="moduleSettingsButtonRect"
         :workspace="workspace"
         :bundle="workspaceSettings"
         :busy="moduleSettingsBusy"

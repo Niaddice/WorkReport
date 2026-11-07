@@ -540,22 +540,6 @@ md-filled-tonal-button svg[slot='icon'] {
 .module-settings-confirm .settings-save-button {
   min-height: 30px;
 }
-.module-settings-fade-enter-active,
-.module-settings-fade-leave-active {
-  transition: opacity 160ms ease;
-}
-.module-settings-fade-enter-active .module-settings-dialog,
-.module-settings-fade-leave-active .module-settings-dialog {
-  transition: transform 160ms var(--motion-ease);
-}
-.module-settings-fade-enter-from,
-.module-settings-fade-leave-to {
-  opacity: 0;
-}
-.module-settings-fade-enter-from .module-settings-dialog,
-.module-settings-fade-leave-to .module-settings-dialog {
-  transform: translateY(8px) scale(0.98);
-}
 @media (max-width: 640px) {
   .module-settings-layer {
     padding: 6px;
@@ -572,14 +556,6 @@ md-filled-tonal-button svg[slot='icon'] {
   .module-settings-confirm {
     justify-content: flex-end;
     flex-wrap: wrap;
-  }
-}
-@media (prefers-reduced-motion: reduce) {
-  .module-settings-fade-enter-active,
-  .module-settings-fade-leave-active,
-  .module-settings-fade-enter-active .module-settings-dialog,
-  .module-settings-fade-leave-active .module-settings-dialog {
-    transition: none;
   }
 }
 .settings-layout {

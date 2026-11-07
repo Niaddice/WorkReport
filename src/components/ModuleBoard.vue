@@ -228,7 +228,10 @@ function getModuleRect(id: ModuleId): DOMRect | null {
   const rect = panelElement(id)?.getBoundingClientRect()
   return rect && rect.width > 0 && rect.height > 0 ? rect : null
 }
-defineExpose({ reveal: revealModule, getModuleRect })
+function getSettingsRect(id: ModuleId): DOMRect | null {
+  return panelElement(id)?.querySelector('.module-settings-button')?.getBoundingClientRect() ?? null
+}
+defineExpose({ reveal: revealModule, getModuleRect, getSettingsRect })
 
 /** 窗口尺寸变化时，从当前画面矩形平滑缩放到新的布局矩形。 */
 function animateBoardResize(previous: Map<ModuleId, DOMRect>) {

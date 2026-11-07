@@ -15,6 +15,7 @@ import App from '../src/App.vue'
 import { cloneFileSettings, type FileChangesPlan } from '../src/lib/fileSettings'
 import { DEFAULT_DATABASE_SETTINGS } from '../src/lib/database'
 import type { WorkspaceSettings } from '../src/lib/settingsDraft'
+import { MAXIMIZE_DURATION, RESTORE_DURATION, windowRectTransform } from '../src/lib/windowMotion'
 
 const DEMO_WORKSPACE = '/tmp/workreport-module-settings-demo'
 
@@ -103,8 +104,11 @@ beforeEach(() => {
   })
 })
 
-async function openDemoWorkspace(): Promise<VueWrapper> {
-  const wrapper = mount(App, { attachTo: document.body, global: { stubs: { teleport: true } } })
+async function openDemoWorkspace(animated = false): Promise<VueWrapper> {
+  const wrapper = mount(App, {
+    attachTo: document.body,
+    global: { stubs: { teleport: true, ...(animated ? { transition: false } : {}) } },
+  })
   await flushPromises()
   await flushPromises()
   return wrapper
@@ -138,6 +142,129 @@ function saveCalls() {
 function savedSettings(index = 0) {
   return (saveCalls()[index]![1] as { settings: WorkspaceSettings }).settings
 }
+
+function motionScene(wrapper: VueWrapper) {
+  const gear = panel(wrapper, 'editor').get<HTMLButtonElement>('.module-settings-button').element
+  const dialog = wrapper.get<HTMLElement>('.module-settings-dialog').element
+  const backdrop = wrapper.get<HTMLElement>('.module-settings-backdrop').element
+  const close = wrapper.get<HTMLButtonElement>('.module-settings-close').element
+  const gearRect = new DOMRect(1040, 80, 28, 28)
+  const panelRect = new DOMRect(100, 100, 800, 480)
+  const closeRect = new DOMRect(850, 120, 28, 28)
+  gear.getBoundingClientRect = () => gearRect
+  dialog.getBoundingClientRect = () => panelRect
+  close.getBoundingClientRect = () => closeRect
+  const animations: { element: HTMLElement; frames: Keyframe[]; duration: number; finish: () => void }[] = []
+  for (const element of [dialog, backdrop]) {
+    element.animate = ((frames: Keyframe[], options: KeyframeAnimationOptions) => {
+      let finish!: () => void
+      let reject!: (cause: unknown) => void
+      const finished = new Promise<void>((resolve, fail) => {
+        finish = resolve
+        reject = fail
+      })
+      animations.push({ element, frames, duration: Number(options.duration), finish })
+      return { finished, cancel: () => reject(new DOMException('Cancelled', 'AbortError')) } as unknown as Animation
+    }) as typeof element.animate
+  }
+  return {
+    dialog,
+    backdrop,
+    animations,
+    gearTransform: windowRectTransform(gearRect, panelRect),
+    closeTransform: windowRectTransform(closeRect, panelRect),
+    async finish() {
+      animations.forEach((animation) => animation.finish())
+      await flushPromises()
+    },
+  }
+}
+
+describe('module settings motion and dismissal', () => {
+  it.each(['top', 'footer', 'escape', 'save'] as const)(
+    'expands from the module gear and uses the correct destination for %s',
+    async (target) => {
+      const wrapper = await openDemoWorkspace(true)
+      try {
+        const scene = motionScene(wrapper)
+        await openModuleSettings(wrapper, 'editor')
+        expect(scene.animations[0]).toMatchObject({
+          element: scene.dialog,
+          duration: MAXIMIZE_DURATION,
+          frames: [{ transform: scene.gearTransform }, { opacity: 1 }],
+        })
+        expect(scene.animations[1]).toMatchObject({
+          element: scene.backdrop,
+          duration: MAXIMIZE_DURATION,
+          frames: [{ opacity: 0 }, { opacity: 1 }],
+        })
+        await scene.finish()
+
+        await wrapper.get('.module-settings-backdrop').trigger('click')
+        expect(wrapper.get('.module-settings-dialog').isVisible()).toBe(true)
+        expect(wrapper.find('.module-settings-confirm').exists()).toBe(false)
+        if (target === 'escape') {
+          window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+        } else if (target === 'save') {
+          await wrapper.get('#polish-prompt').setValue('测试保存')
+          await wrapper.get('.module-settings-save').trigger('click')
+        } else {
+          await wrapper
+            .get(target === 'top' ? '.module-settings-close' : '.module-settings-actions .text-action')
+            .trigger('click')
+        }
+        await flushPromises()
+        expect(scene.animations[2]).toMatchObject({
+          element: scene.dialog,
+          duration: RESTORE_DURATION,
+          frames: [{ opacity: 1 }, { transform: target === 'top' ? scene.closeTransform : scene.gearTransform }],
+        })
+        expect(scene.animations[3]).toMatchObject({
+          element: scene.backdrop,
+          frames: [{ opacity: 1 }, { opacity: 0 }],
+        })
+        expect(wrapper.get('.module-settings-dialog').isVisible()).toBe(true)
+        expect(wrapper.get('.module-settings-heading h2').text()).toBe('编辑设置')
+        expect(wrapper.find('#polish-prompt').exists()).toBe(true)
+        await scene.finish()
+        expect(wrapper.get('.module-settings-dialog').isVisible()).toBe(false)
+        expect(wrapper.find('#polish-prompt').exists()).toBe(false)
+      } finally {
+        wrapper.unmount()
+      }
+    },
+  )
+
+  it.each(['top', 'footer'] as const)('retains the %s destination through discard confirmation', async (target) => {
+    const wrapper = await openDemoWorkspace(true)
+    try {
+      const scene = motionScene(wrapper)
+      await openModuleSettings(wrapper, 'editor')
+      await scene.finish()
+      await wrapper.get('#polish-prompt').setValue('临时修改')
+      await wrapper.get('.module-settings-backdrop').trigger('click')
+      expect(wrapper.find('.module-settings-confirm').exists()).toBe(false)
+      await wrapper
+        .get(target === 'top' ? '.module-settings-close' : '.module-settings-actions .text-action')
+        .trigger('click')
+      await wrapper.get('.module-settings-backdrop').trigger('click')
+      expect(wrapper.get('.module-settings-confirm').text()).toContain('关闭后将丢失这些修改')
+      await wrapper.get('.module-settings-confirm .settings-save-button').trigger('click')
+      await flushPromises()
+      expect(scene.animations[2]!.frames[1]!.transform).toBe(
+        target === 'top' ? scene.closeTransform : scene.gearTransform,
+      )
+      expect(wrapper.get<HTMLTextAreaElement>('#polish-prompt').element.value).toBe('临时修改')
+      await scene.finish()
+      await openModuleSettings(wrapper, 'editor')
+      await scene.finish()
+      expect(wrapper.get<HTMLTextAreaElement>('#polish-prompt').element.value).toBe('')
+      expect(saveCalls()).toHaveLength(0)
+    } finally {
+      wrapper.unmount()
+    }
+  })
+})
 
 describe('module settings entry in module title bars', () => {
   it('keeps only global categories in the settings page', async () => {

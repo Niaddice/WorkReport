@@ -9,11 +9,14 @@ import { useSettingsDraft, type WorkspaceSettings } from '../lib/settingsDraft'
 import { aiSettingsReady } from '../lib/ai'
 import type { HolidayState } from '../lib/holidays'
 import type { GlobalSettingsSection } from '../lib/settingsSections'
+import { createSurfaceMotion } from '../lib/surfaceMotion'
+import type { WindowMotionRect } from '../lib/windowMotion'
 
 const props = defineProps<{
   visible: boolean
   /** 当前打开的模块；没有模块时弹窗为空。 */
   module: ModuleType | null
+  buttonRect?: () => WindowMotionRect | null
   workspace: Workspace | null
   /** 打开弹窗时的已保存设置，作为草稿基线。 */
   bundle: WorkspaceSettings
@@ -34,17 +37,50 @@ const emit = defineEmits<{
   'sync-holidays': [year: number]
 }>()
 
-const moduleDefinition = computed(() => (props.module ? moduleById(props.module) : undefined))
+// 父组件关闭时会清空 module；收缩结束前保留标题、表单及布局。
+const displayedModule = ref(props.module)
+const moduleDefinition = computed(() => (displayedModule.value ? moduleById(displayedModule.value) : undefined))
 const definition = computed(() => moduleDefinition.value?.settings)
 const savable = computed(() => definition.value?.savable !== false)
 const titleId = useId()
 const panel = ref<HTMLElement>()
+const backdrop = ref<HTMLElement>()
+const closeButton = ref<HTMLButtonElement>()
 const body = ref<HTMLElement>()
 const content = ref<{ validate?: () => boolean; focusInvalid?: () => void }>()
 const localError = ref('')
-type PendingAction = { kind: 'close' } | { kind: 'global'; section: GlobalSettingsSection }
+type CloseTarget = 'settings' | 'close'
+type PendingAction = { kind: 'close'; target: CloseTarget } | { kind: 'global'; section: GlobalSettingsSection }
 const pendingAction = ref<PendingAction | null>(null)
 let returnFocus: HTMLElement | null = null
+let closeTarget: CloseTarget = 'settings'
+const motion = createSurfaceMotion({
+  openingRect: () => props.buttonRect?.(),
+  closingRect: () => (closeTarget === 'close' ? closeButton.value?.getBoundingClientRect() : props.buttonRect?.()),
+  backdrop: () => backdrop.value,
+})
+function enter(_element: Element, done: () => void) {
+  if (panel.value) motion.enter(panel.value, done)
+  else done()
+}
+function leave(_element: Element, done: () => void) {
+  if (panel.value) motion.leave(panel.value, done)
+  else done()
+}
+function afterLeave() {
+  if (props.visible) return
+  displayedModule.value = null
+  pendingAction.value = null
+  localError.value = ''
+  const focused = document.activeElement
+  if (
+    !document.querySelector('dialog[open]:not(.is-inline)') &&
+    returnFocus?.isConnected &&
+    (focused === document.body || (focused && panel.value?.contains(focused)))
+  )
+    returnFocus.focus({ preventScroll: true })
+  returnFocus = null
+}
 
 const {
   draft,
@@ -64,19 +100,21 @@ const aiReady = computed(() => aiSettingsReady(draft.value.ai))
 
 function requestGlobalSettings(section: GlobalSettingsSection) {
   if (busy.value) return
+  closeTarget = 'settings'
   if (!savable.value || unchanged.value) {
     emit('open-global-settings', section)
     return
   }
   pendingAction.value = { kind: 'global', section }
 }
-function requestClose() {
-  if (busy.value) return
+function requestClose(target: CloseTarget = 'settings') {
+  if (!props.visible || busy.value) return
+  closeTarget = target
   if (!savable.value || unchanged.value) {
     emit('close')
     return
   }
-  pendingAction.value = { kind: 'close' }
+  pendingAction.value = { kind: 'close', target }
 }
 function cancelPending() {
   pendingAction.value = null
@@ -84,15 +122,11 @@ function cancelPending() {
 function confirmDiscard() {
   const action = pendingAction.value
   if (!action) return
-  pendingAction.value = null
-  localError.value = ''
-  resetDraft()
   if (action.kind === 'global') emit('open-global-settings', action.section)
-  else emit('close')
-}
-function onBackdrop() {
-  if (pendingAction.value) cancelPending()
-  else requestClose()
+  else {
+    closeTarget = action.target
+    emit('close')
+  }
 }
 async function saveSettings() {
   if (!savable.value || busy.value || unchanged.value) return
@@ -104,7 +138,10 @@ async function saveSettings() {
     content.value?.focusInvalid?.()
     return
   }
-  if (await saveDraft()) emit('close')
+  if (await saveDraft()) {
+    closeTarget = 'settings'
+    emit('close')
+  }
 }
 function onKeydown(event: KeyboardEvent) {
   if (!props.visible || event.key !== 'Escape' || event.defaultPrevented) return
@@ -116,9 +153,20 @@ function onKeydown(event: KeyboardEvent) {
   else requestClose()
 }
 watch(
+  () => props.module,
+  (module) => {
+    if (module) {
+      displayedModule.value = module
+      if (props.visible) resetDraft()
+    }
+  },
+  { flush: 'sync' },
+)
+watch(
   () => props.visible,
   async (visible) => {
     if (visible) {
+      closeTarget = 'settings'
       pendingAction.value = null
       localError.value = ''
       if (!definition.value) {
@@ -131,21 +179,9 @@ watch(
       await nextTick()
       body.value?.scrollTo({ top: 0 })
       if (props.visible) panel.value?.focus({ preventScroll: true })
-    } else {
-      pendingAction.value = null
-      localError.value = ''
-      await nextTick()
-      if (!props.visible && returnFocus?.isConnected) returnFocus.focus({ preventScroll: true })
-      returnFocus = null
     }
   },
-  { immediate: true, flush: 'post' },
-)
-watch(
-  () => props.module,
-  () => {
-    if (props.visible) resetDraft()
-  },
+  { immediate: true },
 )
 
 provide<ModuleSettingsContext>(MODULE_SETTINGS_CONTEXT, {
@@ -167,15 +203,24 @@ provide<ModuleSettingsContext>(MODULE_SETTINGS_CONTEXT, {
 onMounted(() => window.addEventListener('keydown', onKeydown))
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', onKeydown)
+  motion.dispose()
 })
 
 defineExpose({ requestClose, unchanged, isOpen: () => props.visible })
 </script>
 
 <template>
-  <Transition name="module-settings-fade">
+  <Transition
+    :css="false"
+    appear
+    @enter="enter"
+    @leave="leave"
+    @after-leave="afterLeave"
+    @enter-cancelled="motion.cancel()"
+    @leave-cancelled="motion.cancel()"
+  >
     <div v-show="visible" class="module-settings-layer" :inert="!visible">
-      <div class="module-settings-backdrop" aria-hidden="true" @click.self="onBackdrop"></div>
+      <div ref="backdrop" class="module-settings-backdrop" aria-hidden="true"></div>
       <section
         ref="panel"
         class="module-settings-dialog"
@@ -196,18 +241,19 @@ defineExpose({ requestClose, unchanged, isOpen: () => props.visible })
             </p>
           </div>
           <button
+            ref="closeButton"
             type="button"
             class="module-settings-close"
             aria-label="关闭模块设置"
             title="关闭（Esc）"
             :disabled="busy"
-            @click="requestClose"
+            @click="requestClose('close')"
           >
             <PhX :size="17" aria-hidden="true" />
           </button>
         </header>
         <div ref="body" class="module-settings-body">
-          <component :is="definition?.component" v-if="definition && visible" ref="content" />
+          <component :is="definition?.component" v-if="definition" ref="content" />
         </div>
         <footer class="module-settings-footer">
           <div
@@ -233,7 +279,7 @@ defineExpose({ requestClose, unchanged, isOpen: () => props.visible })
             <button type="button" class="settings-save-button" @click="confirmDiscard">放弃修改</button>
           </div>
           <div v-else class="module-settings-actions">
-            <button v-if="savable" type="button" class="text-action" @click="requestClose">
+            <button v-if="savable" type="button" class="text-action" @click="requestClose()">
               {{ unchanged ? '关闭' : '取消' }}
             </button>
             <button
@@ -245,7 +291,7 @@ defineExpose({ requestClose, unchanged, isOpen: () => props.visible })
             >
               {{ saving ? '正在保存…' : '保存设置' }}
             </button>
-            <button v-else type="button" class="settings-save-button module-settings-save" @click="requestClose">
+            <button v-else type="button" class="settings-save-button module-settings-save" @click="requestClose()">
               完成
             </button>
           </div>
