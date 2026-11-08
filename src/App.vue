@@ -984,6 +984,10 @@ function onHistoryKeydown(event: KeyboardEvent) {
   if (saveShortcut(event, isMac)) {
     if (document.querySelector('dialog[open]:not(.is-inline)')) return
     event.preventDefault()
+    if (page.value === 'settings') {
+      void settingsView.value?.save()
+      return
+    }
     if (workspaceDocument.path.value) {
       void workspaceDocument.flush()
     } else {

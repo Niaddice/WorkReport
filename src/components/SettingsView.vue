@@ -14,8 +14,12 @@ import {
   PhSparkle,
   PhCircleNotch,
   PhCheck,
+  PhCopy,
+  PhEye,
+  PhEyeSlash,
   PhX,
 } from '@phosphor-icons/vue'
+import { isMacPlatform } from '../lib/shortcuts'
 import { aiApi, aiSettingsReady, type AiProvider, type DetectedCli, type TestProviderResult } from '../lib/ai'
 import { api, type Entry, type Workspace } from '../lib/workspace'
 import { useSettingsDraft, type WorkspaceSettings } from '../lib/settingsDraft'
@@ -83,6 +87,29 @@ const busy = computed(
     (proxyForm.value?.loading ?? false) ||
     (proxyForm.value?.saving ?? false),
 )
+const isMac = isMacPlatform()
+const visibleKeyProviderIds = ref<Record<string, boolean>>({})
+function toggleKeyVisibility(providerId: string) {
+  visibleKeyProviderIds.value[providerId] = !visibleKeyProviderIds.value[providerId]
+}
+const copiedKeyProviderId = ref<string | null>(null)
+let copyTimer: ReturnType<typeof setTimeout> | null = null
+
+async function copyApiKey(apiKey: string, providerId: string) {
+  if (!apiKey) return
+  try {
+    await navigator.clipboard.writeText(apiKey)
+    copiedKeyProviderId.value = providerId
+    if (copyTimer) clearTimeout(copyTimer)
+    copyTimer = setTimeout(() => {
+      copiedKeyProviderId.value = null
+    }, 1500)
+    pushMessage({ tone: 'success', text: '已复制 API Key 到剪贴板' })
+  } catch {
+    pushMessage({ tone: 'error', text: '复制失败，请手动选择复制' })
+  }
+}
+
 const railHoldOptions = [
   { key: 'railHoldDelayMs', label: '长按等待时间', description: '按住已打开模块的功能按钮，等待此时长后显示进度圈。' },
   {
@@ -850,16 +877,52 @@ async function testConnection(provider: AiProvider) {
                                     ? 'https://api.anthropic.com/v1'
                                     : 'https://example.com/v1'
                                 "
-                                spellcheck="false" /></label
-                            ><label
-                              >API Key<input
-                                v-model="provider.apiKey"
-                                :disabled="busy"
-                                type="password"
-                                placeholder="填写 API Key，本地服务可留空"
-                                autocomplete="off"
-                                spellcheck="false" /></label
-                            ><ModelPicker
+                                spellcheck="false"
+                              />
+                            </label>
+                            <label class="setting-secret-field">
+                              <span class="setting-field-title">API Key</span>
+                              <div class="setting-secret-input-wrap">
+                                <input
+                                  v-model="provider.apiKey"
+                                  :disabled="busy"
+                                  :type="visibleKeyProviderIds[provider.id] ? 'text' : 'password'"
+                                  placeholder="填写 API Key，本地服务可留空"
+                                  autocomplete="off"
+                                  spellcheck="false"
+                                />
+                                <div class="setting-secret-actions">
+                                  <button
+                                    v-if="provider.apiKey"
+                                    type="button"
+                                    class="secret-action-btn"
+                                    :title="copiedKeyProviderId === provider.id ? '已复制' : '复制 API Key'"
+                                    :aria-label="copiedKeyProviderId === provider.id ? '已复制' : '复制 API Key'"
+                                    :disabled="busy"
+                                    @click="copyApiKey(provider.apiKey, provider.id)"
+                                  >
+                                    <PhCheck v-if="copiedKeyProviderId === provider.id" :size="14" aria-hidden="true" />
+                                    <PhCopy v-else :size="14" aria-hidden="true" />
+                                  </button>
+                                  <button
+                                    type="button"
+                                    class="secret-action-btn"
+                                    :title="visibleKeyProviderIds[provider.id] ? '隐藏 API Key' : '显示 API Key'"
+                                    :aria-label="visibleKeyProviderIds[provider.id] ? '隐藏 API Key' : '显示 API Key'"
+                                    :disabled="busy"
+                                    @click="toggleKeyVisibility(provider.id)"
+                                  >
+                                    <PhEyeSlash
+                                      v-if="visibleKeyProviderIds[provider.id]"
+                                      :size="14"
+                                      aria-hidden="true"
+                                    />
+                                    <PhEye v-else :size="14" aria-hidden="true" />
+                                  </button>
+                                </div>
+                              </div>
+                            </label>
+                            <ModelPicker
                               v-model="provider.model"
                               :base-url="provider.baseUrl"
                               :api-key="provider.apiKey"
@@ -974,7 +1037,10 @@ async function testConnection(provider: AiProvider) {
           <p v-else-if="databaseBusy">正在处理数据库操作…</p>
           <p v-else-if="busy">正在保存全部设置…</p>
           <p v-else-if="!unchanged">{{ changedSections }} 个设置分类待保存</p>
-          <p v-else>{{ saved ? '设置已保存' : '所有修改已保存' }}</p>
+          <p v-else class="settings-save-saved">
+            <PhCheck v-if="saved" :size="15" class="saved-check-icon" aria-hidden="true" />
+            {{ saved ? '设置已保存' : '所有修改已保存' }}
+          </p>
           <span>{{ unchanged ? '修改设置后，在这里统一保存。' : '切换分类会保留修改，点击保存后统一生效。' }}</span>
         </div>
         <button
@@ -986,6 +1052,7 @@ async function testConnection(provider: AiProvider) {
           <PhFloppyDisk :size="18" aria-hidden="true" /><Transition name="button-label" mode="out-in"
             ><span :key="String(busy)">{{ busy ? '正在保存…' : '保存设置' }}</span></Transition
           >
+          <kbd v-if="!busy" class="settings-save-kbd" aria-hidden="true">{{ isMac ? '⌘S' : 'Ctrl+S' }}</kbd>
         </button>
       </div>
     </footer>

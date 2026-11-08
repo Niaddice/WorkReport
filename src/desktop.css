@@ -641,6 +641,15 @@
   border-radius: var(--desktop-control-radius);
   min-height: 28px;
 }
+.app-shell .settings-save-kbd {
+  height: 16px;
+  padding: 0 4px;
+  font-size: 10px;
+  border-radius: 3px;
+}
+.app-shell .setting-secret-input-wrap input {
+  padding-right: 60px;
+}
 .app-shell .settings-page :is(input:not([type='radio']):not([type='checkbox']):not([type='range']), textarea),
 :root .app-select-trigger {
   border-radius: var(--desktop-control-radius);

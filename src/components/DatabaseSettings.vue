@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { isTauri } from '@tauri-apps/api/core'
-import { PhArrowsLeftRight, PhDatabase, PhPlugsConnected } from '@phosphor-icons/vue'
+import { PhArrowsLeftRight, PhDatabase, PhEye, PhEyeSlash, PhPlugsConnected } from '@phosphor-icons/vue'
 import SettingHint from './SettingHint.vue'
 import {
   cloneDatabaseSettings,
@@ -51,6 +51,7 @@ const tlsOptions = [
   { value: 'verifyFull', label: 'TLS 并校验证书与主机' },
   { value: 'disabled', label: '不使用 TLS' },
 ]
+const showPassword = ref(false)
 const pendingAction = ref<DatabaseTransferAction | null>(null)
 const conflictPolicy = ref<DatabaseConflictPolicy>('abort')
 const confirmOverwrite = ref(false)
@@ -355,17 +356,32 @@ defineExpose({ validate })
                   />
                 </div>
                 <div class="database-field">
-                  <label for="database-password">密码</label
-                  ><input
-                    id="database-password"
-                    :value="draft.password"
-                    :disabled="formBusy"
-                    type="password"
-                    placeholder="按数据库要求填写，可留空"
-                    spellcheck="false"
-                    autocomplete="new-password"
-                    @input="update({ password: ($event.target as HTMLInputElement).value })"
-                  />
+                  <label for="database-password">密码</label>
+                  <div class="setting-secret-input-wrap">
+                    <input
+                      id="database-password"
+                      :value="draft.password"
+                      :disabled="formBusy"
+                      :type="showPassword ? 'text' : 'password'"
+                      placeholder="按数据库要求填写，可留空"
+                      spellcheck="false"
+                      autocomplete="new-password"
+                      @input="update({ password: ($event.target as HTMLInputElement).value })"
+                    />
+                    <div class="setting-secret-actions">
+                      <button
+                        type="button"
+                        class="secret-action-btn"
+                        :title="showPassword ? '隐藏密码' : '显示密码'"
+                        :aria-label="showPassword ? '隐藏密码' : '显示密码'"
+                        :disabled="formBusy"
+                        @click="showPassword = !showPassword"
+                      >
+                        <PhEyeSlash v-if="showPassword" :size="14" aria-hidden="true" />
+                        <PhEye v-else :size="14" aria-hidden="true" />
+                      </button>
+                    </div>
+                  </div>
                 </div>
                 <div class="database-field">
                   <div class="setting-field-header">
