@@ -57,6 +57,17 @@ pub struct Preview {
     pub date: String,
     pub preview: String,
 }
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchResultItem {
+    pub kind: &'static str,
+    pub date: Option<String>,
+    pub path: String,
+    pub title: String,
+    pub format: Option<Format>,
+    pub snippet: String,
+    pub match_count: usize,
+}
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DailyActivity {
@@ -186,6 +197,53 @@ fn preview_text(content: &str) -> String {
         .chars()
         .take(80)
         .collect()
+}
+fn count_occurrences(haystack_lower: &str, needle_lower: &str) -> usize {
+    if needle_lower.is_empty() {
+        return 0;
+    }
+    haystack_lower.matches(needle_lower).count()
+}
+fn build_search_snippet(content: &str, terms: &[String]) -> String {
+    for raw_line in content.lines() {
+        let cleaned = raw_line.trim();
+        if cleaned.is_empty() {
+            continue;
+        }
+        let lower_chars: Vec<char> = cleaned.chars().flat_map(char::to_lowercase).collect();
+        let orig_chars: Vec<char> = cleaned.chars().collect();
+        // When lowercasing preserves 1-to-1 char length, slice around the exact char index.
+        if lower_chars.len() == orig_chars.len() {
+            let lower_str: String = lower_chars.iter().collect();
+            if let Some(term) = terms.iter().find(|t| lower_str.contains(t.as_str())) {
+                if let Some(byte_idx) = lower_str.find(term.as_str()) {
+                    let char_idx = lower_str[..byte_idx].chars().count();
+                    let term_chars = term.chars().count();
+                    let start = char_idx.saturating_sub(24);
+                    let end = (char_idx + term_chars + 56).min(orig_chars.len());
+                    let mut snippet = String::new();
+                    if start > 0 {
+                        snippet.push('…');
+                    }
+                    snippet.extend(&orig_chars[start..end]);
+                    if end < orig_chars.len() {
+                        snippet.push('…');
+                    }
+                    return snippet;
+                }
+            }
+        } else {
+            let lower = cleaned.to_lowercase();
+            if terms.iter().any(|t| lower.contains(t.as_str())) {
+                let mut snippet: String = orig_chars.iter().take(80).collect();
+                if orig_chars.len() > 80 {
+                    snippet.push('…');
+                }
+                return snippet;
+            }
+        }
+    }
+    preview_text(content)
 }
 fn entry_preview(path: &Path) -> String {
     let file = match fs::File::open(path) {
@@ -647,6 +705,182 @@ impl Workspace {
             .map(|record| (record.relative_path, record.date)).collect();
         for node in &mut nodes { node.journal_date = dates.get(&node.path).cloned(); node.protected = crate::directory_ops::is_protected(self, &node.path); }
         Ok(nodes)
+    }
+
+    /// 全局全文检索：搜索工作空间内的所有日报（支持文件或数据库存储）与普通文本文件。
+    pub fn search(&mut self, query: &str, limit: usize) -> Result<Vec<SearchResultItem>, String> {
+        let trimmed = query.trim();
+        if trimmed.is_empty() {
+            return Ok(Vec::new());
+        }
+        let limit = limit.clamp(1, 100);
+        let terms: Vec<String> = trimmed
+            .split_whitespace()
+            .map(|term| term.to_lowercase())
+            .filter(|term| !term.is_empty())
+            .collect();
+        if terms.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let mut scored: Vec<(u8, String, usize, SearchResultItem)> = Vec::new();
+
+        // 1. 搜索日报（根据当前存储模式读取）
+        let journal_items: Vec<(String, String, String, Format, String)> = if self.database_only() {
+            let database = self.connected_database()?;
+            let records = database::run_blocking(|| database.list())?;
+            let mut items = Vec::with_capacity(records.len());
+            for record in records {
+                let filename = self.journal_filename(&record.date, record.format)?;
+                items.push((record.date, filename.clone(), filename, record.format, record.content));
+            }
+            items
+        } else {
+            let found = self.scan()?;
+            let mut items = Vec::with_capacity(found.len());
+            for (date, file) in found {
+                let Ok(document) = self.read_file(&date, file.format) else {
+                    continue;
+                };
+                let rel_path = file_rules::relative_path(&self.root, &file.path)
+                    .unwrap_or_else(|_| file.filename.clone());
+                items.push((date, rel_path, file.filename, file.format, document.content));
+            }
+            items
+        };
+
+        for (date, path, filename, format, content) in journal_items {
+            let formatted_dash = if date.len() == 8 {
+                format!("{}-{}-{}", &date[0..4], &date[4..6], &date[6..8])
+            } else {
+                date.clone()
+            };
+            let formatted_cn = if date.len() == 8 {
+                format!("{}年{}月{}日", &date[0..4], &date[4..6], &date[6..8])
+            } else {
+                date.clone()
+            };
+            let meta_lower = format!(
+                "{} {} {} {} {}",
+                date.to_lowercase(),
+                formatted_dash.to_lowercase(),
+                formatted_cn.to_lowercase(),
+                filename.to_lowercase(),
+                path.to_lowercase()
+            );
+            let content_lower = content.to_lowercase();
+            if !terms
+                .iter()
+                .all(|term| meta_lower.contains(term.as_str()) || content_lower.contains(term.as_str()))
+            {
+                continue;
+            }
+            let meta_matches: usize = terms
+                .iter()
+                .map(|term| count_occurrences(&meta_lower, term))
+                .sum();
+            let content_matches: usize = terms
+                .iter()
+                .map(|term| count_occurrences(&content_lower, term))
+                .sum();
+            let match_count = (meta_matches + content_matches).max(1);
+            let exact_meta = date.eq_ignore_ascii_case(trimmed)
+                || formatted_dash.eq_ignore_ascii_case(trimmed)
+                || filename.eq_ignore_ascii_case(trimmed);
+            let rank = if exact_meta {
+                3
+            } else if meta_matches > 0 {
+                2
+            } else {
+                1
+            };
+            let snippet = build_search_snippet(&content, &terms);
+            scored.push((
+                rank,
+                date.clone(),
+                match_count,
+                SearchResultItem {
+                    kind: "journal",
+                    date: Some(date),
+                    path,
+                    title: formatted_cn,
+                    format: Some(format),
+                    snippet,
+                    match_count,
+                },
+            ));
+        }
+
+        // 2. 搜索工作空间内的普通文本文件（跳过已作为日报索引的文件、受保护文件与超大/二进制文件）
+        const MAX_SEARCH_FILE_BYTES: u64 = 2 * 1024 * 1024;
+        if let Ok(nodes) = self.list_workspace_files() {
+            for node in nodes {
+                if node.is_dir || node.protected || node.journal_date.is_some() || node.size > MAX_SEARCH_FILE_BYTES {
+                    continue;
+                }
+                let full_path = self.root.join(&node.path);
+                let content = match fs::read_to_string(&full_path) {
+                    Ok(text) if !text.chars().any(|ch| ch == '\0') => text,
+                    _ => continue,
+                };
+                let meta_lower = format!("{} {}", node.name.to_lowercase(), node.path.to_lowercase());
+                let content_lower = content.to_lowercase();
+                if !terms
+                    .iter()
+                    .all(|term| meta_lower.contains(term.as_str()) || content_lower.contains(term.as_str()))
+                {
+                    continue;
+                }
+                let meta_matches: usize = terms
+                    .iter()
+                    .map(|term| count_occurrences(&meta_lower, term))
+                    .sum();
+                let content_matches: usize = terms
+                    .iter()
+                    .map(|term| count_occurrences(&content_lower, term))
+                    .sum();
+                let match_count = (meta_matches + content_matches).max(1);
+                let exact_name = node.name.eq_ignore_ascii_case(trimmed) || node.path.eq_ignore_ascii_case(trimmed);
+                let rank = if exact_name {
+                    3
+                } else if meta_matches > 0 {
+                    2
+                } else {
+                    1
+                };
+                let format = match Path::new(&node.name).extension().and_then(|ext| ext.to_str()) {
+                    Some("md") => Some(Format::Md),
+                    Some("txt") => Some(Format::Txt),
+                    _ => None,
+                };
+                let snippet = build_search_snippet(&content, &terms);
+                scored.push((
+                    rank,
+                    String::new(),
+                    match_count,
+                    SearchResultItem {
+                        kind: "file",
+                        date: None,
+                        path: node.path,
+                        title: node.name,
+                        format,
+                        snippet,
+                        match_count,
+                    },
+                ));
+            }
+        }
+
+        scored.sort_by(|left, right| {
+            right
+                .0
+                .cmp(&left.0)
+                .then_with(|| right.1.cmp(&left.1))
+                .then_with(|| right.2.cmp(&left.2))
+                .then_with(|| left.3.path.cmp(&right.3.path))
+        });
+        scored.truncate(limit);
+        Ok(scored.into_iter().map(|(_, _, _, item)| item).collect())
     }
 
     pub fn previews(&mut self, dates: &[String]) -> Result<Vec<Preview>, String> {
@@ -1951,5 +2185,34 @@ mod tests {
             assert!(workspace.backup_warning().is_none());
             assert_eq!(workspace.database_record("20261018").unwrap().unwrap().content, "当前文件");
         }
+    }
+
+    #[test]
+    fn search_matches_journals_and_workspace_files_across_storage_modes() {
+        let (dir, mut workspace) = setup();
+        workspace.create_with_content("20261018", Format::Md, "# 2026年10月18日 日报\n\n完成了全局全文检索后端引擎开发").unwrap();
+        workspace.create_with_content("20261019", Format::Txt, "推进前端组件联调与测试").unwrap();
+        fs::write(dir.path().join("架构设计.md"), "核心特性：全局全文检索支持快捷键唤起").unwrap();
+
+        assert!(workspace.search("   ", 20).unwrap().is_empty());
+
+        let results = workspace.search("全文检索", 20).unwrap();
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].kind, "journal");
+        assert_eq!(results[0].date.as_deref(), Some("20261018"));
+        assert!(results[0].snippet.contains("全文检索"));
+        assert_eq!(results[1].kind, "file");
+        assert_eq!(results[1].path, "架构设计.md");
+
+        let by_date = workspace.search("2026-10-19", 20).unwrap();
+        assert_eq!(by_date.len(), 1);
+        assert_eq!(by_date[0].date.as_deref(), Some("20261019"));
+
+        enable_database(&mut workspace, Mode::Database);
+        workspace.create_with_content("20261020", Format::Md, "数据库模式下的专项检索内容").unwrap();
+        let db_results = workspace.search("专项检索", 20).unwrap();
+        assert_eq!(db_results.len(), 1);
+        assert_eq!(db_results[0].kind, "journal");
+        assert_eq!(db_results[0].date.as_deref(), Some("20261020"));
     }
 }

@@ -95,6 +95,7 @@
 :root[data-skin='midnight'] {
   --skin-canvas: #111827;
   --skin-surface: #1b2536;
+  --skin-surface-raised: #233147;
   --skin-subtle: #222f43;
   --skin-text: #e3ecfa;
   --skin-accent: #a6c8ff;
@@ -104,6 +105,7 @@
 :root[data-skin='graphite'] {
   --skin-canvas: #191d20;
   --skin-surface: #242a2e;
+  --skin-surface-raised: #2d353b;
   --skin-subtle: #2c3438;
   --skin-text: #e3ebe8;
   --skin-accent: #92d4bd;
@@ -117,6 +119,7 @@
   color-scheme: dark;
   --skin-canvas: #191a1b;
   --skin-surface: #121314;
+  --skin-surface-raised: #1e1f20;
   --skin-subtle: #202122;
   --skin-subtle-strong: #242526;
   --skin-text: #bfbfbf;
@@ -467,6 +470,7 @@
   color-scheme: dark;
   --skin-canvas: #2b2d30;
   --skin-surface: #1e1f22;
+  --skin-surface-raised: #26282c;
   --skin-subtle: #25262a;
   --skin-subtle-strong: #393b40;
   --skin-text: #dfe1e5;
@@ -499,4 +503,11 @@
   --desktop-frame: #2b2d30;
   --desktop-tool: #26282c;
   --desktop-tab: #354565;
+}
+
+:root[data-skin='midnight'] dialog::backdrop,
+:root[data-skin='graphite'] dialog::backdrop,
+:root[data-skin='vscode-dark-2026'] dialog::backdrop,
+:root[data-skin='islands-dark'] dialog::backdrop {
+  background: rgba(0, 0, 0, 0.65);
 }

@@ -30,7 +30,11 @@ import {
   PhCaretDown,
   PhSparkle,
   PhMagicWand,
+  PhKeyboard,
+  PhWarningCircle,
 } from '@phosphor-icons/vue'
+import dayjs from 'dayjs'
+import { isMacPlatform } from '../lib/shortcuts'
 import { api, type Document, type FileFormat } from '../lib/workspace'
 import { pushMessage } from '../lib/messages'
 import { aiApi } from '../lib/ai'
@@ -46,6 +50,9 @@ import { useSplitPreviewScroll } from '../lib/useSplitPreviewScroll'
 import { markdownWithSourceLines } from '../lib/markdownScroll'
 import RichMarkdownEditor from './RichMarkdownEditor.vue'
 import PreviousJournalButton from './PreviousJournalButton.vue'
+import JournalTemplateButton from './JournalTemplateButton.vue'
+import PolishDiffDialog from './PolishDiffDialog.vue'
+import { DEFAULT_EDITOR_SETTINGS, type EditorSettings } from '../lib/settingsDraft'
 
 const props = defineProps<{
   date: string
@@ -65,6 +72,7 @@ const props = defineProps<{
   scrollSourceKey?: string
   filePath?: string
   storageMode?: 'files' | 'dual' | 'database'
+  editorSettings?: EditorSettings
   loadPreviousReport?: () => Promise<Document | null>
 }>()
 const emit = defineEmits<{
@@ -78,6 +86,8 @@ const emit = defineEmits<{
   error: [value: string]
   'update:preview': [value: boolean]
   'generate-git': []
+  'open-editor-settings': []
+  shortcuts: []
 }>()
 const textarea = ref<HTMLTextAreaElement>()
 const richEditor = ref<InstanceType<typeof RichMarkdownEditor>>()
@@ -191,6 +201,14 @@ const polishMenu = ref<HTMLDivElement>()
 const polishMenuId = useId()
 const polishMenuStyle = ref<CSSProperties>({ position: 'fixed', visibility: 'hidden' })
 const currentPolishId = ref<string | null>(null)
+interface PendingPolishState {
+  original: string
+  polished: string
+  isSelection: boolean
+  selectionRange?: { start: number; end: number }
+  optionLabel?: string
+}
+const pendingPolish = ref<PendingPolishState | null>(null)
 const hasSelectedText = ref(false)
 const polishOptions = [
   { id: 'default', label: '智能润色', desc: '根据设置偏好优化行文表达', prompt: '' },
@@ -366,8 +384,15 @@ function lastEnabledTool() {
 }
 let copiedTimer: ReturnType<typeof setTimeout> | undefined
 let dateAnimation: Animation | undefined
+const isMac = isMacPlatform()
+const justSaved = ref(false)
+let justSavedTimer: ReturnType<typeof setTimeout> | undefined
+
 const newEmpty = computed(() => props.isNew && !props.content.trim())
 const hasContent = computed(() => props.content.trim().length > 0)
+const charCount = computed(() => props.content.replace(/\s/g, '').length)
+const lineCount = computed(() => (props.content ? props.content.split('\n').length : 0))
+
 const rendered = computed(() =>
   DOMPurify.sanitize(markdownWithSourceLines(props.content), {
     FORBID_TAGS: ['img', 'style', 'input', 'a'],
@@ -379,11 +404,32 @@ const status = computed(() => {
   if (props.saving) return '正在保存…'
   if (props.error && props.dirty) return '保存失败，草稿已保留'
   if (props.dirty) return '等待保存…'
+  if (justSaved.value) return '已自动保存'
   if (props.storageMode === 'database') return '已保存到数据库'
   if (props.document?.backupWarning) return '文件已保存，数据库备份待重试'
   if (props.storageMode === 'dual') return '已保存到文件与数据库'
   return '已保存到工作空间'
 })
+
+const saveTooltip = computed(() => {
+  if (props.savedAt) {
+    return `上次保存于 ${dayjs(props.savedAt).format('HH:mm:ss')}`
+  }
+  return status.value
+})
+
+watch(
+  () => props.saving,
+  (saving, wasSaving) => {
+    if (wasSaving && !saving && !props.error && !props.dirty) {
+      justSaved.value = true
+      clearTimeout(justSavedTimer)
+      justSavedTimer = setTimeout(() => {
+        justSaved.value = false
+      }, 1800)
+    }
+  },
+)
 watch(
   () => props.content,
   () => {
@@ -428,6 +474,8 @@ onBeforeUnmount(() => {
   if (currentPolishId.value) {
     void aiApi.cancel(currentPolishId.value).catch(() => {})
   }
+  pendingPolish.value = null
+  clearTimeout(justSavedTimer)
   scrollObserver?.disconnect()
   toolbarObserver?.disconnect()
   dateAnimation?.cancel()
@@ -840,6 +888,7 @@ async function runPolish(prompt?: string) {
 
   let targetText = ''
   let isSelection = false
+  let selRange: { start: number; end: number } | undefined
 
   if (richEditor.value) {
     const sel = richEditor.value.getSelection()
@@ -853,6 +902,7 @@ async function runPolish(prompt?: string) {
     if (end > start) {
       targetText = props.content.slice(start, end)
       isSelection = true
+      selRange = { start, end }
     }
   }
 
@@ -881,25 +931,14 @@ async function runPolish(prompt?: string) {
       return
     }
 
-    if (isSelection) {
-      if (richEditor.value) {
-        richEditor.value.replaceSelection(result)
-      } else if (textarea.value) {
-        const start = textarea.value.selectionStart
-        const end = textarea.value.selectionEnd
-        emit('edit', props.content.slice(0, start) + result + props.content.slice(end), true)
-        void nextTick(() => {
-          if (textarea.value) {
-            textarea.value.setSelectionRange(start, start + result.length)
-          }
-        })
-      }
-      pushMessage({ tone: 'success', text: '选区润色已完成' })
-    } else {
-      emit('edit', result, true)
-      pushMessage({ tone: 'success', text: '全文润色已完成' })
+    const optionLabel = polishOptions.find((opt) => opt.prompt === prompt)?.label ?? '智能润色'
+    pendingPolish.value = {
+      original: trimmed,
+      polished: result,
+      isSelection,
+      selectionRange: selRange,
+      optionLabel,
     }
-    focus()
   } catch (err: unknown) {
     if (currentPolishId.value !== requestId) return
     const msg = err instanceof Error ? err.message : String(err)
@@ -914,6 +953,39 @@ async function runPolish(prompt?: string) {
       currentPolishId.value = null
     }
   }
+}
+
+function applyPendingPolish() {
+  if (!pendingPolish.value) return
+  const { polished, isSelection, selectionRange } = pendingPolish.value
+  pendingPolish.value = null
+
+  if (isSelection) {
+    if (richEditor.value) {
+      richEditor.value.replaceSelection(polished)
+    } else if (textarea.value) {
+      const start = selectionRange?.start ?? textarea.value.selectionStart
+      const end = selectionRange?.end ?? textarea.value.selectionEnd
+      emit('edit', props.content.slice(0, start) + polished + props.content.slice(end), true)
+      void nextTick(() => {
+        if (textarea.value) {
+          textarea.value.setSelectionRange(start, start + polished.length)
+        }
+      })
+    }
+    pushMessage({ tone: 'success', text: '已采纳选区润色' })
+  } else {
+    emit('edit', polished, true)
+    pushMessage({ tone: 'success', text: '已采纳全文润色' })
+  }
+  focus()
+}
+
+function discardPendingPolish() {
+  if (!pendingPolish.value) return
+  pendingPolish.value = null
+  pushMessage({ tone: 'info', text: '已放弃本次润色' })
+  focus()
 }
 function onOutsidePointer(event: PointerEvent) {
   const target = event.target as Node | null
@@ -952,6 +1024,19 @@ function importPreviousReport(content: string) {
   if (props.disabled || props.filePath || !props.document) return
   closePopovers()
   emit('edit', content, true)
+  focus()
+}
+function onApplyTemplate(templateContent: string, mode: 'replace' | 'append') {
+  if (props.disabled || props.filePath || !props.document) return
+  closePopovers()
+  if (mode === 'append' && props.content.trim()) {
+    const separator = props.content.endsWith('\n\n') ? '' : props.content.endsWith('\n') ? '\n' : '\n\n'
+    emit('edit', `${props.content}${separator}${templateContent}`, true)
+    pushMessage({ tone: 'success', text: '模板已追加到当前日报末尾' })
+  } else {
+    emit('edit', templateContent, true)
+    pushMessage({ tone: 'success', text: '已应用日报预设模板' })
+  }
   focus()
 }
 function focus() {
@@ -1083,6 +1168,16 @@ defineExpose({ focus })
                 :load="loadPreviousReport"
                 @confirm="importPreviousReport"
               />
+              <JournalTemplateButton
+                v-if="!filePath && document"
+                :disabled="disabled"
+                :has-content="hasContent"
+                :current-format="document.format"
+                :date="date"
+                :editor-settings="editorSettings ?? DEFAULT_EDITOR_SETTINGS"
+                @apply="onApplyTemplate"
+                @open-settings="emit('open-editor-settings')"
+              />
               <button
                 v-if="hasContent"
                 ref="polishTrigger"
@@ -1157,12 +1252,49 @@ defineExpose({ focus })
             </div></Transition
           >
           <footer class="editor-footer">
-            <span :class="{ 'error-text': error && dirty }" role="status"
-              ><PhCircleNotch v-if="saving" class="spin" :size="14" /><PhCheck
-                v-else-if="!dirty && !newEmpty"
-                :size="14"
-              />{{ status }}</span
-            ><span>{{ content.replace(/\s/g, '').length }} 字</span>
+            <div class="editor-footer-left">
+              <span
+                class="editor-save-indicator"
+                :class="{
+                  'is-saving': saving,
+                  'is-dirty': dirty && !saving && !error,
+                  'is-just-saved': justSaved,
+                  'is-error': error && dirty,
+                  'is-saved': !dirty && !saving && !newEmpty,
+                  'is-empty': newEmpty,
+                  'error-text': error && dirty,
+                }"
+                role="status"
+                :title="saveTooltip"
+              >
+                <PhCircleNotch v-if="saving" class="spin" :size="13" aria-hidden="true" />
+                <span v-else-if="dirty && !error" class="save-dot amber-pulse" aria-hidden="true" />
+                <PhWarningCircle v-else-if="error && dirty" :size="13" class="save-error-icon" aria-hidden="true" />
+                <PhCheck
+                  v-else-if="!dirty && !newEmpty"
+                  :size="13"
+                  class="save-check-icon"
+                  :class="{ 'check-pop': justSaved }"
+                  aria-hidden="true"
+                />
+                <span class="save-status-text">{{ status }}</span>
+              </span>
+            </div>
+            <div class="editor-footer-right">
+              <span class="editor-stat-item" :title="`行数：${lineCount} 行`">
+                {{ charCount }} 字 · {{ lineCount }} 行
+              </span>
+              <button
+                type="button"
+                class="editor-shortcuts-hint-btn"
+                aria-label="查看键盘快捷键"
+                :title="`快捷键速查 (${isMac ? '⌘/' : 'Ctrl+/'})`"
+                @click="emit('shortcuts')"
+              >
+                <PhKeyboard :size="14" aria-hidden="true" />
+                <span>快捷键</span>
+              </button>
+            </div>
           </footer>
         </div>
         <div v-else key="empty" class="editor-empty">
@@ -1172,179 +1304,188 @@ defineExpose({ focus })
         </div>
       </Transition>
     </div>
-  </aside>
-  <Teleport to="body">
-    <Transition name="select-popover">
-      <div
-        v-if="moreOpened"
-        :id="moreMenuId"
-        ref="moreMenu"
-        class="markdown-tools-menu"
-        role="menu"
-        aria-label="更多 Markdown 工具"
-        :style="moreMenuStyle"
-        @keydown="onMoreKeydown"
-      >
-        <button
-          v-for="tool in moreTools"
-          :key="tool.action"
-          type="button"
-          class="markdown-tool-option"
-          :role="isToggleAction(tool.action) ? 'menuitemcheckbox' : 'menuitem'"
-          :class="{ 'is-active': toolActive(tool.action) }"
-          :aria-checked="isToggleAction(tool.action) ? toolActive(tool.action) : undefined"
-          :aria-haspopup="tool.action === 'heading' ? 'menu' : tool.action === 'table' ? 'dialog' : undefined"
-          :disabled="!toolEnabled(tool.action)"
-          @click="applyMarkdown(tool.action)"
+    <Teleport to="body">
+      <Transition name="select-popover">
+        <div
+          v-if="moreOpened"
+          :id="moreMenuId"
+          ref="moreMenu"
+          class="markdown-tools-menu"
+          role="menu"
+          aria-label="更多 Markdown 工具"
+          :style="moreMenuStyle"
+          @keydown="onMoreKeydown"
         >
-          <component :is="tool.icon" :size="16" aria-hidden="true" /><span>{{ tool.label }}</span>
-          <PhCheck
-            v-if="isToggleAction(tool.action) && toolActive(tool.action)"
-            class="markdown-option-check"
-            :size="14"
-            aria-hidden="true"
-          />
-          <PhCaretDown
-            v-else-if="tool.action === 'heading' || tool.action === 'table'"
-            class="markdown-option-check"
-            :size="14"
-            aria-hidden="true"
-          />
-        </button>
-      </div>
-    </Transition>
-    <Transition name="select-popover">
-      <div
-        v-if="actionPopover"
-        :id="actionMenuId"
-        ref="actionMenu"
-        class="markdown-tools-menu markdown-action-popover"
-        :role="actionPopover === 'heading' ? 'menu' : 'dialog'"
-        :aria-label="actionPopover === 'heading' ? '标题与正文' : '表格'"
-        :style="actionMenuStyle"
-        @keydown="onActionKeydown"
-      >
-        <template v-if="actionPopover === 'heading'">
           <button
-            v-for="option in headingOptions"
-            :key="option.level"
+            v-for="tool in moreTools"
+            :key="tool.action"
             type="button"
-            class="markdown-tool-option markdown-heading-option"
-            role="menuitemradio"
-            :aria-label="option.level ? `H${option.level}` : '正文'"
-            :aria-checked="toolbarState.headingLevel === option.level"
-            :disabled="!toolEnabled('heading')"
-            @click="chooseHeading(option.level)"
+            class="markdown-tool-option"
+            :role="isToggleAction(tool.action) ? 'menuitemcheckbox' : 'menuitem'"
+            :class="{ 'is-active': toolActive(tool.action) }"
+            :aria-checked="isToggleAction(tool.action) ? toolActive(tool.action) : undefined"
+            :aria-haspopup="tool.action === 'heading' ? 'menu' : tool.action === 'table' ? 'dialog' : undefined"
+            :disabled="!toolEnabled(tool.action)"
+            @click="applyMarkdown(tool.action)"
           >
-            <span class="markdown-heading-symbol" aria-hidden="true">{{
-              option.level ? `H${option.level}` : '¶'
-            }}</span>
-            <span>{{ option.label }}</span>
+            <component :is="tool.icon" :size="16" aria-hidden="true" /><span>{{ tool.label }}</span>
             <PhCheck
-              v-if="toolbarState.headingLevel === option.level"
+              v-if="isToggleAction(tool.action) && toolActive(tool.action)"
+              class="markdown-option-check"
+              :size="14"
+              aria-hidden="true"
+            />
+            <PhCaretDown
+              v-else-if="tool.action === 'heading' || tool.action === 'table'"
               class="markdown-option-check"
               :size="14"
               aria-hidden="true"
             />
           </button>
-        </template>
-        <template v-else-if="toolbarState.inTable">
-          <div v-for="group in tableGroups" :key="group.label" class="markdown-table-group">
-            <span class="markdown-table-label">{{ group.label }}</span>
+        </div>
+      </Transition>
+      <Transition name="select-popover">
+        <div
+          v-if="actionPopover"
+          :id="actionMenuId"
+          ref="actionMenu"
+          class="markdown-tools-menu markdown-action-popover"
+          :role="actionPopover === 'heading' ? 'menu' : 'dialog'"
+          :aria-label="actionPopover === 'heading' ? '标题与正文' : '表格'"
+          :style="actionMenuStyle"
+          @keydown="onActionKeydown"
+        >
+          <template v-if="actionPopover === 'heading'">
             <button
-              v-for="item in group.actions"
-              :key="item.action"
+              v-for="option in headingOptions"
+              :key="option.level"
               type="button"
-              class="markdown-tool-option"
-              :disabled="disabled || !toolbarState.tableEnabled[item.action]"
-              @click="runTableAction(item.action)"
+              class="markdown-tool-option markdown-heading-option"
+              role="menuitemradio"
+              :aria-label="option.level ? `H${option.level}` : '正文'"
+              :aria-checked="toolbarState.headingLevel === option.level"
+              :disabled="!toolEnabled('heading')"
+              @click="chooseHeading(option.level)"
             >
-              {{ item.label }}
+              <span class="markdown-heading-symbol" aria-hidden="true">{{
+                option.level ? `H${option.level}` : '¶'
+              }}</span>
+              <span>{{ option.label }}</span>
+              <PhCheck
+                v-if="toolbarState.headingLevel === option.level"
+                class="markdown-option-check"
+                :size="14"
+                aria-hidden="true"
+              />
             </button>
-          </div>
-          <div class="markdown-table-group">
-            <span class="markdown-table-label">列对齐</span>
-            <div class="markdown-table-alignment">
+          </template>
+          <template v-else-if="toolbarState.inTable">
+            <div v-for="group in tableGroups" :key="group.label" class="markdown-table-group">
+              <span class="markdown-table-label">{{ group.label }}</span>
               <button
-                v-for="item in tableAlignments"
+                v-for="item in group.actions"
                 :key="item.action"
                 type="button"
-                :aria-label="item.label"
-                :aria-pressed="toolbarState.tableAlignment === item.value"
+                class="markdown-tool-option"
                 :disabled="disabled || !toolbarState.tableEnabled[item.action]"
                 @click="runTableAction(item.action)"
               >
-                {{ item.value === 'left' ? '左对齐' : item.value === 'center' ? '居中' : '右对齐' }}
+                {{ item.label }}
               </button>
             </div>
+            <div class="markdown-table-group">
+              <span class="markdown-table-label">列对齐</span>
+              <div class="markdown-table-alignment">
+                <button
+                  v-for="item in tableAlignments"
+                  :key="item.action"
+                  type="button"
+                  :aria-label="item.label"
+                  :aria-pressed="toolbarState.tableAlignment === item.value"
+                  :disabled="disabled || !toolbarState.tableEnabled[item.action]"
+                  @click="runTableAction(item.action)"
+                >
+                  {{ item.value === 'left' ? '左对齐' : item.value === 'center' ? '居中' : '右对齐' }}
+                </button>
+              </div>
+            </div>
+            <button
+              type="button"
+              class="markdown-tool-option markdown-table-delete"
+              :disabled="disabled || !toolbarState.tableEnabled.deleteTable"
+              @click="runTableAction('deleteTable')"
+            >
+              删除表格
+            </button>
+          </template>
+          <form v-else class="markdown-table-form" @submit.prevent="insertTable">
+            <p class="markdown-table-title">插入表格</p>
+            <div class="markdown-table-dimensions">
+              <label
+                >行数<input
+                  v-model.number="tableRows"
+                  type="number"
+                  aria-label="行数"
+                  min="1"
+                  max="20"
+                  step="1"
+                  required
+                  @input="tableError = ''"
+              /></label>
+              <label
+                >列数<input
+                  v-model.number="tableColumns"
+                  type="number"
+                  aria-label="列数"
+                  min="1"
+                  max="10"
+                  step="1"
+                  required
+                  @input="tableError = ''"
+              /></label>
+            </div>
+            <p class="markdown-table-hint">第一行作为表头</p>
+            <p v-if="tableError" role="alert" class="error-text">{{ tableError }}</p>
+            <button type="submit" class="markdown-table-submit" :disabled="!toolEnabled('table')">插入表格</button>
+          </form>
+        </div>
+      </Transition>
+      <Transition name="select-popover">
+        <div
+          v-if="polishOpened"
+          :id="polishMenuId"
+          ref="polishMenu"
+          class="markdown-tools-menu editor-polish-menu"
+          :style="polishMenuStyle"
+          role="menu"
+          aria-label="AI 润色选项"
+          @keydown="onPolishKeydown"
+        >
+          <div class="polish-menu-header">
+            <span>{{ hasSelectedText ? '选区润色' : '全文润色' }}</span>
           </div>
           <button
+            v-for="opt in polishOptions"
+            :key="opt.id"
             type="button"
-            class="markdown-tool-option markdown-table-delete"
-            :disabled="disabled || !toolbarState.tableEnabled.deleteTable"
-            @click="runTableAction('deleteTable')"
+            class="polish-menu-item"
+            role="menuitem"
+            @click="selectPolishOption(opt.prompt)"
           >
-            删除表格
+            <span class="polish-menu-title">{{ opt.label }}</span>
+            <span class="polish-menu-desc">{{ opt.desc }}</span>
           </button>
-        </template>
-        <form v-else class="markdown-table-form" @submit.prevent="insertTable">
-          <p class="markdown-table-title">插入表格</p>
-          <div class="markdown-table-dimensions">
-            <label
-              >行数<input
-                v-model.number="tableRows"
-                type="number"
-                aria-label="行数"
-                min="1"
-                max="20"
-                step="1"
-                required
-                @input="tableError = ''"
-            /></label>
-            <label
-              >列数<input
-                v-model.number="tableColumns"
-                type="number"
-                aria-label="列数"
-                min="1"
-                max="10"
-                step="1"
-                required
-                @input="tableError = ''"
-            /></label>
-          </div>
-          <p class="markdown-table-hint">第一行作为表头</p>
-          <p v-if="tableError" role="alert" class="error-text">{{ tableError }}</p>
-          <button type="submit" class="markdown-table-submit" :disabled="!toolEnabled('table')">插入表格</button>
-        </form>
-      </div>
-    </Transition>
-    <Transition name="select-popover">
-      <div
-        v-if="polishOpened"
-        :id="polishMenuId"
-        ref="polishMenu"
-        class="markdown-tools-menu editor-polish-menu"
-        :style="polishMenuStyle"
-        role="menu"
-        aria-label="AI 润色选项"
-        @keydown="onPolishKeydown"
-      >
-        <div class="polish-menu-header">
-          <span>{{ hasSelectedText ? '选区润色' : '全文润色' }}</span>
         </div>
-        <button
-          v-for="opt in polishOptions"
-          :key="opt.id"
-          type="button"
-          class="polish-menu-item"
-          role="menuitem"
-          @click="selectPolishOption(opt.prompt)"
-        >
-          <span class="polish-menu-title">{{ opt.label }}</span>
-          <span class="polish-menu-desc">{{ opt.desc }}</span>
-        </button>
-      </div>
-    </Transition>
-  </Teleport>
+      </Transition>
+    </Teleport>
+    <PolishDiffDialog
+      :visible="!!pendingPolish"
+      :original-text="pendingPolish?.original ?? ''"
+      :polished-text="pendingPolish?.polished ?? ''"
+      :is-selection="pendingPolish?.isSelection ?? false"
+      :option-label="pendingPolish?.optionLabel"
+      @accept="applyPendingPolish"
+      @discard="discardPendingPolish"
+    />
+  </aside>
 </template>

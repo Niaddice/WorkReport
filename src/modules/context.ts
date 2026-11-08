@@ -9,6 +9,7 @@ import type { useSummaryOutput } from '../lib/useSummaryOutput'
 import type { useJournalPreview } from '../lib/useJournalPreview'
 import type { useGit } from '../lib/useGit'
 import type { FileSettings } from '../lib/fileSettings'
+import type { EditorSettings } from '../lib/settingsDraft'
 import type { useWorkspaceDocument } from '../lib/useWorkspaceDocument'
 import type { FileRequest, FileChangeResult } from '../lib/workspaceFiles'
 
@@ -57,6 +58,8 @@ export interface ModuleActions {
   openExcelSettings(): void
   openHolidaySettings(): void
   openGitSettings(): void
+  openEditorSettings?: () => void
+  openShortcuts?: () => void
   appendGitReport(workspacePath: string, date: string, content: string): Promise<boolean>
   syncHolidays(year: number): void
 }
@@ -68,6 +71,7 @@ export interface ModuleActions {
 export interface ModuleContext {
   workspaceDocument?: ReturnType<typeof useWorkspaceDocument>
   fileSettings?: Ref<FileSettings>
+  editorSettings?: Ref<EditorSettings>
   journal: JournalStore
   ai: AiStore
   holidays: HolidayStore

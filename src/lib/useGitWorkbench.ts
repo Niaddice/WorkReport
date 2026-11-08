@@ -56,6 +56,7 @@ export type GitOperation =
   | 'discard'
   | 'stageHunk'
   | 'unstageHunk'
+  | 'discardHunk'
   | 'commit'
   | 'commitAmend'
   | 'undoCommit'

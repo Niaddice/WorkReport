@@ -10,6 +10,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   (e: 'stage-hunk', patch: string): void
   (e: 'unstage-hunk', patch: string): void
+  (e: 'discard-hunk', patch: string): void
 }>()
 
 function onHunkAction(patch: string) {
@@ -24,15 +25,25 @@ function onHunkAction(patch: string) {
 <template>
   <pre
     class="diff-content"
-  ><code v-for="(line, index) in lines" :key="index" :class="`diff-${line.kind}`"><span class="diff-line-number" aria-hidden="true">{{ line.oldLine ?? '' }}</span><span class="diff-line-number" aria-hidden="true">{{ line.newLine ?? '' }}</span><span class="diff-line-text"><span>{{ line.text || ' ' }}</span><button
+  ><code v-for="(line, index) in lines" :key="index" :class="`diff-${line.kind}`"><span class="diff-line-number" aria-hidden="true">{{ line.oldLine ?? '' }}</span><span class="diff-line-number" aria-hidden="true">{{ line.newLine ?? '' }}</span><span class="diff-line-text"><span>{{ line.text || ' ' }}</span><span
     v-if="mode && line.kind === 'hunk' && line.patch"
+    class="hunk-actions"
+  ><button
     type="button"
     class="hunk-action-btn"
     :disabled="disabled"
     :title="mode === 'stage' ? '暂存此代码块到暂存区' : '将此代码块从暂存区撤出'"
     :aria-label="mode === 'stage' ? '暂存此代码块' : '取消暂存此代码块'"
     @click.stop="onHunkAction(line.patch)"
-  >{{ mode === 'stage' ? '暂存此块' : '取消暂存' }}</button></span></code></pre>
+  >{{ mode === 'stage' ? '暂存此块' : '取消暂存' }}</button><button
+    v-if="mode === 'stage'"
+    type="button"
+    class="hunk-action-btn danger"
+    :disabled="disabled"
+    title="从工作区丢弃此代码块（无法撤销）"
+    aria-label="丢弃此代码块"
+    @click.stop="emit('discard-hunk', line.patch)"
+  >丢弃此块</button></span></span></code></pre>
 </template>
 
 <style scoped>
@@ -85,6 +96,13 @@ function onHunkAction(patch: string) {
   gap: 12px;
   padding-right: 8px;
 }
+.hunk-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  position: sticky;
+  right: 8px;
+}
 .hunk-action-btn {
   font-family: var(--font-sans, system-ui, sans-serif);
   font-size: calc(11 * var(--font-unit));
@@ -97,8 +115,6 @@ function onHunkAction(patch: string) {
   cursor: pointer;
   white-space: nowrap;
   user-select: none;
-  position: sticky;
-  right: 8px;
   transition:
     background 0.15s,
     border-color 0.15s,
@@ -108,6 +124,14 @@ function onHunkAction(patch: string) {
   background: var(--skin-accent-soft);
   border-color: var(--skin-accent);
   color: var(--skin-accent);
+}
+.hunk-action-btn.danger {
+  color: var(--skin-danger);
+}
+.hunk-action-btn.danger:hover:not(:disabled) {
+  background: var(--skin-danger-soft);
+  border-color: var(--skin-danger);
+  color: var(--skin-danger);
 }
 .hunk-action-btn:disabled {
   opacity: 0.5;

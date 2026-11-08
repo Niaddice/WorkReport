@@ -24,7 +24,7 @@ mod file_migration;
 use std::{fs, io::Write, sync::{Arc, Mutex}};
 use tauri::{Emitter, Manager, State};
 use tauri_plugin_opener::OpenerExt;
-use workspace::{DailyActivity, Document, Entry, FileNode, Format, Preview, Workspace, WorkspaceInfo};
+use workspace::{DailyActivity, Document, Entry, FileNode, Format, Preview, SearchResultItem, Workspace, WorkspaceInfo};
 
 #[derive(Default)]
 struct AppState(Arc<Mutex<Option<Workspace>>>);
@@ -115,6 +115,7 @@ fn stored_settings_at(
         summary: summary::Settings::default(),
         database: database::Settings::default(),
         git: git::Settings::default(),
+        editor: settings::EditorSettings::default(),
     })
 }
 
@@ -194,6 +195,20 @@ async fn list_entries(state: State<'_, AppState>) -> Result<Vec<Entry>, String> 
 #[tauri::command]
 async fn list_workspace_files(state: State<'_, AppState>) -> Result<Vec<FileNode>, String> {
     run_workspace(state.0.clone(), Workspace::list_workspace_files).await
+}
+
+#[tauri::command]
+async fn search_workspace(
+    state: State<'_, AppState>,
+    workspace_path: String,
+    query: String,
+    limit: Option<usize>,
+) -> Result<Vec<SearchResultItem>, String> {
+    run_workspace(state.0.clone(), move |workspace| {
+        summary::validate_workspace(workspace.root(), &workspace_path)?;
+        workspace.search(&query, limit.unwrap_or(50))
+    })
+    .await
 }
 
 #[tauri::command]
@@ -391,6 +406,14 @@ async fn load_summary_settings(state: State<'_, AppState>) -> Result<summary::Se
 }
 
 #[tauri::command]
+async fn load_editor_settings(state: State<'_, AppState>) -> Result<settings::EditorSettings, String> {
+    run_optional_workspace(state.0.clone(), |workspace| {
+        let Some(workspace) = workspace else { return Ok(settings::EditorSettings::default()); };
+        Ok(settings::load(&workspace.root().join(settings::FILE_NAME))?.unwrap_or_default().editor)
+    }).await
+}
+
+#[tauri::command]
 async fn open_summary_output_directory(
     app: tauri::AppHandle,
     state: State<'_, AppState>,
@@ -518,6 +541,7 @@ fn save_workspace_settings_confirmed(
     appearance::validate(&stored.appearance)?;
     ai::validate(&stored.ai)?;
     git::validate(&stored.git)?;
+    settings::validate_editor_settings(&stored.editor)?;
     // Validate the dependency against this same save, so enabling Excel and
     // configuring its AI provider succeeds or fails as one transaction.
     validate_excel_settings(&stored.excel, &stored.ai)?;
@@ -1295,6 +1319,7 @@ pub fn run() {
             open_workspace_directory,
             list_entries,
             list_workspace_files,
+            search_workspace,
             preview_workspace_file_change,
             apply_workspace_file_change,
             list_workspace_trash,
@@ -1314,6 +1339,7 @@ pub fn run() {
             load_ai_settings,
             load_appearance_settings,
             load_summary_settings,
+            load_editor_settings,
             load_file_settings,
             preview_file_settings,
             open_summary_output_directory,

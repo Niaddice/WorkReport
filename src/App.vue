@@ -9,6 +9,8 @@ import { PhCircleNotch } from '@phosphor-icons/vue'
 import AppToolbar from './components/AppToolbar.vue'
 import AppRail from './components/AppRail.vue'
 import SkinDialog from './components/SkinDialog.vue'
+import GlobalSearchDialog from './components/GlobalSearchDialog.vue'
+import ShortcutsDialog from './components/ShortcutsDialog.vue'
 import SettingsView from './components/SettingsView.vue'
 import SettingsDialog from './components/SettingsDialog.vue'
 import ModuleSettingsDialog from './components/ModuleSettingsDialog.vue'
@@ -20,7 +22,7 @@ import WorkspaceSwitchDialog from './components/WorkspaceSwitchDialog.vue'
 import MessageHost from './components/MessageHost.vue'
 import ButtonTooltip from './components/ButtonTooltip.vue'
 import { api, type Document, type FileFormat } from './lib/workspace'
-import { historyShortcut } from './lib/shortcuts'
+import { cheatsheetShortcut, historyShortcut, saveShortcut, searchShortcut } from './lib/shortcuts'
 import { installContextMenuGuard } from './lib/contextMenus'
 import TextContextMenu from './components/TextContextMenu.vue'
 import { useJournal } from './lib/useJournal'
@@ -38,7 +40,13 @@ import { useAppearance } from './lib/useAppearance'
 import { validExcelDates, useExcel } from './lib/useExcel'
 import { useSummaryOutput } from './lib/useSummaryOutput'
 import { workspaceFilesApi, type FileRequest, type FileChangeResult } from './lib/workspaceFiles'
-import { settingsApi, type WorkspaceSettings } from './lib/settingsDraft'
+import {
+  settingsApi,
+  cloneEditorSettings,
+  DEFAULT_EDITOR_SETTINGS,
+  type EditorSettings,
+  type WorkspaceSettings,
+} from './lib/settingsDraft'
 import type { GlobalSettingsSection } from './lib/settingsSections'
 import {
   cloneFileSettings,
@@ -113,6 +121,8 @@ watch(workspace, (value, previous) => {
   workspaceDocument.clear()
   fileOpenRevision++
   fileSettings.value = cloneFileSettings()
+  editorSettings.value = cloneEditorSettings(DEFAULT_EDITOR_SETTINGS)
+  journal.setEditorSettings(editorSettings.value)
   void loadWorkspaceSettings(true)
 })
 const { settings: aiSettings, error: aiSettingsError, defaultProvider, summaryVisible, summaryResult, summaryMode } = ai
@@ -156,6 +166,8 @@ const databaseActivity = ref(false)
 const storageRefreshing = ref(false)
 const databaseBusy = computed(() => databaseActivity.value || storageRefreshing.value || backupRetrying.value)
 const storageMode = computed(() => (!databaseSettings.value.enabled ? 'files' : databaseSettings.value.mode))
+const editorSettings = ref(cloneEditorSettings(DEFAULT_EDITOR_SETTINGS))
+const editorLoading = ref(false)
 
 // 新建日报沿用「数据存储」里选定的默认格式；已有日报不受影响。
 watch(
@@ -176,6 +188,7 @@ const workspaceSettings = computed<WorkspaceSettings>(() => ({
   summary: summaryOutputSettings.value,
   database: databaseSettings.value,
   git: git.settings.value,
+  editor: editorSettings.value,
   files: fileSettings.value,
 }))
 const settingsReading = ref(false)
@@ -190,7 +203,8 @@ const settingsLoading = computed(
     excel.loading.value ||
     summaryOutput.loading.value ||
     databaseLoading.value ||
-    git.loading.value,
+    git.loading.value ||
+    editorLoading.value,
 )
 const settingsDialogBusy = computed(
   () =>
@@ -207,6 +221,8 @@ let settingsLoadRevision = 0
 type SettingsExit = 'home' | 'workspace' | 'close'
 const settingsLeaveDialog = ref<InstanceType<typeof SettingsLeaveDialog>>()
 const skinDialog = ref<InstanceType<typeof SkinDialog>>()
+const searchDialog = ref<InstanceType<typeof GlobalSearchDialog>>()
+const shortcutsOpened = ref(false)
 const pendingSettingsExit = ref<SettingsExit | null>(null)
 const settingsLeaveBusy = ref(false)
 const settingsLeaveError = ref('')
@@ -303,6 +319,33 @@ function openSkinDialog() {
 }
 function closeSkinDialog() {
   void skinDialog.value?.close()
+}
+function openSearchDialog() {
+  if (
+    !workspace.value ||
+    page.value !== 'home' ||
+    busy.value ||
+    excelBusy.value ||
+    picking.value ||
+    moduleSettingsVisible.value
+  )
+    return
+  searchDialog.value?.open()
+}
+function closeSearchDialog() {
+  void searchDialog.value?.close()
+}
+async function onSearchSelectJournal(date: string) {
+  await searchDialog.value?.close()
+  const editorModule = layoutItems.value.find((item) => moduleType(item.id) === 'editor')
+  if (!editorModule) moduleLayout.add('editor')
+  await nextTick()
+  moduleBoard.value?.reveal(editorModule?.id ?? 'editor', { focus: false })
+  await selectReport(date)
+}
+async function onSearchSelectFile(path: string) {
+  await searchDialog.value?.close()
+  await openWorkspaceFile(path)
 }
 /** 目录或历史记录里选择单篇表示聚焦这一天：先解除框选，避免总结 / Excel 仍按旧范围统计。 */
 async function selectReport(date: string) {
@@ -497,6 +540,26 @@ async function openExcelSettings() {
 async function openGitSettings() {
   await openModuleSettings('git')
 }
+async function openEditorSettings() {
+  await openModuleSettings('editor')
+}
+async function loadEditorSettings(): Promise<boolean> {
+  const path = workspace.value?.path
+  editorLoading.value = true
+  try {
+    const stored = nativeApp
+      ? await invoke<EditorSettings>('load_editor_settings')
+      : cloneEditorSettings(DEFAULT_EDITOR_SETTINGS)
+    if (workspace.value?.path !== path) return false
+    editorSettings.value = cloneEditorSettings(stored)
+    journal.setEditorSettings(editorSettings.value)
+    return true
+  } catch {
+    return false
+  } finally {
+    if (workspace.value?.path === path) editorLoading.value = false
+  }
+}
 async function loadWorkspaceSettings(reload: boolean): Promise<boolean> {
   const revision = ++settingsLoadRevision
   settingsReading.value = true
@@ -510,6 +573,7 @@ async function loadWorkspaceSettings(reload: boolean): Promise<boolean> {
     loadDatabaseSettings(),
     git.load(),
     loadFileSettings(revision),
+    loadEditorSettings(),
   ])
   if (revision !== settingsLoadRevision) return false
   settingsReading.value = false
@@ -615,6 +679,8 @@ async function saveWorkspaceSettings(value: WorkspaceSettings): Promise<boolean>
     acceptFileSettings(cloneFileSettings(stored.files, stored.summary.outputDirectory))
     git.acceptSaved(stored.git)
     databaseSettings.value = cloneDatabaseSettings(stored.database)
+    editorSettings.value = cloneEditorSettings(stored.editor)
+    journal.setEditorSettings(editorSettings.value)
     if (filesChanged) workspaceDocument.clear()
     if (storageChanged || filesChanged) {
       clearRange()
@@ -895,6 +961,53 @@ function onHistoryKeydown(event: KeyboardEvent) {
   // WebKit can deliver shortcuts directly even when the native Edit menu is
   // installed. Handle those DOM events as well as the native menu events.
   if (event.isComposing || event.keyCode === 229 || event.defaultPrevented) return
+  if (searchShortcut(event, isMac)) {
+    if (searchDialog.value?.isOpen()) {
+      event.preventDefault()
+      closeSearchDialog()
+      return
+    }
+    if (
+      workspace.value &&
+      page.value === 'home' &&
+      !busy.value &&
+      !excelBusy.value &&
+      !picking.value &&
+      !moduleSettingsVisible.value &&
+      !document.querySelector('dialog[open]:not(.is-inline)')
+    ) {
+      event.preventDefault()
+      openSearchDialog()
+    }
+    return
+  }
+  if (saveShortcut(event, isMac)) {
+    event.preventDefault()
+    if (workspaceDocument.path.value) {
+      void workspaceDocument.flush()
+    } else {
+      void journal.flush()
+    }
+    pushMessage({ tone: 'success', text: '草稿已立即保存' })
+    return
+  }
+  if (cheatsheetShortcut(event, isMac)) {
+    event.preventDefault()
+    shortcutsOpened.value = !shortcutsOpened.value
+    return
+  }
+  if (event.key === '?' && !event.metaKey && !event.ctrlKey && !event.altKey) {
+    const target = event.target
+    if (
+      !(target instanceof HTMLElement && target.closest('input, textarea, [contenteditable="true"]')) &&
+      page.value === 'home' &&
+      !document.querySelector('dialog[open]:not(.is-inline)')
+    ) {
+      event.preventDefault()
+      shortcutsOpened.value = true
+      return
+    }
+  }
   if (
     page.value !== 'home' ||
     busy.value ||
@@ -1148,6 +1261,12 @@ const moduleActions: ModuleActions = {
   openGitSettings: () => {
     void openGitSettings()
   },
+  openEditorSettings: () => {
+    void openEditorSettings()
+  },
+  openShortcuts: () => {
+    shortcutsOpened.value = true
+  },
   appendGitReport,
   syncHolidays: (year: number) => {
     void syncHolidays(year)
@@ -1161,6 +1280,7 @@ provide(MODULE_CONTEXT, {
   excel,
   summaryOutput,
   fileSettings,
+  editorSettings,
   git,
   summarySelectionDates,
   excelBlockedReason,
@@ -1418,6 +1538,7 @@ onBeforeUnmount(() => {
         :inert="page === 'settings' || moduleSettingsVisible"
         :page="page"
         :native-titlebar="nativeApp && isMac"
+        :is-mac="isMac"
         :greeting="greeting"
         :date-label="now.format('M 月 D 日 dddd')"
         :has-workspace="!!workspace"
@@ -1434,6 +1555,8 @@ onBeforeUnmount(() => {
         @navigate="navigate"
         @refresh="refreshHome"
         @workspace="chooseWorkspace"
+        @search="openSearchDialog"
+        @shortcuts="shortcutsOpened = true"
       />
       <div class="app-content">
         <main v-if="startupPending" class="workspace-loading" role="status" aria-live="polite">
@@ -1558,6 +1681,16 @@ onBeforeUnmount(() => {
         @cancel="cancelConfirm"
       />
       <SkinDialog ref="skinDialog" :active="activeSkin" @select="applySkin" @close="closeSkinDialog" />
+      <GlobalSearchDialog
+        ref="searchDialog"
+        :workspace-path="workspace?.path"
+        :entries="entries"
+        :is-mac="isMac"
+        @select-journal="onSearchSelectJournal"
+        @select-file="onSearchSelectFile"
+        @close="closeSearchDialog"
+      />
+      <ShortcutsDialog :visible="shortcutsOpened" @close="shortcutsOpened = false" />
       <LayoutDialog
         ref="layoutDialog"
         :saved-layouts="savedLayouts"

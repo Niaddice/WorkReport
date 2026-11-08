@@ -8,6 +8,26 @@ import { normalizeAppearanceSettings, type AppearanceSettings } from './useAppea
 import { cloneGitSettings, type GitSettings } from './useGit'
 import { FileChangesCancelled, cloneFileSettings, type FileSettings, type FileChangesDecision } from './fileSettings'
 
+export interface EditorSettings {
+  defaultTemplateId: string
+  customTemplate: string
+  autoApplyTemplate: boolean
+}
+
+export const DEFAULT_EDITOR_SETTINGS: EditorSettings = {
+  defaultTemplateId: 'none',
+  customTemplate: '',
+  autoApplyTemplate: false,
+}
+
+export function cloneEditorSettings(value?: Partial<EditorSettings> | null): EditorSettings {
+  return {
+    defaultTemplateId: value?.defaultTemplateId ?? 'none',
+    customTemplate: value?.customTemplate ?? '',
+    autoApplyTemplate: !!value?.autoApplyTemplate,
+  }
+}
+
 export interface WorkspaceSettings {
   appearance: AppearanceSettings
   ai: AiSettings
@@ -15,6 +35,7 @@ export interface WorkspaceSettings {
   summary: SummaryOutputSettings
   database: DatabaseSettings
   git: GitSettings
+  editor: EditorSettings
   files?: FileSettings
 }
 
@@ -26,6 +47,7 @@ export function cloneWorkspaceSettings(value: WorkspaceSettings): WorkspaceSetti
     summary: { outputDirectory: value.summary.outputDirectory },
     database: cloneDatabaseSettings(value.database),
     git: cloneGitSettings(value.git),
+    editor: cloneEditorSettings(value.editor),
     files: cloneFileSettings(value.files, value.summary.outputDirectory),
   }
 }

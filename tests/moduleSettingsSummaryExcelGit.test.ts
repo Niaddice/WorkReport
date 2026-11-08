@@ -6,7 +6,12 @@ import SummaryModuleSettings from '../src/components/moduleSettings/SummaryModul
 import ExcelModuleSettings from '../src/components/moduleSettings/ExcelModuleSettings.vue'
 import GitModuleSettings from '../src/components/moduleSettings/GitModuleSettings.vue'
 import { MODULE_SETTINGS_CONTEXT, type ModuleSettingsContext } from '../src/modules/settingsContext'
-import { cloneWorkspaceSettings, type WorkspaceSettings } from '../src/lib/settingsDraft'
+import {
+  cloneEditorSettings,
+  cloneWorkspaceSettings,
+  DEFAULT_EDITOR_SETTINGS,
+  type WorkspaceSettings,
+} from '../src/lib/settingsDraft'
 import { cloneGitSettings } from '../src/lib/useGit'
 import { cloneDatabaseSettings, DEFAULT_DATABASE_SETTINGS } from '../src/lib/database'
 import { emptyHolidayState } from '../src/lib/holidays'
@@ -29,6 +34,7 @@ function bundle(overrides: Partial<WorkspaceSettings> = {}): WorkspaceSettings {
     ai: { providers: [], defaultProviderId: null, generationPreference: '', summaryPrompt: '' },
     excel: { enabled: false, templatePath: '', prompt: '' },
     summary: { outputDirectory: 'summary' },
+    editor: cloneEditorSettings(DEFAULT_EDITOR_SETTINGS),
   }
   return Object.assign(base, overrides)
 }
@@ -126,6 +132,18 @@ describe('SummaryModuleSettings', () => {
 
     expect(wrapper.text()).toContain('使用默认 AI：本机 Claude')
     expect(wrapper.findAll('button').some((item) => item.text() === '前往模型配置')).toBe(false)
+  })
+
+  it('点击场景预设胶囊快速填充对应的总结提示词', async () => {
+    const { context, draft } = createContext()
+    const wrapper = mountSettings(SummaryModuleSettings, context)
+
+    const standupBtn = wrapper.findAll('.summary-preset-pill').find((item) => item.text() === '站会简报')
+    expect(standupBtn).toBeDefined()
+
+    await standupBtn!.trigger('click')
+    await nextTick()
+    expect(draft.value.ai.summaryPrompt).toContain('站会/晨会发言要点')
   })
 
   it('提示词超长时 focusInvalid 聚焦提示词输入框', async () => {

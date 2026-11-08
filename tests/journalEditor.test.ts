@@ -712,7 +712,7 @@ describe('journal Markdown tools', () => {
     expect(menu()).toBeNull()
   })
 
-  it('opens AI polish menu, displays polish options, and applies polished content', async () => {
+  it('opens AI polish menu, displays polish options, opens diff dialog, and applies polished content on accept', async () => {
     const { aiApi } = await import('../src/lib/ai')
     const polishSpy = vi.spyOn(aiApi, 'polish').mockResolvedValue('润色后的优化文本')
     const wrapper = await mountEditor('今天完成接口联调', 'txt')
@@ -733,6 +733,104 @@ describe('journal Markdown tools', () => {
     await flushPromises()
 
     expect(polishSpy).toHaveBeenCalledWith('今天完成接口联调', expect.any(String), 'txt', '')
+
+    // Polish diff dialog should be open, edit not yet applied
+    const dialog = document.querySelector<HTMLDialogElement>('#polish-diff-dialog')
+    expect(dialog).not.toBeNull()
+    expect(document.querySelector('.polish-diff-title')?.textContent).toContain('AI 润色效果对比')
+    expect(document.querySelector('.polish-badge.scope')?.textContent).toBe('全文润色')
+    expect(document.querySelector('.polish-badge.option')?.textContent).toBe('智能润色')
+    expect(wrapper.emitted('edit')).toBeUndefined()
+
+    // Accept polish
+    const acceptBtn = document.querySelector<HTMLButtonElement>('.polish-diff-accept')
+    expect(acceptBtn).not.toBeNull()
+    acceptBtn?.click()
+    await flushPromises()
+
     expect(wrapper.emitted('edit')).toEqual([['润色后的优化文本', true]])
+  })
+
+  it('allows discarding AI polish changes without applying them', async () => {
+    const { aiApi } = await import('../src/lib/ai')
+    vi.spyOn(aiApi, 'polish').mockResolvedValue('被放弃的润色文本')
+    const wrapper = await mountEditor('今天完成接口联调', 'txt')
+    const polishBtn = wrapper.find('.ai-polish-button')
+    await polishBtn.trigger('click')
+    await flushPromises()
+
+    const polishMenu = document.querySelector('.editor-polish-menu')
+    const options = Array.from(polishMenu?.querySelectorAll('.polish-menu-item') ?? [])
+    ;(options[1] as HTMLButtonElement).click() // '精炼简短'
+    await flushPromises()
+
+    const discardBtn = document.querySelector<HTMLButtonElement>('.polish-diff-discard')
+    expect(discardBtn).not.toBeNull()
+    discardBtn?.click()
+    await flushPromises()
+
+    expect(wrapper.emitted('edit')).toBeUndefined()
+  })
+
+  it('switches between split and unified diff view modes in polish diff dialog', async () => {
+    const { aiApi } = await import('../src/lib/ai')
+    vi.spyOn(aiApi, 'polish').mockResolvedValue('新内容 第一行\n新内容 第二行')
+    const wrapper = await mountEditor('原内容 第一行\n原内容 第二行', 'txt')
+    const polishBtn = wrapper.find('.ai-polish-button')
+    await polishBtn.trigger('click')
+    await flushPromises()
+
+    const polishMenu = document.querySelector('.editor-polish-menu')
+    const options = Array.from(polishMenu?.querySelectorAll('.polish-menu-item') ?? [])
+    ;(options[0] as HTMLButtonElement).click()
+    await flushPromises()
+
+    expect(document.querySelector('.polish-diff-split-view')).not.toBeNull()
+    expect(document.querySelector('.polish-diff-unified-view')).toBeNull()
+
+    const modeBtns = Array.from(document.querySelectorAll<HTMLButtonElement>('.mode-btn'))
+    const unifiedBtn = modeBtns.find((b) => b.textContent?.includes('逐行'))
+    expect(unifiedBtn).not.toBeUndefined()
+    unifiedBtn?.click()
+    await flushPromises()
+
+    expect(document.querySelector('.polish-diff-unified-view')).not.toBeNull()
+    expect(document.querySelector('.polish-diff-split-view')).toBeNull()
+  })
+
+  it('renders auto-save indicator, pulse animation on save completion, and character/line statistics', async () => {
+    const savedTime = new Date('2026-11-08T10:30:00')
+    const wrapper = await mountEditor('第1行内容\n第2行内容\n第3行内容', 'txt')
+    await wrapper.setProps({ savedAt: savedTime })
+    await flushPromises()
+
+    const indicator = wrapper.find('.editor-save-indicator')
+    expect(indicator.exists()).toBe(true)
+    expect(indicator.attributes('title')).toBe('上次保存于 10:30:00')
+
+    const statItem = wrapper.find('.editor-stat-item')
+    expect(statItem.exists()).toBe(true)
+    expect(statItem.text()).toContain('15 字 · 3 行')
+
+    // Test dirty state displays amber pulse dot
+    await wrapper.setProps({ dirty: true })
+    await flushPromises()
+    expect(wrapper.find('.save-dot.amber-pulse').exists()).toBe(true)
+    expect(wrapper.find('.editor-save-indicator').classes()).toContain('is-dirty')
+
+    // Test transition from saving to saved triggers is-just-saved pulse
+    await wrapper.setProps({ saving: true })
+    await flushPromises()
+    expect(wrapper.find('.editor-save-indicator').classes()).toContain('is-saving')
+
+    await wrapper.setProps({ saving: false, dirty: false })
+    await flushPromises()
+    expect(wrapper.find('.editor-save-indicator').classes()).toContain('is-just-saved')
+
+    // Test clicking shortcuts button emits 'shortcuts'
+    const shortcutBtn = wrapper.find('.editor-shortcuts-hint-btn')
+    expect(shortcutBtn.exists()).toBe(true)
+    await shortcutBtn.trigger('click')
+    expect(wrapper.emitted('shortcuts')).toHaveLength(1)
   })
 })

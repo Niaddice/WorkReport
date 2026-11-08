@@ -13,7 +13,12 @@ import {
 } from '../src/lib/database'
 import { cloneFileSettings } from '../src/lib/fileSettings'
 import { emptyHolidayState, type HolidayState } from '../src/lib/holidays'
-import { cloneWorkspaceSettings, type WorkspaceSettings } from '../src/lib/settingsDraft'
+import {
+  cloneEditorSettings,
+  cloneWorkspaceSettings,
+  DEFAULT_EDITOR_SETTINGS,
+  type WorkspaceSettings,
+} from '../src/lib/settingsDraft'
 import { cloneGitSettings } from '../src/lib/useGit'
 import { MODULE_SETTINGS_CONTEXT, type ModuleSettingsContext } from '../src/modules/settingsContext'
 
@@ -39,6 +44,7 @@ function bundle(): WorkspaceSettings {
     ai: { providers: [], defaultProviderId: null, generationPreference: '', summaryPrompt: '' },
     excel: { enabled: false, templatePath: '', prompt: '' },
     summary: { outputDirectory: 'summary' },
+    editor: cloneEditorSettings(DEFAULT_EDITOR_SETTINGS),
     database: cloneDatabaseSettings(DEFAULT_DATABASE_SETTINGS),
     git: cloneGitSettings(),
     files: cloneFileSettings(),

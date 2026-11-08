@@ -28,7 +28,7 @@ import CliModelPicker from '../src/components/CliModelPicker.vue'
 import { flattenLayout } from '../src/modules/layout'
 import { DEFAULT_DATABASE_SETTINGS } from '../src/lib/database'
 import { cloneFileSettings, type FileChangesPlan } from '../src/lib/fileSettings'
-import type { WorkspaceSettings } from '../src/lib/settingsDraft'
+import { cloneEditorSettings, DEFAULT_EDITOR_SETTINGS, type WorkspaceSettings } from '../src/lib/settingsDraft'
 import type { Document } from '../src/lib/workspace'
 
 const DEMO_WORKSPACE = '/tmp/workreport-module-demo'
@@ -75,6 +75,8 @@ function commandResult(command: string): unknown {
       return { outputDirectory: 'summary' }
     case 'load_database_settings':
       return { ...DEFAULT_DATABASE_SETTINGS }
+    case 'load_editor_settings':
+      return cloneEditorSettings(DEFAULT_EDITOR_SETTINGS)
     case 'load_ui_preferences':
       return initialLayout
     default:

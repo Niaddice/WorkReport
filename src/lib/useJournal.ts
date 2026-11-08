@@ -11,6 +11,8 @@ import {
 import { dateKey } from './calendar'
 import { DEFAULT_DATABASE_SETTINGS } from './database'
 import { DEFAULT_FILE_SETTINGS, formatFileName, type FileSettings } from './fileSettings'
+import { cloneEditorSettings, DEFAULT_EDITOR_SETTINGS, type EditorSettings } from './settingsDraft'
+import { getJournalTemplateContent } from './journalTemplates'
 
 function emptyDocument(date: string, format: FileFormat, template: string): Document {
   return { date, filename: formatFileName(template, { date }, format), format, content: '', revision: '' }
@@ -47,6 +49,8 @@ export function useJournal(options: { beforeFlush?: () => Promise<boolean> } = {
   /** 新建日报使用的格式，由「数据存储」中的默认格式设置驱动。 */
   let defaultFormat: FileFormat = DEFAULT_DATABASE_SETTINGS.defaultFormat
   let filenameTemplate = DEFAULT_FILE_SETTINGS.journal.filenameTemplate
+  let editorSettings: EditorSettings = cloneEditorSettings(DEFAULT_EDITOR_SETTINGS)
+  let initialDraftContent = ''
 
   function setFileSettings(settings: Pick<FileSettings, 'journal'>) {
     filenameTemplate = settings.journal.filenameTemplate
@@ -56,6 +60,10 @@ export function useJournal(options: { beforeFlush?: () => Promise<boolean> } = {
         filename: formatFileName(filenameTemplate, { date: document.value.date }, document.value.format),
       }
     }
+  }
+
+  function setEditorSettings(settings: EditorSettings) {
+    editorSettings = cloneEditorSettings(settings)
   }
 
   function setDefaultFormat(format: FileFormat) {
@@ -119,6 +127,7 @@ export function useJournal(options: { beforeFlush?: () => Promise<boolean> } = {
   function applyDocument(value: Document | null, preserveHistory = false) {
     isNewDraft.value = false
     pendingHistory = false
+    initialDraftContent = ''
     document.value = value
     if (value) backupWarning.value = value.backupWarning ?? ''
     draft.value = value?.content ?? ''
@@ -130,7 +139,19 @@ export function useJournal(options: { beforeFlush?: () => Promise<boolean> } = {
     isNewDraft.value = true
     pendingHistory = false
     document.value = emptyDocument(date, format, filenameTemplate)
-    draft.value = ''
+    if (editorSettings.autoApplyTemplate && editorSettings.defaultTemplateId !== 'none') {
+      const template = getJournalTemplateContent(
+        editorSettings.defaultTemplateId,
+        format,
+        editorSettings.customTemplate,
+        date,
+      )
+      draft.value = template
+      initialDraftContent = template
+    } else {
+      draft.value = ''
+      initialDraftContent = ''
+    }
     savedAt.value = null
     resetHistory()
   }
@@ -191,7 +212,7 @@ export function useJournal(options: { beforeFlush?: () => Promise<boolean> } = {
         success && (dirty.value || (!automatic && pendingHistory)) ? flushJournal(automatic) : success,
       )
     if (!document.value) return true
-    if (isNewDraft.value && !draft.value.trim()) return true
+    if (isNewDraft.value && (!draft.value.trim() || draft.value === initialDraftContent)) return true
     const task = (async () => {
       saving.value = true
       let lastSaved: Document | null = null
@@ -269,6 +290,7 @@ export function useJournal(options: { beforeFlush?: () => Promise<boolean> } = {
 
   function edit(content: string, forceHistory = false) {
     if (appendingGit.value || !document.value || content === draft.value) return
+    initialDraftContent = ''
     const now = Date.now()
     if (forceHistory || now - lastHistoryAt > 800) {
       pushUndo(draft.value)
@@ -560,6 +582,7 @@ export function useJournal(options: { beforeFlush?: () => Promise<boolean> } = {
     select,
     setDefaultFormat,
     setFileSettings,
+    setEditorSettings,
     open,
     switchFormat,
     reload,

@@ -91,6 +91,7 @@ async function onGenerateGitDraft() {
         :disabled="disabled"
         @close="actions.showJournal?.()"
         @reload="actions.requestReload"
+        @shortcuts="actions.openShortcuts?.()"
       />
       <RangeOverview
         v-else-if="rangeDates.length"
@@ -123,6 +124,7 @@ async function onGenerateGitDraft() {
         :scroll-source-key="scrollSourceKey"
         :load-previous-report="readPreviousReport"
         :generating-git-draft="gitDraft.generating.value"
+        :editor-settings="context.editorSettings?.value"
         @edit="edit"
         @undo="undo"
         @redo="redo"
@@ -132,6 +134,8 @@ async function onGenerateGitDraft() {
         @restore="actions.requestRestore"
         @error="reportError"
         @generate-git="onGenerateGitDraft"
+        @open-editor-settings="actions.openEditorSettings?.()"
+        @shortcuts="actions.openShortcuts?.()"
       />
     </Transition>
   </div>

@@ -9,6 +9,21 @@ use tempfile::NamedTempFile;
 /// 设置文件固定放在工作空间根目录，随工作空间一起迁移和备份。
 pub const FILE_NAME: &str = "workreport.json";
 
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(default, rename_all = "camelCase")]
+pub struct EditorSettings {
+    pub default_template_id: String,
+    pub custom_template: String,
+    pub auto_apply_template: bool,
+}
+
+pub fn validate_editor_settings(settings: &EditorSettings) -> Result<(), String> {
+    if settings.custom_template.len() > 10_000 {
+        return Err("自定义日报模板不能超过 10,000 个字符".into());
+    }
+    Ok(())
+}
+
 #[derive(Clone, Default, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StoredSettings {
@@ -26,6 +41,8 @@ pub struct StoredSettings {
     pub database: crate::database::Settings,
     #[serde(default)]
     pub git: crate::git::Settings,
+    #[serde(default)]
+    pub editor: EditorSettings,
     /// 主界面模块布局；只影响界面，不参与业务校验。
     /// 统一保存设置时前端可能不带 ui 字段，因此这里用 Option 区分“未提交”与“已清空”。
     #[serde(default)]
@@ -150,6 +167,11 @@ mod tests {
             summary: crate::summary::Settings {
                 output_directory: "总结/每周".into(),
             },
+            editor: EditorSettings {
+                default_template_id: "standard".into(),
+                custom_template: "自定义模版内容".into(),
+                auto_apply_template: true,
+            },
         };
         save(&path, &settings).unwrap();
         let restored = load(&path).unwrap().expect("settings file");
@@ -162,6 +184,9 @@ mod tests {
         assert_eq!(restored.excel.template_path, "/templates/weekly.xlsx");
         assert_eq!(restored.excel.prompt, "填写本周工作进展");
         assert_eq!(restored.summary.output_directory, "总结/每周");
+        assert_eq!(restored.editor.default_template_id, "standard");
+        assert_eq!(restored.editor.custom_template, "自定义模版内容");
+        assert!(restored.editor.auto_apply_template);
         assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 1);
     }
 
@@ -185,6 +210,7 @@ mod tests {
                 summary: crate::summary::Settings {
                     output_directory: "报告/总结".into(),
                 },
+                editor: EditorSettings::default(),
             },
         )
         .unwrap();
@@ -210,6 +236,7 @@ mod tests {
         assert!(restored.excel.template_path.is_empty());
         assert_eq!(restored.summary.output_directory, "summary");
         assert_eq!(restored.git, crate::git::Settings::default());
+        assert_eq!(restored.editor, EditorSettings::default());
         // 旧文件没有 ui 段：读取后是 None，由界面层回退默认布局。
         assert!(restored.ui.is_none());
     }
@@ -235,6 +262,7 @@ mod tests {
                 ai: crate::ai::Settings::default(),
                 excel: crate::excel::Settings::default(),
                 summary: crate::summary::Settings::default(),
+                editor: EditorSettings::default(),
             },
         )
         .unwrap();

@@ -1435,4 +1435,126 @@ describe('Git workbench layout', () => {
       wrapper.unmount()
     }
   })
+
+  it('allows discarding individual hunks in unstaged diff with confirmation', async () => {
+    const diffWithHunk = {
+      text: [
+        'diff --git a/partially staged.txt b/partially staged.txt',
+        '--- a/partially staged.txt',
+        '+++ b/partially staged.txt',
+        '@@ -1,3 +1,3 @@',
+        ' line 1',
+        '-line 2',
+        '+line 2 modified',
+        ' line 3',
+      ].join('\n'),
+      truncated: false,
+    }
+    const wrapper = await mountReady()
+    try {
+      invoke.mockImplementation(async (command: string) => {
+        if (command === 'read_git_repository') return state()
+        if (command === 'read_git_diff') return diffWithHunk
+        if (command === 'git_repository_action') return '操作完成'
+        return undefined
+      })
+
+      // Click unstaged file to show unstaged diff
+      await wrapper.get('[aria-label="查看工作区差异 partially staged.txt"]').trigger('click')
+      await flushPromises()
+
+      const discardHunkBtn = wrapper.get('.hunk-action-btn.danger')
+      expect(discardHunkBtn.text()).toBe('丢弃此块')
+      await discardHunkBtn.trigger('click')
+      await flushPromises()
+
+      // Should open confirmation dialog
+      expect(wrapper.find('[role="alertdialog"]').text()).toContain('丢弃此代码块？')
+
+      // Confirm discard
+      await button(wrapper, '确认操作').trigger('click')
+      await flushPromises()
+
+      expect(actionCalls()[0]![1]).toMatchObject({
+        request: {
+          operation: 'discardHunk',
+          patch: expect.stringContaining('+line 2 modified'),
+        },
+      })
+    } finally {
+      wrapper.unmount()
+    }
+  })
+
+  it('previews stash diff on selection with stats and supports responsive navigation', async () => {
+    const stashDiff = {
+      text: [
+        'diff --git a/file.txt b/file.txt',
+        '--- a/file.txt',
+        '+++ b/file.txt',
+        '@@ -1,2 +1,3 @@',
+        ' line 1',
+        '+line 1.5 in stash',
+        ' line 2',
+      ].join('\n'),
+      truncated: false,
+    }
+    const wrapper = await mountReady()
+    try {
+      invoke.mockImplementation(async (command: string, args: { commit?: string }) => {
+        if (command === 'read_git_repository') return state()
+        if (command === 'read_git_diff')
+          return args?.commit === 'stash@{0}' ? stashDiff : { text: '', truncated: false }
+        if (command === 'git_repository_action') return '操作完成'
+        return undefined
+      })
+
+      await button(wrapper, 'Stash').trigger('click')
+      await flushPromises()
+
+      expect(wrapper.find('.diff-placeholder').text()).toContain('选择 Stash 查看差异')
+
+      const stashRow = wrapper.get('.stash-row')
+      await stashRow.trigger('click')
+      await flushPromises()
+
+      const diffCalls = invoke.mock.calls.filter(([cmd]) => cmd === 'read_git_diff')
+      expect(diffCalls.some((call) => call[1]?.commit === 'stash@{0}')).toBe(true)
+
+      expect(wrapper.find('.diff-pane h4').text()).toContain('stash@{0}')
+      expect(wrapper.find('.diff-stats').text()).toContain('+1')
+      expect(wrapper.find('.diff-content').text()).toContain('line 1.5 in stash')
+
+      const backBtn = wrapper.get('.compact-back')
+      expect(backBtn.attributes('aria-label')).toBe('返回 Stash 列表')
+      await backBtn.trigger('click')
+      await flushPromises()
+      expect(wrapper.find('.stashes-split').classes()).not.toContain('show-diff')
+    } finally {
+      wrapper.unmount()
+    }
+  })
+
+  it('displays ahead and behind badges and executes batch fetch across repositories', async () => {
+    const wrapper = await mountReady()
+    try {
+      expect(wrapper.find('.repo-badge.ahead').text()).toBe('↑1')
+      expect(wrapper.find('.repo-badge.behind').text()).toBe('↓2')
+
+      const batchFetchBtn = wrapper.get('.batch-fetch-btn')
+      expect(batchFetchBtn.text()).toContain('全部 Fetch')
+
+      await batchFetchBtn.trigger('click')
+      await flushPromises()
+
+      const fetchCalls = actionCalls().filter((call) => call[1]?.request?.operation === 'fetch')
+      expect(fetchCalls.length).toBeGreaterThanOrEqual(2)
+      expect(fetchCalls.some((call) => call[1]?.repositoryId === 'one')).toBe(true)
+      expect(fetchCalls.some((call) => call[1]?.repositoryId === 'two')).toBe(true)
+
+      expect(wrapper.text()).toContain('已完成全部 2 个仓库的远端更新同步')
+    } finally {
+      wrapper.unmount()
+    }
+  })
 })

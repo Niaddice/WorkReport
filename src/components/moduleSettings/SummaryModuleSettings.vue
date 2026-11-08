@@ -4,6 +4,7 @@ import DirectorySettings from '../DirectorySettings.vue'
 import ModuleSettingsSection from './ModuleSettingsSection.vue'
 import { useModuleSettingsContext } from '../../modules/settingsContext'
 import { cloneFileSettings, type FileSettings } from '../../lib/fileSettings'
+import { SUMMARY_PRESETS, matchSummaryPreset } from '../../lib/summaryPresets'
 
 const context = useModuleSettingsContext()
 const { draft, busy, workspace } = context
@@ -15,6 +16,7 @@ const promptInput = ref<HTMLTextAreaElement>()
 const defaultProvider = computed(() =>
   draft.value.ai.providers.find((provider) => provider.id === draft.value.ai.defaultProviderId),
 )
+const activePresetId = computed(() => matchSummaryPreset(draft.value.ai.summaryPrompt)?.id ?? 'custom')
 const promptTooLong = computed(() => draft.value.ai.summaryPrompt.length > 2000)
 /** 目录规则保存在 files 中，旧版 summary.outputDirectory 只作为兜底。 */
 const files = computed<FileSettings>({
@@ -69,6 +71,23 @@ defineExpose({ validate, focusInvalid })
     <div class="generation-preference">
       <label for="summary-prompt">框选总结提示词</label>
       <p id="summary-prompt-hint">在总结窗口中临时修改提示词只影响本次生成，不会写回这里的设置。</p>
+      <div class="summary-presets-bar" role="group" aria-label="设置默认总结场景预设">
+        <span class="summary-presets-label">预设快选：</span>
+        <div class="summary-presets-list">
+          <button
+            v-for="preset in SUMMARY_PRESETS"
+            :key="preset.id"
+            type="button"
+            class="summary-preset-pill"
+            :class="{ active: activePresetId === preset.id }"
+            :disabled="busy"
+            :title="preset.description"
+            @click="draft.ai.summaryPrompt = preset.prompt"
+          >
+            {{ preset.label }}
+          </button>
+        </div>
+      </div>
       <textarea
         id="summary-prompt"
         ref="promptInput"

@@ -652,7 +652,7 @@ pub async fn action_with_credentials(settings: &Settings, id: &str, request: Act
     }
     let mut values;
     match request.operation.as_str() {
-        "stageHunk" | "unstageHunk" => {
+        "stageHunk" | "unstageHunk" | "discardHunk" => {
             if request.patch.trim().is_empty() {
                 return Err("补丁内容为空，无法处理".into());
             }
@@ -663,17 +663,22 @@ pub async fn action_with_credentials(settings: &Settings, id: &str, request: Act
             if !patch.ends_with('\n') {
                 patch.push('\n');
             }
-            let mut apply_args = args(&["apply", "--cached", "--whitespace=nowarn", "--recount"]);
-            if request.operation == "unstageHunk" {
-                apply_args.push("--reverse".into());
-            }
+            let mut apply_args = if request.operation == "discardHunk" {
+                args(&["apply", "--reverse", "--whitespace=nowarn", "--recount"])
+            } else {
+                let mut a = args(&["apply", "--cached", "--whitespace=nowarn", "--recount"]);
+                if request.operation == "unstageHunk" {
+                    a.push("--reverse".into());
+                }
+                a
+            };
             apply_args.push("-".into());
             let output = command_with_stdin(settings, &root, &apply_args, patch.as_bytes()).await?;
             checked(output)?;
-            return Ok(if request.operation == "stageHunk" {
-                "已暂存代码块".into()
-            } else {
-                "已取消暂存代码块".into()
+            return Ok(match request.operation.as_str() {
+                "stageHunk" => "已暂存代码块".into(),
+                "unstageHunk" => "已取消暂存代码块".into(),
+                _ => "已丢弃代码块".into(),
             });
         }
         "stage" | "unstage" | "discard" => {
@@ -1051,12 +1056,15 @@ mod tests {
         act(&settings, "createBranch", &[], "", "topic").await;
         assert_eq!(repository(&settings, "repo").await.unwrap().branch,
         "topic");
+        std::fs::write(dir.path().join("file.txt"), "modified in stash\n").unwrap();
         std::fs::write(dir.path().join("untracked.txt"), "saved").unwrap();
         act(&settings, "stash", &[], "保存工作", "").await;
         assert!(!dir.path().join("untracked.txt").exists());
         let status = repository(&settings, "repo").await.unwrap();
         assert_eq!(status.stashes.len(), 1);
         assert_eq!(status.stashes[0].reference, "stash@{0}");
+        let stash_diff = diff(&settings, "repo", "", false, "stash@{0}").await.unwrap();
+        assert!(stash_diff.text.contains("modified in stash"));
         act(&settings, "applyStash", &[], "", "stash@{0}").await;
         assert_eq!(std::fs::read_to_string(dir.path().join("untracked.txt")).unwrap(),
         "saved");
@@ -1323,5 +1331,16 @@ mod tests {
         // Staged diff should now be empty
         let staged_diff_after = diff(&settings, "repo", "file.txt", true, "").await.unwrap();
         assert!(staged_diff_after.text.is_empty());
+
+        // Now discard the first hunk from working tree
+        let mut discard_req = request("discardHunk", &[], "", "");
+        discard_req.patch = hunk1_patch.into();
+        let out_discard = action(&settings, "repo", discard_req).await.unwrap();
+        assert_eq!(out_discard, "已丢弃代码块");
+
+        // Working tree should NO LONGER contain line 2 modified!
+        let unstaged_diff_after_discard = diff(&settings, "repo", "file.txt", false, "").await.unwrap();
+        assert!(!unstaged_diff_after_discard.text.contains("line 2 modified"));
+        assert!(unstaged_diff_after_discard.text.contains("line 16 modified"));
     }
 }

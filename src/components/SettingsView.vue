@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from 'vue'
 import {
+  PhArchive,
   PhArrowCircleDown,
   PhDatabase,
   PhFloppyDisk,
@@ -16,11 +17,13 @@ import {
   PhX,
 } from '@phosphor-icons/vue'
 import { aiApi, aiSettingsReady, type AiProvider, type DetectedCli, type TestProviderResult } from '../lib/ai'
-import type { Workspace } from '../lib/workspace'
+import { api, type Entry, type Workspace } from '../lib/workspace'
 import { useSettingsDraft, type WorkspaceSettings } from '../lib/settingsDraft'
 import { pushMessage } from '../lib/messages'
 import ModelPicker from './ModelPicker.vue'
 import CliModelPicker from './CliModelPicker.vue'
+import BackupRestoreDialog from './BackupRestoreDialog.vue'
+import type { RestoreResult } from '../lib/backupMigration'
 import { APPEARANCE_SCALES, DEFAULT_APPEARANCE_SCALE } from '../lib/useAppearance'
 import {
   DEFAULT_RAIL_HOLD_MS,
@@ -199,7 +202,7 @@ const navigation = [
     items: [
       { id: 'workspace', title: '工作空间', description: '日报与配置的保存位置', icon: PhFolderOpen },
       { id: 'appearance', title: '外观与字体', description: '字号、功能栏与长按关闭', icon: PhMonitor },
-      { id: 'database', title: '数据存储', description: '数据库备份、复制与迁移', icon: PhDatabase },
+      { id: 'database', title: '数据存储', description: '工作空间备份迁移、数据库存储', icon: PhDatabase },
       { id: 'proxy', title: '网络代理', description: '本机连接方式与代理服务器', icon: PhGlobe },
       { id: 'updates', title: '应用更新', description: '查看版本与检查更新', icon: PhArrowCircleDown },
     ],
@@ -213,6 +216,32 @@ const navigation = [
   items: { id: GlobalSettingsSection; title: string; description: string; icon: typeof PhFolderOpen }[]
 }[]
 const activeSection = ref<GlobalSettingsSection>('workspace')
+const backupDialogVisible = ref(false)
+const workspaceEntries = ref<Entry[]>([])
+
+async function openBackupDialog() {
+  try {
+    workspaceEntries.value = await api.list()
+  } catch {
+    workspaceEntries.value = []
+  }
+  backupDialogVisible.value = true
+}
+
+function onBackupRestored(result: RestoreResult) {
+  emit('databaseTransferred', {
+    copied: result.totalRestored,
+    skipped: result.skippedCount,
+    mode: 'database',
+    enabled: true,
+    settings: draft.value.database,
+    message: `成功恢复 ${result.totalRestored} 篇日报`,
+  })
+}
+
+async function getSettingsForBackup() {
+  return props.bundle
+}
 const activeGroup = computed(() =>
   navigation.find((group) => group.items.some((item) => item.id === activeSection.value))!,
 )
@@ -604,8 +633,25 @@ async function testConnection(provider: AiProvider) {
             >
               <div class="settings-section-heading">
                 <div>
-                  <h3 id="database-settings-title">日报存储</h3>
-                  <p>按需选择文件、数据库或双存储，并管理数据库备份与迁移。</p>
+                  <h3 id="database-settings-title">数据存储与备份迁移</h3>
+                  <p>管理工作空间完整备份、跨设备一键迁移与多引擎数据库存储。</p>
+                </div>
+              </div>
+              <div class="workspace-backup-card">
+                <div class="backup-card-main">
+                  <div class="backup-card-icon" aria-hidden="true">
+                    <PhArchive :size="22" />
+                  </div>
+                  <div class="backup-card-info">
+                    <h4>工作空间全量备份与跨设备迁移</h4>
+                    <p>一键打包导出包含所有历史日报与模板/偏好设置的独立备份包 (.json)，或导入备份快速还原工作空间。</p>
+                  </div>
+                </div>
+                <div class="backup-card-actions">
+                  <button type="button" class="backup-action-button" :disabled="busy" @click="openBackupDialog">
+                    <PhArchive :size="15" aria-hidden="true" />
+                    <span>备份与恢复…</span>
+                  </button>
                 </div>
               </div>
               <p class="field-hint">
@@ -936,5 +982,18 @@ async function testConnection(provider: AiProvider) {
         </button>
       </div>
     </footer>
+    <BackupRestoreDialog
+      :visible="backupDialogVisible"
+      :workspace-name="workspace?.name ?? '工作空间'"
+      :workspace-path="workspace?.path"
+      :entries="workspaceEntries"
+      :read-entry="api.read"
+      :create-entry="api.create"
+      :save-entry="api.save"
+      :get-settings="getSettingsForBackup"
+      :save-settings="props.save"
+      @close="backupDialogVisible = false"
+      @restored="onBackupRestored"
+    />
   </div>
 </template>
