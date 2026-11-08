@@ -2,6 +2,7 @@
 import { computed, nextTick, reactive, ref, watch } from 'vue'
 import dayjs from 'dayjs'
 import { PhFolderOpen, PhPencilSimple } from '@phosphor-icons/vue'
+import SettingHint from './SettingHint.vue'
 import type { FileFormat } from '../lib/workspace'
 import {
   cloneFileSettings,
@@ -152,7 +153,10 @@ defineExpose({ validate, focusInvalid })
 
 <template>
   <div ref="root" class="directory-settings" :class="{ 'is-compact': compact }">
-    <p v-if="!compact" class="field-hint">目录和文件名随当前工作空间保存。编辑完成后，点击“保存设置”统一应用。</p>
+    <div v-if="!compact" class="directory-settings-header-hint">
+      <SettingHint text="目录和文件名随当前工作空间保存。编辑完成后，点击“保存设置”统一应用。" />
+      <span>目录和文件名设置提示</span>
+    </div>
     <p v-if="globalError" class="settings-error" role="alert">{{ globalError }}</p>
     <section
       v-for="feature in activeFeatures"
@@ -165,7 +169,12 @@ defineExpose({ validate, focusInvalid })
         <button type="button" class="text-action" :disabled="disabled" @click="restore(feature.id)">恢复默认</button>
       </header>
       <div class="excel-path-field">
-        <label :for="`${feature.id}-save-directory`">{{ feature.label }}目录名称</label>
+        <div class="setting-field-header">
+          <label :for="`${feature.id}-save-directory`">{{ feature.label }}目录名称</label>
+          <SettingHint
+            :text="`仅允许工作空间内的目录名称或相对路径，例如“${feature.label}”或“输出/${feature.label}”。更改现有目录名称时会移动其内容；包含文件时保存前会提示确认。`"
+          />
+        </div>
         <div class="excel-path-control">
           <input
             :id="`${feature.id}-save-directory`"
@@ -177,7 +186,6 @@ defineExpose({ validate, focusInvalid })
             :placeholder="
               feature.id === 'journal' ? '沿用工作空间根目录，按年份归档' : DEFAULT_FILE_SETTINGS[feature.id].directory
             "
-            :aria-describedby="`${feature.id}-directory-hint`"
             @input="update(feature.id, 'directory', ($event.target as HTMLInputElement).value)"
           />
           <button type="button" class="text-action" :disabled="disabled" @click="editDirectory(feature.id)">
@@ -186,14 +194,14 @@ defineExpose({ validate, focusInvalid })
             }}
           </button>
         </div>
-        <p :id="`${feature.id}-directory-hint`" class="field-hint">
-          仅允许工作空间内的目录名称或相对路径，例如“{{ feature.label }}”或“输出/{{
-            feature.label
-          }}”。更改现有目录名称时会移动其内容；包含文件时保存前会提示确认。
-        </p>
       </div>
       <div class="excel-path-field">
-        <label :for="`${feature.id}-filename-template`">{{ feature.label }}文件名规则（不含扩展名）</label>
+        <div class="setting-field-header">
+          <label :for="`${feature.id}-filename-template`">{{ feature.label }}文件名规则（不含扩展名）</label>
+          <SettingHint
+            :text="`${feature.id === 'journal' ? '{date} 表示日报日期；也可用 {YYYY}-{MM}-{DD} 组合完整年月日。' : '{startDate}、{endDate} 表示所选范围，{date}、{time} 表示生成日期与时间。'}文字可以直接输入，扩展名自动添加。`"
+          />
+        </div>
         <input
           :id="`${feature.id}-filename-template`"
           :value="modelValue[feature.id].filenameTemplate"
@@ -201,7 +209,6 @@ defineExpose({ validate, focusInvalid })
           type="text"
           spellcheck="false"
           maxlength="120"
-          :aria-describedby="`${feature.id}-filename-hint`"
           @input="update(feature.id, 'filenameTemplate', ($event.target as HTMLInputElement).value)"
         />
         <div class="filename-placeholder-options" :aria-label="`${feature.label}日期占位符`">
@@ -217,13 +224,6 @@ defineExpose({ validate, focusInvalid })
             {{ '{' + token + '}' }}
           </button>
         </div>
-        <p :id="`${feature.id}-filename-hint`" class="field-hint">
-          {{
-            feature.id === 'journal'
-              ? '{date} 表示日报日期；也可用 {YYYY}-{MM}-{DD} 组合完整年月日。'
-              : '{startDate}、{endDate} 表示所选范围，{date}、{time} 表示生成日期与时间。'
-          }}文字可以直接输入，扩展名自动添加。
-        </p>
       </div>
       <div class="workspace-location directory-settings-preview">
         <PhFolderOpen :size="19" aria-hidden="true" />

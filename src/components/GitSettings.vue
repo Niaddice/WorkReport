@@ -99,7 +99,12 @@ defineExpose({ validate, focusInvalid })
   <div ref="root" class="git-settings">
     <ModuleSettingsSection title="本地仓库" description="添加项目仓库，在工作台切换项目、管理更改与分支。">
       <div class="git-repositories-heading">
-        <span class="git-hint">已添加 {{ modelValue.repositories.length }} / 20</span>
+        <span
+          class="git-hint"
+          title="保存时会检查仓库实际目录和远程地址，相同仓库只能添加一次。支持识别同一远程仓库常见的 SSH / HTTPS 地址写法。"
+        >
+          已添加 {{ modelValue.repositories.length }} / 20
+        </span>
         <button
           class="text-action"
           type="button"
@@ -165,9 +170,6 @@ defineExpose({ validate, focusInvalid })
           ></label>
         </div>
       </details>
-      <p class="git-hint">
-        保存时会检查仓库实际目录和主要远程地址，相同仓库只能添加一次。支持识别同一远程仓库常见的 SSH / HTTPS 地址写法。
-      </p>
     </ModuleSettingsSection>
     <ModuleSettingsSection
       title="AI 提交说明"
@@ -176,8 +178,13 @@ defineExpose({ validate, focusInvalid })
     >
       <div class="git-field git-commit-prompt">
         <div class="git-prompt-heading">
-          <label :for="`${id}-commit-prompt`">提交说明提示词</label
-          ><button
+          <label
+            :for="`${id}-commit-prompt`"
+            title="使用默认 AI，根据已暂存的更改生成提交说明。最多 2000 字，留空使用默认提示词。"
+          >
+            提交说明提示词
+          </label>
+          <button
             type="button"
             class="text-action"
             :disabled="formBusy || modelValue.commitPrompt === DEFAULT_GIT_COMMIT_PROMPT"

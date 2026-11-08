@@ -23,6 +23,7 @@ import { pushMessage } from '../lib/messages'
 import ModelPicker from './ModelPicker.vue'
 import CliModelPicker from './CliModelPicker.vue'
 import BackupRestoreDialog from './BackupRestoreDialog.vue'
+import SettingHint from './SettingHint.vue'
 import type { RestoreResult } from '../lib/backupMigration'
 import { APPEARANCE_SCALES, DEFAULT_APPEARANCE_SCALE } from '../lib/useAppearance'
 import {
@@ -516,8 +517,10 @@ async function testConnection(provider: AiProvider) {
               </div>
               <div class="appearance-setting-row">
                 <div class="appearance-setting-copy">
-                  <h4 id="appearance-scale-label">界面缩放</h4>
-                  <p id="appearance-scale-description">仅调整字体大小，保存后应用到整个 App。</p>
+                  <div class="setting-field-header">
+                    <h4 id="appearance-scale-label">界面缩放</h4>
+                    <SettingHint text="仅调整字体大小，保存后应用到整个 App。" />
+                  </div>
                   <span class="appearance-scale-range">80%–120% · 每次 10%</span>
                 </div>
                 <div class="appearance-scale-actions">
@@ -525,7 +528,6 @@ async function testConnection(provider: AiProvider) {
                     class="appearance-stepper"
                     role="group"
                     aria-labelledby="appearance-scale-label"
-                    aria-describedby="appearance-scale-description"
                     @keydown="onScaleKeydown"
                   >
                     <button
@@ -564,15 +566,12 @@ async function testConnection(provider: AiProvider) {
               </div>
               <div class="appearance-setting-row">
                 <div class="appearance-setting-copy">
-                  <h4 id="appearance-rail-label">功能栏位置</h4>
-                  <p id="appearance-rail-description">模块侧边栏停靠在窗口左侧或右侧，默认在右侧。</p>
+                  <div class="setting-field-header">
+                    <h4 id="appearance-rail-label">功能栏位置</h4>
+                    <SettingHint text="模块侧边栏停靠在窗口左侧或右侧，默认在右侧。" />
+                  </div>
                 </div>
-                <div
-                  class="appearance-rail-actions"
-                  role="group"
-                  aria-labelledby="appearance-rail-label"
-                  aria-describedby="appearance-rail-description"
-                >
+                <div class="appearance-rail-actions" role="group" aria-labelledby="appearance-rail-label">
                   <button
                     v-for="option in RAIL_OPTIONS"
                     :key="option.id"
@@ -589,8 +588,10 @@ async function testConnection(provider: AiProvider) {
               </div>
               <div v-for="option in railHoldOptions" :key="option.key" class="appearance-setting-row">
                 <div class="appearance-setting-copy">
-                  <h4 :id="`${option.key}-label`">{{ option.label }}</h4>
-                  <p :id="`${option.key}-description`">{{ option.description }}</p>
+                  <div class="setting-field-header">
+                    <h4 :id="`${option.key}-label`">{{ option.label }}</h4>
+                    <SettingHint :text="option.description" />
+                  </div>
                   <span class="appearance-scale-range">0.5–10 秒 · 每次 0.1 秒 · 默认 2 秒</span>
                 </div>
                 <div class="history-limit rail-hold-slider">
@@ -602,7 +603,6 @@ async function testConnection(provider: AiProvider) {
                     :step="RAIL_HOLD_STEP_MS / 1000"
                     :value="(draft.appearance[option.key] ?? DEFAULT_RAIL_HOLD_MS) / 1000"
                     :aria-labelledby="`${option.key}-label`"
-                    :aria-describedby="`${option.key}-description`"
                     :aria-valuetext="`${(draft.appearance[option.key] ?? DEFAULT_RAIL_HOLD_MS) / 1000} 秒`"
                     :disabled="busy"
                     @input="onRailHoldInput($event, option.key)"
@@ -643,8 +643,12 @@ async function testConnection(provider: AiProvider) {
                     <PhArchive :size="22" />
                   </div>
                   <div class="backup-card-info">
-                    <h4>工作空间全量备份与跨设备迁移</h4>
-                    <p>一键打包导出包含所有历史日报与模板/偏好设置的独立备份包 (.json)，或导入备份快速还原工作空间。</p>
+                    <div class="setting-field-header">
+                      <h4>工作空间全量备份与跨设备迁移</h4>
+                      <SettingHint
+                        text="一键打包导出包含所有历史日报与模板/偏好设置的独立备份包 (.json)，或导入备份快速还原工作空间。"
+                      />
+                    </div>
                   </div>
                 </div>
                 <div class="backup-card-actions">
@@ -654,9 +658,12 @@ async function testConnection(provider: AiProvider) {
                   </button>
                 </div>
               </div>
-              <p class="field-hint">
-                新日报默认格式在「编辑」模块的设置中调整，历史版本存储上限在「历史记录」模块的设置中调整。
-              </p>
+              <div class="workspace-storage-subnote">
+                <SettingHint
+                  text="新日报默认格式在「编辑」模块设置中调整；历史版本存储上限在「历史记录」模块设置中调整。"
+                />
+                <span>新日报格式与版本上限在对应模块设置中独立配置</span>
+              </div>
               <DatabaseSettings
                 ref="databaseForm"
                 v-model="draft.database"

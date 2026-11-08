@@ -2,6 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { isTauri } from '@tauri-apps/api/core'
 import { PhArrowClockwise, PhPlugsConnected } from '@phosphor-icons/vue'
+import SettingHint from './SettingHint.vue'
 import { cloneProxySettings, proxyApi, validateProxySettings } from '../lib/proxy'
 import AppSelect from './AppSelect.vue'
 
@@ -126,19 +127,24 @@ defineExpose({ unchanged, loading, saving, save, reset, validate, error })
     <p v-if="loading" role="status">正在读取代理配置…</p>
     <p v-if="!supported" role="status">请在桌面应用中配置网络代理。</p>
     <div class="proxy-fields">
-      <label for="proxy-mode">连接方式</label>
+      <div class="setting-field-header">
+        <label for="proxy-mode">连接方式</label>
+        <SettingHint
+          :text="
+            draft.mode === 'manual'
+              ? '使用指定代理，可设置直连地址。'
+              : draft.mode === 'direct'
+                ? '直接连接，忽略代理环境变量。'
+                : '使用系统代理或当前进程的代理环境变量。'
+          "
+        />
+      </div>
       <AppSelect id="proxy-mode" v-model="draft.mode" :options="options" :disabled="disabled" />
-      <p class="field-hint" role="status">
-        {{
-          draft.mode === 'manual'
-            ? '使用指定代理，可设置直连地址。'
-            : draft.mode === 'direct'
-              ? '直接连接，忽略代理环境变量。'
-              : '使用系统代理或当前进程的代理环境变量。'
-        }}
-      </p>
       <template v-if="draft.mode === 'manual'">
-        <label for="proxy-url">代理地址</label>
+        <div class="setting-field-header">
+          <label for="proxy-url">代理地址</label>
+          <SettingHint text="支持 HTTP、HTTPS、SOCKS5 和 SOCKS5H；地址不包含账号密码。" />
+        </div>
         <input
           id="proxy-url"
           v-model="draft.url"
@@ -148,10 +154,11 @@ defineExpose({ unchanged, loading, saving, save, reset, validate, error })
           spellcheck="false"
           :maxlength="2048"
           :disabled="disabled"
-          aria-describedby="proxy-url-hint"
         />
-        <p id="proxy-url-hint" class="field-hint">支持 HTTP、HTTPS、SOCKS5 和 SOCKS5H；地址不包含账号密码。</p>
-        <label for="proxy-bypass">绕过代理的地址</label>
+        <div class="setting-field-header">
+          <label for="proxy-bypass">绕过代理的地址</label>
+          <SettingHint text="用逗号分隔域名、IP 或 CIDR 网段，例如 .example.com、192.168.0.0/16。" />
+        </div>
         <input
           id="proxy-bypass"
           v-model="draft.noProxy"
@@ -161,11 +168,7 @@ defineExpose({ unchanged, loading, saving, save, reset, validate, error })
           spellcheck="false"
           :maxlength="4096"
           :disabled="disabled"
-          aria-describedby="proxy-bypass-hint"
         />
-        <p id="proxy-bypass-hint" class="field-hint">
-          用逗号分隔域名、IP 或 CIDR 网段，例如 .example.com、192.168.0.0/16。
-        </p>
       </template>
     </div>
     <div class="proxy-actions">
@@ -175,7 +178,7 @@ defineExpose({ unchanged, loading, saving, save, reset, validate, error })
         <PhPlugsConnected v-else :size="16" aria-hidden="true" />
         {{ testing ? '正在测试…' : '测试连接' }}
       </button>
-      <span class="field-hint">使用当前填写的配置连接 GitHub API；测试不会保存设置。</span>
+      <SettingHint text="使用当前填写的配置连接 GitHub API；测试不会保存设置。" />
     </div>
     <p v-if="error" class="settings-error" role="alert">{{ error }}</p>
     <p v-if="testError" class="settings-error" role="alert">{{ testError }}</p>

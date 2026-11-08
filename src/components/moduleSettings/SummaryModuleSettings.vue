@@ -2,6 +2,7 @@
 import { computed, ref } from 'vue'
 import DirectorySettings from '../DirectorySettings.vue'
 import ModuleSettingsSection from './ModuleSettingsSection.vue'
+import SettingHint from '../SettingHint.vue'
 import { useModuleSettingsContext } from '../../modules/settingsContext'
 import { cloneFileSettings, type FileSettings } from '../../lib/fileSettings'
 import { SUMMARY_PRESETS, matchSummaryPreset } from '../../lib/summaryPresets'
@@ -69,8 +70,12 @@ defineExpose({ validate, focusInvalid })
     description="用于选中日期内的日报，留空时使用默认总结规则。"
   >
     <div class="generation-preference">
-      <label for="summary-prompt">框选总结提示词</label>
-      <p id="summary-prompt-hint">在总结窗口中临时修改提示词只影响本次生成，不会写回这里的设置。</p>
+      <div class="setting-field-header">
+        <label for="summary-prompt">框选总结提示词</label>
+        <SettingHint
+          text="在总结窗口中临时修改提示词只影响本次生成，不会写回这里的设置。追加在固定的事实、安全、Markdown 结构规则之后；留空时使用默认总结规则。"
+        />
+      </div>
       <div class="summary-presets-bar" role="group" aria-label="设置默认总结场景预设">
         <span class="summary-presets-label">预设快选：</span>
         <div class="summary-presets-list">

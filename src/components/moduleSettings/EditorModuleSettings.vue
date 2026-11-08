@@ -2,6 +2,7 @@
 import { computed, ref } from 'vue'
 import DirectorySettings from '../DirectorySettings.vue'
 import ModuleSettingsSection from './ModuleSettingsSection.vue'
+import SettingHint from '../SettingHint.vue'
 import { cloneFileSettings, type FileSettings } from '../../lib/fileSettings'
 import { useModuleSettingsContext } from '../../modules/settingsContext'
 
@@ -142,12 +143,10 @@ defineExpose({ validate, focusInvalid })
       </div>
 
       <div v-if="draft.editor.defaultTemplateId === 'custom'" class="generation-preference custom-template-editor">
-        <label for="custom-template-input">自定义预设骨架</label>
-        <p id="custom-template-hint">
-          支持占位符插值：<code>{date}</code>、<code>{weekday}</code>、<code>{year}</code>、<code>{month}</code>、<code
-            >{day}</code
-          >
-        </p>
+        <div class="setting-field-header">
+          <label for="custom-template-input">自定义预设骨架</label>
+          <SettingHint text="支持占位符插值：{date}、{weekday}、{year}、{month}、{day}" />
+        </div>
         <textarea
           id="custom-template-input"
           ref="customTemplateInput"
@@ -155,7 +154,6 @@ defineExpose({ validate, focusInvalid })
           :disabled="busy"
           maxlength="10000"
           rows="6"
-          aria-describedby="custom-template-hint"
           placeholder="### 📌 {date} {weekday} 工作日报&#10;&#10;1. "
           spellcheck="false"
         ></textarea>
@@ -171,10 +169,8 @@ defineExpose({ validate, focusInvalid })
             :disabled="busy || draft.editor.defaultTemplateId === 'none'"
           />
           <span>新建或切换至空白日报时自动载入此骨架</span>
+          <SettingHint text="开启后，打开未创建或无内容的日期时会自动填入所选骨架；在未修改前不会向磁盘写入文件。" />
         </label>
-        <p class="auto-apply-hint">
-          开启后，打开未创建或无内容的日期时会自动填入所选骨架；在未修改前不会向磁盘写入文件。
-        </p>
       </div>
     </div>
   </ModuleSettingsSection>
@@ -185,8 +181,10 @@ defineExpose({ validate, focusInvalid })
     description="自定义 AI 润色方式，留空时使用默认规则。"
   >
     <div class="generation-preference">
-      <label for="polish-prompt">日报润色提示词</label>
-      <p id="polish-prompt-hint">追加在固定的事实、安全和格式规则之后；留空时使用默认润色规则。</p>
+      <div class="setting-field-header">
+        <label for="polish-prompt">日报润色提示词</label>
+        <SettingHint text="追加在固定的事实、安全和格式规则之后；留空时使用默认润色规则。" />
+      </div>
       <textarea
         id="polish-prompt"
         ref="promptInput"
@@ -194,7 +192,6 @@ defineExpose({ validate, focusInvalid })
         :disabled="busy"
         maxlength="2000"
         rows="4"
-        aria-describedby="polish-prompt-hint"
         placeholder="例如：简洁客观，突出已完成事项和下一步计划，保留原有条目结构。"
         spellcheck="false"
       ></textarea>

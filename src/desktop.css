@@ -585,10 +585,11 @@
 .app-shell .appearance-setting-row {
   display: grid;
   grid-template-columns: minmax(200px, 1fr) minmax(180px, 280px);
+  align-items: center;
   gap: 12px 20px;
   max-width: 840px;
-  min-height: 86px;
-  padding-block: 12px;
+  min-height: 52px;
+  padding-block: 10px;
   border-bottom: 1px solid var(--skin-border);
 }
 .app-shell .appearance-setting-copy :is(h3, h4) {

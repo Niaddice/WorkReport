@@ -4673,6 +4673,19 @@ input[type='radio'] {
   font-size: inherit;
   margin-left: 8px;
 }
+.excel-output-dir-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 12px;
+  margin: 12px 0 0;
+  border-radius: 8px;
+  background: var(--skin-canvas);
+  border: 1px solid var(--skin-border);
+  font-size: var(--text-small, 12px);
+  color: var(--skin-text-muted);
+}
 .excel-settings-fields {
   display: grid;
   gap: 24px;
@@ -4831,7 +4844,21 @@ input[type='radio'] {
   border: 1px solid var(--skin-border);
   border-radius: 10px;
   background: var(--skin-canvas);
-  margin-bottom: 24px;
+  margin-bottom: 12px;
+}
+.workspace-storage-subnote {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--text-small, 12px);
+  color: var(--skin-text-muted);
+  margin: 0 0 16px;
+}
+.setting-field-header {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
 }
 .backup-card-main {
   display: flex;
