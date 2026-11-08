@@ -140,36 +140,40 @@ defineExpose({ unchanged, loading, saving, save, reset, validate, error })
         />
       </div>
       <AppSelect id="proxy-mode" v-model="draft.mode" :options="options" :disabled="disabled" />
-      <template v-if="draft.mode === 'manual'">
-        <div class="setting-field-header">
-          <label for="proxy-url">代理地址</label>
-          <SettingHint text="支持 HTTP、HTTPS、SOCKS5 和 SOCKS5H；地址不包含账号密码。" />
+      <Transition name="settings-reveal">
+        <div v-if="draft.mode === 'manual'" class="settings-reveal-shell">
+          <div class="settings-reveal-inner manual-proxy-fields">
+            <div class="setting-field-header">
+              <label for="proxy-url">代理地址</label>
+              <SettingHint text="支持 HTTP、HTTPS、SOCKS5 和 SOCKS5H；地址不包含账号密码。" />
+            </div>
+            <input
+              id="proxy-url"
+              v-model="draft.url"
+              type="text"
+              placeholder="http://127.0.0.1:7890"
+              autocomplete="off"
+              spellcheck="false"
+              :maxlength="2048"
+              :disabled="disabled"
+            />
+            <div class="setting-field-header">
+              <label for="proxy-bypass">绕过代理的地址</label>
+              <SettingHint text="用逗号分隔域名、IP 或 CIDR 网段，例如 .example.com、192.168.0.0/16。" />
+            </div>
+            <input
+              id="proxy-bypass"
+              v-model="draft.noProxy"
+              type="text"
+              placeholder="localhost,127.0.0.1,::1,.example.com"
+              autocomplete="off"
+              spellcheck="false"
+              :maxlength="4096"
+              :disabled="disabled"
+            />
+          </div>
         </div>
-        <input
-          id="proxy-url"
-          v-model="draft.url"
-          type="text"
-          placeholder="http://127.0.0.1:7890"
-          autocomplete="off"
-          spellcheck="false"
-          :maxlength="2048"
-          :disabled="disabled"
-        />
-        <div class="setting-field-header">
-          <label for="proxy-bypass">绕过代理的地址</label>
-          <SettingHint text="用逗号分隔域名、IP 或 CIDR 网段，例如 .example.com、192.168.0.0/16。" />
-        </div>
-        <input
-          id="proxy-bypass"
-          v-model="draft.noProxy"
-          type="text"
-          placeholder="localhost,127.0.0.1,::1,.example.com"
-          autocomplete="off"
-          spellcheck="false"
-          :maxlength="4096"
-          :disabled="disabled"
-        />
-      </template>
+      </Transition>
     </div>
     <div class="proxy-actions">
       <button type="button" class="text-action" :disabled="disabled" @click="restoreDefaults">恢复默认</button>

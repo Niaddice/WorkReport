@@ -4577,11 +4577,11 @@ input[type='radio'] {
   display: inline-flex;
   align-items: center;
   gap: 2px;
-  padding: 2px;
+  padding: 3px;
   border: 1px solid var(--control-border);
-  border-radius: 9px;
-  background: var(--control-surface);
-  box-shadow: 0 1px 2px #344d7003;
+  border-radius: 8px;
+  background: var(--skin-canvas, var(--control-surface));
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.04);
 }
 .appearance-rail-option {
   min-width: 64px;
@@ -4590,21 +4590,32 @@ input[type='radio'] {
   border: 0;
   border-radius: 6px;
   background: transparent;
-  color: var(--skin-text-secondary);
-  font-size: var(--text-body);
-  line-height: 1.5;
+  color: var(--skin-text-muted);
+  font-size: var(--text-small);
+  font-weight: 500;
+  line-height: 26px;
+  cursor: pointer;
+  transition:
+    background-color 0.16s ease,
+    color 0.16s ease,
+    box-shadow 0.16s ease;
+  user-select: none;
 }
 .appearance-rail-option:hover:not(:disabled):not(.is-active) {
   background: var(--skin-accent-soft);
   color: var(--skin-accent);
 }
 .appearance-rail-option.is-active {
-  background: var(--skin-accent-container);
+  background: var(--skin-surface);
   color: var(--skin-accent);
+  font-weight: 600;
+  box-shadow:
+    0 1px 3px rgba(0, 0, 0, 0.1),
+    0 0 0 1px var(--skin-border-subtle, rgba(0, 0, 0, 0.04));
 }
 .appearance-rail-option:focus-visible {
   outline: none;
-  box-shadow: inset 0 0 0 1px var(--skin-accent-border);
+  box-shadow: 0 0 0 2px var(--control-focus);
 }
 .appearance-rail-option:disabled {
   opacity: 0.65;
@@ -5214,15 +5225,18 @@ input[type='radio'] {
   transition:
     background-color var(--motion-fast) ease,
     border-color var(--motion-fast) ease,
-    box-shadow var(--motion-fast) ease;
+    box-shadow var(--motion-fast) ease,
+    transform var(--motion-fast) ease;
 }
 .database-mode-options > label:hover:has(input:not(:disabled)) {
   border-color: var(--control-border-hover);
   background: var(--skin-surface);
+  transform: translateY(-1px);
 }
 .database-mode-options > label.selected {
-  border-color: var(--skin-accent-border);
-  background: var(--skin-canvas);
+  border-color: var(--skin-accent);
+  background: var(--skin-accent-soft);
+  box-shadow: 0 1px 4px color-mix(in srgb, var(--skin-accent) 15%, transparent);
 }
 .database-mode-options > label:has(input:focus-visible) {
   border-color: var(--control-focus);
@@ -9320,6 +9334,10 @@ body.is-preview-window-resizing * {
   display: grid;
   gap: 10px;
   max-width: 640px;
+}
+.proxy-settings .manual-proxy-fields {
+  display: grid;
+  gap: 10px;
 }
 .proxy-settings .proxy-fields label {
   margin-top: 12px;

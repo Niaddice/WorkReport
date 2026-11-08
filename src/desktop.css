@@ -605,13 +605,21 @@
 }
 .app-shell .appearance-rail-actions {
   justify-self: start;
-  border: 0;
-  border-radius: 6px;
+  border: 1px solid var(--skin-border);
+  border-radius: 8px;
   background: var(--desktop-tool);
+  padding: 2px;
+  gap: 2px;
   box-shadow: none;
 }
 .app-shell .appearance-rail-option {
-  border-radius: 5px;
+  border-radius: 6px;
+  font-size: var(--text-small);
+}
+.app-shell .appearance-rail-option.is-active {
+  background: var(--skin-surface);
+  color: var(--skin-accent);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
 }
 .app-shell .appearance-preview {
   max-width: 840px;

@@ -142,23 +142,29 @@ defineExpose({ validate, focusInvalid })
         </label>
       </div>
 
-      <div v-if="draft.editor.defaultTemplateId === 'custom'" class="generation-preference custom-template-editor">
-        <div class="setting-field-header">
-          <label for="custom-template-input">自定义预设骨架</label>
-          <SettingHint text="支持占位符插值：{date}、{weekday}、{year}、{month}、{day}" />
+      <Transition name="settings-reveal">
+        <div v-if="draft.editor.defaultTemplateId === 'custom'" class="settings-reveal-shell">
+          <div class="settings-reveal-inner">
+            <div class="generation-preference custom-template-editor">
+              <div class="setting-field-header">
+                <label for="custom-template-input">自定义预设骨架</label>
+                <SettingHint text="支持占位符插值：{date}、{weekday}、{year}、{month}、{day}" />
+              </div>
+              <textarea
+                id="custom-template-input"
+                ref="customTemplateInput"
+                v-model="draft.editor.customTemplate"
+                :disabled="busy"
+                maxlength="10000"
+                rows="6"
+                placeholder="### 📌 {date} {weekday} 工作日报&#10;&#10;1. "
+                spellcheck="false"
+              ></textarea>
+              <span class="preference-count">{{ draft.editor.customTemplate.length }} / 10000</span>
+            </div>
+          </div>
         </div>
-        <textarea
-          id="custom-template-input"
-          ref="customTemplateInput"
-          v-model="draft.editor.customTemplate"
-          :disabled="busy"
-          maxlength="10000"
-          rows="6"
-          placeholder="### 📌 {date} {weekday} 工作日报&#10;&#10;1. "
-          spellcheck="false"
-        ></textarea>
-        <span class="preference-count">{{ draft.editor.customTemplate.length }} / 10000</span>
-      </div>
+      </Transition>
       <p v-if="templateError" class="settings-error" role="alert">{{ templateError }}</p>
 
       <div class="auto-apply-row">
