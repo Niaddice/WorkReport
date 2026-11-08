@@ -711,4 +711,28 @@ describe('journal Markdown tools', () => {
     await flushPromises()
     expect(menu()).toBeNull()
   })
+
+  it('opens AI polish menu, displays polish options, and applies polished content', async () => {
+    const { aiApi } = await import('../src/lib/ai')
+    const polishSpy = vi.spyOn(aiApi, 'polish').mockResolvedValue('润色后的优化文本')
+    const wrapper = await mountEditor('今天完成接口联调', 'txt')
+    const polishBtn = wrapper.find('.ai-polish-button')
+    expect(polishBtn.exists()).toBe(true)
+    await polishBtn.trigger('click')
+    await flushPromises()
+
+    const polishMenu = document.querySelector('.editor-polish-menu')
+    expect(polishMenu).not.toBeNull()
+    const options = Array.from(polishMenu?.querySelectorAll('.polish-menu-item') ?? [])
+    expect(options.length).toBe(4)
+    expect(options[0]?.textContent).toContain('智能润色')
+    expect(options[1]?.textContent).toContain('精炼简短')
+
+    // Click "智能润色"
+    ;(options[0] as HTMLButtonElement).click()
+    await flushPromises()
+
+    expect(polishSpy).toHaveBeenCalledWith('今天完成接口联调', expect.any(String), 'txt', '')
+    expect(wrapper.emitted('edit')).toEqual([['润色后的优化文本', true]])
+  })
 })

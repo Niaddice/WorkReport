@@ -172,6 +172,17 @@ export function textMenuSession(target: HTMLElement, io: TextClipboard = clipboa
           },
         },
       )
+      if (editor?.polish && selected.trim()) {
+        items.push({
+          id: 'ai-polish',
+          label: 'AI 润色选区',
+          run: () => {
+            restore()
+            assertCurrent()
+            return editor.polish!()
+          },
+        })
+      }
     }
     return { anchor: field, items, restore }
   }

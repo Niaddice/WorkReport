@@ -217,6 +217,27 @@ describe('Git settings form', () => {
     wrapper.unmount()
   })
 
+  it('switches commit prompt when clicking preset pills', async () => {
+    const wrapper = mount(GitSettings, {
+      props: {
+        modelValue: cloneGitSettings(),
+        busy: false,
+        workspacePath: '/tmp/workspace',
+        'onUpdate:modelValue': (value) => {
+          void wrapper.setProps({ modelValue: value })
+        },
+      },
+    })
+    const pills = wrapper.findAll('.prompt-preset-pill')
+    expect(pills.length).toBeGreaterThanOrEqual(4)
+    const gitmojiPill = pills.find((p) => p.text().includes('Gitmoji'))
+    expect(gitmojiPill).toBeDefined()
+    await gitmojiPill!.trigger('click')
+    expect(wrapper.props('modelValue').commitPrompt).toContain('Gitmoji')
+    expect(gitmojiPill!.classes()).toContain('is-active')
+    wrapper.unmount()
+  })
+
   it('keeps changes in the parent draft and validates incomplete repositories before saving', async () => {
     const wrapper = mount(GitSettings, {
       props: {

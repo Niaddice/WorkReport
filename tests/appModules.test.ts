@@ -5,7 +5,12 @@ import dayjs from 'dayjs'
 
 const { invoke, pickDirectory } = vi.hoisted(() => ({ invoke: vi.fn(), pickDirectory: vi.fn() }))
 
-vi.mock('@tauri-apps/api/core', () => ({ invoke, isTauri: () => true }))
+vi.mock('@tauri-apps/api/core', () => {
+  class MockChannel {
+    onmessage: (chunk: unknown) => void = () => {}
+  }
+  return { invoke, isTauri: () => true, Channel: MockChannel }
+})
 vi.mock('@tauri-apps/api/window', () => ({
   getCurrentWindow: () => ({ onCloseRequested: async () => () => {}, destroy: async () => {} }),
 }))
@@ -607,6 +612,7 @@ describe('modular home integration', () => {
         content: expect.stringContaining('完成项目任务'),
         requestId: expect.any(String),
         prompt: '本次突出交付成果',
+        onChunk: expect.any(Object),
       })
       expect(wrapper.get('.summary-generation-result').text()).toContain('完成任务')
       expect(invoke.mock.calls.some(([command]) => command === 'save_workspace_settings')).toBe(false)

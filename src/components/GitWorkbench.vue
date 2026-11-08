@@ -155,11 +155,15 @@ const groups = computed(() => [
   { id: 'unstaged', label: '未暂存', files: unstaged.value, staged: false },
   { id: 'untracked', label: '未跟踪', files: untracked.value, staged: false },
 ])
+const isAmend = ref(false)
+const canAmend = computed(() => !lock.value && !!repository.value && !repository.value.detached)
+const canUndoCommit = computed(() => !lock.value && !!repository.value && !repository.value.detached)
+
 const canCommit = computed(
   () =>
     !lock.value &&
     !!repository.value &&
-    staged.value.length > 0 &&
+    (staged.value.length > 0 || isAmend.value) &&
     !conflicts.value.length &&
     !repository.value.detached &&
     !!commitMessage.value.trim(),
@@ -325,6 +329,7 @@ watch(
     draftWorkspace = props.workspacePath
     draftKey = `${props.workspacePath}\0${repositoryId.value}\0${props.repositories.find((repo) => repo.id === repositoryId.value)?.path ?? ''}`
     commitMessage.value = repositoryDrafts.get(draftKey) ?? ''
+    isAmend.value = false
     branchName.value = ''
     stashMessage.value = ''
     query.value = ''
@@ -361,6 +366,20 @@ watch(tab, () => {
 })
 watch(historyReference, () => {
   if (tab.value === 'history' && available.value && !lock.value) void searchHistory()
+})
+watch(isAmend, async (val) => {
+  if (val) {
+    if (!commitMessage.value.trim()) {
+      if (!history.value?.commits.length) {
+        await client.loadHistory({ skip: 0, query: '', reference: historyReference.value })
+      }
+      const last = history.value?.commits[0]
+      if (last?.message) {
+        commitMessage.value = last.message
+      }
+    }
+    commitExpanded.value = true
+  }
 })
 function onFocus() {
   if (props.active && available.value && !lock.value) void refresh()
@@ -484,13 +503,35 @@ function branchActionHint(branch: GitBranch, operation: 'switch' | 'merge' | 'de
 async function act(request: Partial<GitActionRequest> & { operation: GitActionRequest['operation'] }) {
   if (lock.value || !available.value) return false
   const scope = `${props.workspacePath}\0${repositoryId.value}`
+  const currentSelectedFile = selectedFile.value
   const result = await client.runAction(request)
   if (scope !== `${props.workspacePath}\0${repositoryId.value}`) return false
-  selectedFile.value = null
-  selectedCommit.value = null
+  if ((request.operation === 'stageHunk' || request.operation === 'unstageHunk') && currentSelectedFile) {
+    const list = currentSelectedFile.staged ? staged.value : unstaged.value
+    const stillThere = list.some((f) => f.path === currentSelectedFile.path)
+    if (stillThere) {
+      selectedFile.value = currentSelectedFile
+      await client.showDiff({ path: currentSelectedFile.path, staged: currentSelectedFile.staged, commit: '' })
+    } else {
+      selectedFile.value = null
+    }
+  } else {
+    selectedFile.value = null
+    selectedCommit.value = null
+  }
   emit('changed')
   if (result && tab.value === 'history') await searchHistory()
   return result
+}
+
+async function stageHunk(patch: string) {
+  if (lock.value || !patch) return
+  await act({ operation: 'stageHunk', patch })
+}
+
+async function unstageHunk(patch: string) {
+  if (lock.value || !patch) return
+  await act({ operation: 'unstageHunk', patch })
 }
 
 function filePaths(file: GitFileChange) {
@@ -500,12 +541,26 @@ function filePaths(file: GitFileChange) {
 
 async function commit(push = false) {
   if (!canCommit.value || (push && !canSync.value)) return
-  if (!(await act({ operation: 'commit', message: commitMessage.value.trim() }))) return
+  const op = isAmend.value ? 'commitAmend' : 'commit'
+  if (!(await act({ operation: op, message: commitMessage.value.trim() }))) return
   commitMessage.value = ''
+  isAmend.value = false
   if (push && !(await act({ operation: 'push' }))) {
     const retry = authentication.value ? '请在下方完成远程认证后重试推送。' : '可直接点击“Push 推送”重试。'
     error.value = `提交已保留在本地，推送失败；${retry}${error.value ? `\n${error.value}` : ''}`
   }
+}
+
+async function undoLastCommit() {
+  if (lock.value) return
+  if (!history.value?.commits.length) {
+    await client.loadHistory({ skip: 0, query: '', reference: historyReference.value })
+  }
+  const lastMsg = history.value?.commits[0]?.message
+  const detail = lastMsg
+    ? `将最近一次提交（${lastMsg.split('\n')[0]}）重置，所有修改将保留在暂存区中。确定继续吗？`
+    : '将最近一次提交重置（Soft Reset），所有修改将保留在暂存区中。确定继续吗？'
+  await ask('撤回最近一次提交', detail, { operation: 'undoCommit' })
 }
 
 async function authenticate(value: { username: string; password: string; save?: boolean }) {
@@ -531,15 +586,40 @@ async function generateMessage() {
   }
   if (!canGenerate.value) return
   const revision = commitMessageRevision
-  const message = await client.generateCommitMessage()
+  commitExpanded.value = true
+  let streamed = false
+  const message = await client.generateCommitMessage((chunk) => {
+    if (!props.active || revision !== commitMessageRevision) return
+    if (!streamed) {
+      commitMessage.value = chunk
+      streamed = true
+    } else {
+      commitMessage.value += chunk
+    }
+  })
   if (!message || !props.active) return
   if (revision !== commitMessageRevision) {
     notice.value = '提交说明已被编辑，已保留你的修改。'
     return
   }
   commitMessage.value = message
-  commitExpanded.value = true
   notice.value = 'AI 提交说明已生成，可修改后再提交。'
+}
+
+const fullCommitMessage = ref('')
+const hasMultilineCommit = computed(() => commitMessage.value.includes('\n'))
+
+function toggleSingleLineCommit() {
+  if (hasMultilineCommit.value) {
+    fullCommitMessage.value = commitMessage.value
+    const firstLine = commitMessage.value.split('\n')[0].trim()
+    commitMessage.value = firstLine
+    notice.value = '已切换为紧凑单行说明。'
+  } else if (fullCommitMessage.value && fullCommitMessage.value.startsWith(commitMessage.value.trim())) {
+    commitMessage.value = fullCommitMessage.value
+    fullCommitMessage.value = ''
+    notice.value = '已恢复完整多行说明。'
+  }
 }
 
 async function createBranch() {
@@ -566,8 +646,17 @@ async function ask(
 async function confirm() {
   if (!confirmation.value || props.disabled || busy.value || loading.value) return
   const request = confirmation.value.request
+  const isUndo = request.operation === 'undoCommit'
+  const prevMsg = isUndo ? (history.value?.commits[0]?.message ?? '') : ''
   confirmation.value = null
-  await act(request)
+  const ok = await act(request)
+  if (ok && isUndo) {
+    if (prevMsg && !commitMessage.value.trim()) {
+      commitMessage.value = prevMsg
+    }
+    commitExpanded.value = true
+    notice.value = '已撤销最近一次提交，修改已保留在暂存区。'
+  }
 }
 
 function discard(file: GitFileChange) {
@@ -1082,6 +1171,15 @@ function statusLabel(file: GitFileChange, staged: boolean) {
                     aria-hidden="true"
                   /></button
               ></span>
+              <button
+                v-if="hasMultilineCommit || (fullCommitMessage && fullCommitMessage.startsWith(commitMessage.trim()))"
+                type="button"
+                class="text-action single-line-toggle"
+                :title="hasMultilineCommit ? '切换为首行紧凑说明' : '恢复完整多行说明'"
+                @click="toggleSingleLineCommit"
+              >
+                {{ hasMultilineCommit ? '紧凑' : '详细' }}
+              </button>
             </div>
             <div v-show="commitExpanded" :id="`${id}-commit-fields`" class="commit-fields">
               <label class="sr-only" :for="`${id}-message`">提交说明</label>
@@ -1107,9 +1205,33 @@ function statusLabel(file: GitFileChange, staged: boolean) {
                 ><template v-else>仅提交已暂存的 {{ staged.length }} 个文件。⌘ / Ctrl + Enter 提交。</template>
               </p>
               <p v-if="repository.detached" class="workbench-hint">当前处于分离 HEAD，请先创建或切换本地分支。</p>
+              <div class="commit-options-row">
+                <label
+                  class="commit-amend-label"
+                  :title="
+                    canAmend ? '将修改合并到上一条提交，或直接修改上一条提交说明' : '处于分离 HEAD，无法修改上一条提交'
+                  "
+                >
+                  <input v-model="isAmend" type="checkbox" :disabled="disabled || busy || loading || !canAmend" />
+                  <span>修改上一条提交 (Amend)</span>
+                </label>
+                <button
+                  v-if="canUndoCommit"
+                  type="button"
+                  class="text-action muted-action undo-commit-btn"
+                  :disabled="disabled || busy || loading"
+                  title="撤回最近一次提交（保留更改在暂存区）"
+                  @click="undoLastCommit"
+                >
+                  撤回上次提交
+                </button>
+              </div>
               <div class="button-row">
-                <button type="submit" class="primary-button commit-primary" :disabled="!canCommit">提交</button
-                ><button type="button" :disabled="!canCommit || !canSync" @click="commit(true)">提交并推送</button>
+                <button type="submit" class="primary-button commit-primary" :disabled="!canCommit">
+                  {{ isAmend ? 'Amend 提交' : '提交' }}</button
+                ><button type="button" :disabled="!canCommit || !canSync" @click="commit(true)">
+                  {{ isAmend ? 'Amend 并推送' : '提交并推送' }}
+                </button>
               </div>
             </div>
           </form>
@@ -1152,7 +1274,14 @@ function statusLabel(file: GitFileChange, staged: boolean) {
             <p v-if="diffLoading" class="workbench-empty" role="status">正在读取差异…</p>
             <template v-else-if="diff"
               ><p v-if="diff.truncated" class="workbench-hint">差异过大，仅显示部分内容。</p>
-              <GitDiffContent v-if="diff.text" :lines="parsedDiff.lines" />
+              <GitDiffContent
+                v-if="diff.text"
+                :lines="parsedDiff.lines"
+                :mode="selectedFile ? (selectedFile.staged ? 'unstage' : 'stage') : null"
+                :disabled="lock"
+                @stage-hunk="stageHunk"
+                @unstage-hunk="unstageHunk"
+              />
               <p v-else class="workbench-empty">没有文本差异，可能是二进制文件或文件权限变化。</p></template
             >
             <div v-else class="workbench-empty diff-placeholder">
@@ -2397,6 +2526,30 @@ h4 {
 .commit-form label {
   font-weight: 500;
   font-size: var(--text-small);
+}
+.commit-options-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: var(--text-small);
+}
+.commit-amend-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  user-select: none;
+  font-weight: normal;
+  color: var(--skin-text);
+}
+.commit-amend-label input[type='checkbox'] {
+  margin: 0;
+  cursor: pointer;
+}
+.undo-commit-btn {
+  font-size: var(--text-caption);
+  padding: 2px 6px;
 }
 .workbench-hint {
   font-size: var(--text-small);

@@ -89,6 +89,8 @@ pub struct Action {
     #[serde(default)]
     pub reference: String,
     #[serde(default)]
+    pub patch: String,
+    #[serde(default)]
     pub credentials: Option<crate::git_auth::Credentials>,
 }
 
@@ -102,6 +104,21 @@ async fn command(
     values: &[String],
 ) -> Result<std::process::Output, String> {
     command_with_credentials(settings, root, values, &[]).await
+}
+
+async fn command_with_stdin(
+    settings: &Settings,
+    root: &Path,
+    values: &[String],
+    input: &[u8],
+) -> Result<std::process::Output, String> {
+    let mut arguments = args(&[
+        "--no-literal-pathspecs",
+        "-c", "core.quotepath=false",
+        "-c", "color.ui=false",
+    ]);
+    arguments.extend_from_slice(values);
+    git::run_with_stdin(settings, root, &arguments, input).await
 }
 
 async fn command_with_credentials(
@@ -483,6 +500,71 @@ async fn staged_revision(settings: &Settings, root: &Path) -> Result<String, Str
     Ok(format!("{:x}", digest.finalize()))
 }
 
+fn is_lock_or_generated_file(path: &str) -> bool {
+    let lower = path.to_ascii_lowercase();
+    let name = path.rsplit(['/', '\\']).next().unwrap_or(path).to_ascii_lowercase();
+    matches!(
+        name.as_str(),
+        "package-lock.json"
+            | "yarn.lock"
+            | "pnpm-lock.yaml"
+            | "cargo.lock"
+            | "composer.lock"
+            | "go.sum"
+            | "podfile.lock"
+            | "gemfile.lock"
+            | "flake.lock"
+            | "poetry.lock"
+    ) || lower.ends_with(".min.js")
+        || lower.ends_with(".min.css")
+        || lower.ends_with(".map")
+        || lower.ends_with(".svg")
+}
+
+pub fn sanitize_diff_for_ai(diff_text: &str) -> (String, bool) {
+    if diff_text.is_empty() {
+        return (String::new(), false);
+    }
+    let mut result = String::with_capacity(diff_text.len().min(160_000));
+    let mut parts: Vec<&str> = diff_text.split("diff --git ").collect();
+    if parts.is_empty() {
+        return (diff_text.to_string(), false);
+    }
+
+    let first = parts.remove(0);
+    if !first.is_empty() {
+        result.push_str(first);
+    }
+
+    let mut noise_reduced = false;
+    for part in parts {
+        let full_part = format!("diff --git {part}");
+        let first_line = full_part.lines().next().unwrap_or("");
+        let is_noise = first_line.split_whitespace().any(is_lock_or_generated_file);
+
+        if is_noise {
+            noise_reduced = true;
+            let mut header_lines = Vec::new();
+            for line in full_part.lines() {
+                header_lines.push(line);
+                if line.starts_with("+++ ") || line.starts_with("--- ") {
+                    break;
+                }
+            }
+            if header_lines.is_empty() {
+                header_lines.push(first_line);
+            }
+            let header = header_lines.join("\n");
+            result.push_str(&header);
+            result.push_str("\n@@ ... @@\n# [依赖锁定或自动生成文件已更新，已略去详细差异内容]\n");
+        } else {
+            result.push_str(&full_part);
+        }
+    }
+
+    (result, noise_reduced)
+}
+
 /// Capture only staged content. Neither worktree changes nor untracked file contents reach AI.
 pub async fn commit_source(settings: &Settings, id: &str) -> Result<CommitSource, String> {
     let root = root(settings, id).await?;
@@ -494,9 +576,14 @@ pub async fn commit_source(settings: &Settings, id: &str) -> Result<CommitSource
     }).collect();
     if staged.is_empty() { return Err("请先暂存需要提交的文件，再生成提交说明".into()); }
     let patch = diff(settings, id, "", true, "").await?;
-    if patch.truncated { return Err("暂存区差异过大，请分批暂存后再生成提交说明".into()); }
-    let content = serde_json::json!({ "branch": state.branch, "files": staged, "diff": patch.text }).to_string();
-    if content.len() > 200_000 { return Err("暂存区内容超过 200 KB，请分批暂存后再生成提交说明".into()); }
+    let (sanitized_diff, noise_reduced) = sanitize_diff_for_ai(&patch.text);
+    if patch.truncated && !noise_reduced {
+        return Err("暂存区差异过大，请分批暂存后再生成提交说明".into());
+    }
+    let content = serde_json::json!({ "branch": state.branch, "files": staged, "diff": sanitized_diff }).to_string();
+    if content.len() > 200_000 {
+        return Err("暂存区内容超过 200 KB，请分批暂存后再生成提交说明".into());
+    }
     let after = staged_revision(settings, &root).await?;
     if before != after { return Err("暂存区或分支已变化，请重新生成提交说明".into()); }
     Ok(CommitSource { content, revision: before })
@@ -565,6 +652,30 @@ pub async fn action_with_credentials(settings: &Settings, id: &str, request: Act
     }
     let mut values;
     match request.operation.as_str() {
+        "stageHunk" | "unstageHunk" => {
+            if request.patch.trim().is_empty() {
+                return Err("补丁内容为空，无法处理".into());
+            }
+            if request.patch.len() > 1000000 {
+                return Err("补丁过大，无法处理".into());
+            }
+            let mut patch = request.patch;
+            if !patch.ends_with('\n') {
+                patch.push('\n');
+            }
+            let mut apply_args = args(&["apply", "--cached", "--whitespace=nowarn", "--recount"]);
+            if request.operation == "unstageHunk" {
+                apply_args.push("--reverse".into());
+            }
+            apply_args.push("-".into());
+            let output = command_with_stdin(settings, &root, &apply_args, patch.as_bytes()).await?;
+            checked(output)?;
+            return Ok(if request.operation == "stageHunk" {
+                "已暂存代码块".into()
+            } else {
+                "已取消暂存代码块".into()
+            });
+        }
         "stage" | "unstage" | "discard" => {
             if request.paths.is_empty() {
                 return Err("请先选择文件".into());
@@ -617,6 +728,47 @@ pub async fn action_with_credentials(settings: &Settings, id: &str, request: Act
                 return Err("没有已暂存的修改，请先暂存文件".into());
             }
             values = args(&["-c", "core.editor=true", "commit", "-m", &request.message]);
+        }
+        "commitAmend" => {
+            let head = command(settings, &root, &args(&[
+                "symbolic-ref", "--quiet", "HEAD",
+            ])).await?;
+            if !head.status.success() {
+                return Err("当前处于分离 HEAD 状态，请先创建或切换到本地分支，再提交".into());
+            }
+            if !has_head(settings, &root).await? {
+                return Err("当前仓库尚无提交，无法修改上一次提交".into());
+            }
+            if request.message.trim().is_empty() {
+                return Err("请填写提交说明".into());
+            }
+            let statuses = files(settings, &root).await?;
+            if statuses.iter().any(|file| file.conflicted) {
+                return Err("请先解决冲突并暂存文件，再提交".into());
+            }
+            values = args(&["-c", "core.editor=true", "commit", "--amend", "-m", &request.message]);
+        }
+        "undoCommit" => {
+            let head = command(settings, &root, &args(&[
+                "symbolic-ref", "--quiet", "HEAD",
+            ])).await?;
+            if !head.status.success() {
+                return Err("当前处于分离 HEAD 状态，无法撤回提交".into());
+            }
+            if !has_head(settings, &root).await? {
+                return Err("当前仓库尚无提交，无法撤回".into());
+            }
+            let has_parent = command(settings, &root, &args(&[
+                "rev-parse", "--verify", "--quiet", "HEAD~1",
+            ])).await?.status.success();
+            if !has_parent {
+                return Err("当前分支仅有初始提交，无法撤回".into());
+            }
+            let statuses = files(settings, &root).await?;
+            if statuses.iter().any(|file| file.conflicted) {
+                return Err("当前存在未解决的冲突，无法撤回提交".into());
+            }
+            values = args(&["reset", "--soft", "HEAD~1"]);
         }
         "createBranch" => {
             validate_reference(&request.reference)?;
@@ -765,6 +917,7 @@ mod tests {
             paths: paths.iter().map(|s| (*s).into()).collect(),
             message: message.into(),
             reference: reference.into(),
+            patch: String::new(),
             credentials: None,
         }
     }
@@ -1068,5 +1221,107 @@ mod tests {
         assert_eq!(status[1].path, "new\nname");
         assert_eq!(status[1].original_path.as_deref(), Some("old name"));
         assert_eq!(status[2].path, "[file]*");
+    }
+
+    #[test]
+    fn sanitizes_lockfiles_and_huge_diffs_for_ai() {
+        let diff_input = "diff --git a/package-lock.json b/package-lock.json\nindex 111..222 100644\n--- a/package-lock.json\n+++ b/package-lock.json\n@@ -1,100 +1,200 @@\n+lots of lock lines\n".repeat(50);
+        let normal_diff = "diff --git a/src/main.ts b/src/main.ts\nindex 333..444 100644\n--- a/src/main.ts\n+++ b/src/main.ts\n@@ -1,3 +1,4 @@\n+console.log('hello');\n";
+        let combined = format!("{diff_input}{normal_diff}");
+        let (sanitized, noise_reduced) = sanitize_diff_for_ai(&combined);
+        assert!(noise_reduced);
+        assert!(sanitized.contains("package-lock.json"));
+        assert!(sanitized.contains("依赖锁定或自动生成文件已更新"));
+        assert!(sanitized.contains("src/main.ts"));
+        assert!(sanitized.contains("+console.log('hello');"));
+        assert!(sanitized.len() < 100_000);
+    }
+
+    #[tokio::test]
+    async fn commit_amend_and_undo_commit_work() {
+        let (dir, settings) = setup();
+        first_commit(dir.path(), &settings).await;
+        std::fs::write(dir.path().join("file.txt"), "first line\n").unwrap();
+        act(&settings, "stage", &["file.txt"], "", "").await;
+        act(&settings, "commit", &[], "first feature", "").await;
+        let commit1_hash = git(dir.path(), &["rev-parse", "HEAD"]);
+
+        // Amend commit message and additional stage
+        std::fs::write(dir.path().join("file2.txt"), "second file\n").unwrap();
+        act(&settings, "stage", &["file2.txt"], "", "").await;
+        act(&settings, "commitAmend", &[], "amended feature", "").await;
+        let commit2_hash = git(dir.path(), &["rev-parse", "HEAD"]);
+        assert_ne!(commit1_hash, commit2_hash);
+        assert_eq!(git(dir.path(), &["log", "-1", "--format=%s"]), "amended feature");
+        assert_eq!(git(dir.path(), &["show", "HEAD:file2.txt"]), "second file");
+
+        // Undo commit (soft reset)
+        act(&settings, "undoCommit", &[], "", "").await;
+        assert_eq!(git(dir.path(), &["log", "-1", "--format=%s"]), "initial");
+        // Verify changes are preserved in staged
+        let repo_state = repository(&settings, "repo").await.unwrap();
+        assert!(repo_state.files.iter().any(|f| f.path == "file.txt" && f.index_status == "M"));
+        assert!(repo_state.files.iter().any(|f| f.path == "file2.txt" && f.index_status == "A"));
+    }
+
+    #[tokio::test]
+    async fn ai_commit_source_allows_large_lockfiles_by_sanitizing_diff() {
+        let (dir, settings) = setup();
+        first_commit(dir.path(), &settings).await;
+        std::fs::write(dir.path().join("src.rs"), "fn hello() {}\n").unwrap();
+        // 写入一个超过 10KB 的 package-lock.json
+        std::fs::write(dir.path().join("package-lock.json"), "{\n\"lock\": true,\n\"dep\": 1\n}\n".repeat(600)).unwrap();
+        act(&settings, "stage", &["src.rs", "package-lock.json"], "", "").await;
+        let source = commit_source(&settings, "repo").await.unwrap();
+        assert!(source.content.contains("src.rs"));
+        assert!(source.content.contains("package-lock.json"));
+        assert!(source.content.contains("依赖锁定或自动生成文件已更新"));
+        assert!(source.content.len() < 200_000);
+    }
+
+    #[tokio::test]
+    async fn stage_hunk_and_unstage_hunk_work() {
+        let (dir, settings) = setup();
+        let initial_content = (1..=20).map(|i| format!("line {i}\n")).collect::<String>();
+        std::fs::write(dir.path().join("file.txt"), &initial_content).unwrap();
+        act(&settings, "stage", &["file.txt"], "", "").await;
+        act(&settings, "commit", &[], "initial commit", "").await;
+
+        let mut modified = (1..=20).map(|i| format!("line {i}\n")).collect::<Vec<_>>();
+        modified[1] = "line 2 modified\n".into();
+        modified[15] = "line 16 modified\n".into();
+        std::fs::write(dir.path().join("file.txt"), modified.concat()).unwrap();
+
+        // Check diff
+        let d = diff(&settings, "repo", "file.txt", false, "").await.unwrap();
+        assert!(d.text.contains("line 2 modified"));
+        assert!(d.text.contains("line 16 modified"));
+
+        // Stage only the first hunk
+        let hunk1_patch = "diff --git a/file.txt b/file.txt\n--- a/file.txt\n+++ b/file.txt\n@@ -1,4 +1,4 @@\n line 1\n-line 2\n+line 2 modified\n line 3\n line 4\n";
+        let mut req = request("stageHunk", &[], "", "");
+        req.patch = hunk1_patch.into();
+        let out = action(&settings, "repo", req).await.unwrap();
+        assert_eq!(out, "已暂存代码块");
+
+        // Staged diff should contain line 2 modified, but NOT line 16 modified
+        let staged_diff = diff(&settings, "repo", "file.txt", true, "").await.unwrap();
+        assert!(staged_diff.text.contains("line 2 modified"));
+        assert!(!staged_diff.text.contains("line 16 modified"));
+
+        // Unstaged diff should still contain line 16 modified, but NOT line 2 modified
+        let unstaged_diff = diff(&settings, "repo", "file.txt", false, "").await.unwrap();
+        assert!(!unstaged_diff.text.contains("line 2 modified"));
+        assert!(unstaged_diff.text.contains("line 16 modified"));
+
+        // Now unstage the first hunk
+        let mut unstage_req = request("unstageHunk", &[], "", "");
+        unstage_req.patch = hunk1_patch.into();
+        let out_unstage = action(&settings, "repo", unstage_req).await.unwrap();
+        assert_eq!(out_unstage, "已取消暂存代码块");
+
+        // Staged diff should now be empty
+        let staged_diff_after = diff(&settings, "repo", "file.txt", true, "").await.unwrap();
+        assert!(staged_diff_after.text.is_empty());
     }
 }

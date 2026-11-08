@@ -18,6 +18,39 @@ export interface GitSettings {
 
 export const DEFAULT_GIT_COMMIT_PROMPT =
   '根据暂存区的更改生成简洁准确的中文 Git 提交说明。首行使用 Conventional Commits 格式（如 feat:、fix:、refactor:），概括主要改动；必要时空一行后列出关键变化。只描述实际更改，不编造测试结果或工作成果，只输出提交说明正文。'
+
+export interface CommitPromptPreset {
+  id: string
+  label: string
+  prompt: string
+}
+
+export const COMMIT_PROMPT_PRESETS: CommitPromptPreset[] = [
+  {
+    id: 'conventional',
+    label: 'Conventional (默认)',
+    prompt: DEFAULT_GIT_COMMIT_PROMPT,
+  },
+  {
+    id: 'gitmoji',
+    label: 'Gitmoji 风格',
+    prompt:
+      '首行使用 Gitmoji 与语义化提交格式（如 ✨ feat:、🐛 fix:、💄 style:、♻️ refactor:、📝 docs:），概括主要改动；必要时空一行列出具体变更清单。只描述实际更改，不编造测试结果，只输出提交说明正文。',
+  },
+  {
+    id: 'chinese',
+    label: '中文动词简短',
+    prompt:
+      '使用简明中文（如“新增...”、“修复...”、“优化...”、“重构...”），首行不超过50字概括改动；必要时空一行分条说明核心修改。只输出提交说明正文，不使用英文标签。',
+  },
+  {
+    id: 'angular-scope',
+    label: 'Angular (含 Scope)',
+    prompt:
+      '首行严格遵循 Angular 规范格式：<type>(<scope>): <subject>，例如 feat(auth): 支持扫码登录，50字以内；必要时空一行书写具体改动点。只输出提交说明正文。',
+  },
+]
+
 export const DEFAULT_GIT_SETTINGS: GitSettings = {
   executable: 'git',
   repositories: [],

@@ -11,8 +11,11 @@ import {
   PhMonitor,
   PhPlus,
   PhSparkle,
+  PhCircleNotch,
+  PhCheck,
+  PhX,
 } from '@phosphor-icons/vue'
-import { aiApi, aiSettingsReady, type AiProvider, type DetectedCli } from '../lib/ai'
+import { aiApi, aiSettingsReady, type AiProvider, type DetectedCli, type TestProviderResult } from '../lib/ai'
 import type { Workspace } from '../lib/workspace'
 import { useSettingsDraft, type WorkspaceSettings } from '../lib/settingsDraft'
 import { pushMessage } from '../lib/messages'
@@ -182,6 +185,8 @@ const presetOptions = [
   { value: 'deepseek', label: 'DeepSeek' },
   { value: 'gemini', label: 'Gemini' },
   { value: 'anthropic', label: 'Anthropic' },
+  { value: 'ollama', label: 'Ollama (本地)' },
+  { value: 'lmstudio', label: 'LM Studio (本地)' },
   { value: 'cursor', label: 'Cursor CLI' },
   { value: 'grok', label: 'Grok Build CLI' },
   { value: 'custom', label: '自定义 OpenAI 兼容' },
@@ -310,28 +315,41 @@ function addCustom() {
     })
     return
   }
-  const anthropic = preset.value === 'anthropic'
+  const isAnthropic = preset.value === 'anthropic'
+  const isOllama = preset.value === 'ollama'
+  const isLmStudio = preset.value === 'lmstudio'
+  const name =
+    preset.value === 'deepseek'
+      ? 'DeepSeek'
+      : preset.value === 'gemini'
+        ? 'Gemini'
+        : isAnthropic
+          ? 'Anthropic'
+          : isOllama
+            ? 'Ollama'
+            : isLmStudio
+              ? 'LM Studio'
+              : '自定义 AI'
+  const baseUrl =
+    preset.value === 'deepseek'
+      ? 'https://api.deepseek.com/v1'
+      : preset.value === 'gemini'
+        ? 'https://generativelanguage.googleapis.com/v1beta/openai'
+        : isAnthropic
+          ? 'https://api.anthropic.com/v1'
+          : isOllama
+            ? 'http://localhost:11434/v1'
+            : isLmStudio
+              ? 'http://localhost:1234/v1'
+              : ''
+  const model = preset.value === 'deepseek' ? 'deepseek-chat' : isOllama ? 'qwen2.5:latest' : ''
   const provider: AiProvider = {
     id: crypto.randomUUID(),
-    name:
-      preset.value === 'deepseek'
-        ? 'DeepSeek'
-        : preset.value === 'gemini'
-          ? 'Gemini'
-          : anthropic
-            ? 'Anthropic'
-            : '自定义 AI',
-    kind: anthropic ? 'anthropic' : 'http',
+    name,
+    kind: isAnthropic ? 'anthropic' : 'http',
     executable: '',
-    model: preset.value === 'deepseek' ? 'deepseek-chat' : '',
-    baseUrl:
-      preset.value === 'deepseek'
-        ? 'https://api.deepseek.com/v1'
-        : preset.value === 'gemini'
-          ? 'https://generativelanguage.googleapis.com/v1beta/openai'
-          : anthropic
-            ? 'https://api.anthropic.com/v1'
-            : '',
+    model,
+    baseUrl,
     apiKey: '',
   }
   draft.value.ai.providers.push(provider)
@@ -341,6 +359,33 @@ function remove(id: string) {
   draft.value.ai.providers = draft.value.ai.providers.filter((provider) => provider.id !== id)
   if (draft.value.ai.defaultProviderId === id) draft.value.ai.defaultProviderId = null
   if (editingId.value === id) editingId.value = ''
+}
+const testingProviderId = ref<string | null>(null)
+const testResults = ref<Record<string, TestProviderResult>>({})
+
+async function testConnection(provider: AiProvider) {
+  if (testingProviderId.value) return
+  testingProviderId.value = provider.id
+  try {
+    const result = await aiApi.testProvider(provider)
+    testResults.value[provider.id] = result
+    if (result.success) {
+      pushMessage({ tone: 'success', text: `${provider.name || 'AI'} 连接测试成功 (${result.latencyMs}ms)` })
+    } else {
+      pushMessage({ tone: 'error', text: `${provider.name || 'AI'} 连接失败: ${result.error || '未知错误'}` })
+    }
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err)
+    testResults.value[provider.id] = {
+      success: false,
+      latencyMs: 0,
+      reply: '',
+      error: msg,
+    }
+    pushMessage({ tone: 'error', text: `${provider.name || 'AI'} 测试失败: ${msg}` })
+  } finally {
+    testingProviderId.value = null
+  }
 }
 </script>
 
@@ -794,6 +839,38 @@ function remove(id: string) {
                               每次调用都要启动子进程，通常比模型接口慢，请预留等待时间。
                             </p></template
                           >
+                          <div class="provider-test-bar">
+                            <button
+                              type="button"
+                              class="text-action test-provider-btn"
+                              :disabled="busy || testingProviderId === provider.id"
+                              @click="testConnection(provider)"
+                            >
+                              <PhCircleNotch
+                                v-if="testingProviderId === provider.id"
+                                class="spin"
+                                :size="14"
+                                aria-hidden="true"
+                              />
+                              <span>{{ testingProviderId === provider.id ? '正在测试…' : '测试连接' }}</span>
+                            </button>
+                            <span
+                              v-if="testResults[provider.id]"
+                              class="provider-test-result"
+                              :class="{
+                                'is-success': testResults[provider.id]?.success,
+                                'is-error': !testResults[provider.id]?.success,
+                              }"
+                            >
+                              <PhCheck v-if="testResults[provider.id]?.success" :size="14" aria-hidden="true" />
+                              <PhX v-else :size="14" aria-hidden="true" />
+                              <span>{{
+                                testResults[provider.id]?.success
+                                  ? `连接成功 (${testResults[provider.id]?.latencyMs}ms)`
+                                  : testResults[provider.id]?.error || '连接失败'
+                              }}</span>
+                            </span>
+                          </div>
                         </div>
                       </div>
                     </div>

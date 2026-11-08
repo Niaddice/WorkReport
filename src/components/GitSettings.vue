@@ -8,6 +8,7 @@ import SavedGitCredentials from './SavedGitCredentials.vue'
 import GithubAuthentication from './GithubAuthentication.vue'
 import {
   cloneGitSettings,
+  COMMIT_PROMPT_PRESETS,
   DEFAULT_GIT_COMMIT_PROMPT,
   validateGitSettings,
   type GitRepository,
@@ -185,6 +186,19 @@ defineExpose({ validate, focusInvalid })
             恢复默认
           </button>
         </div>
+        <div class="git-prompt-presets" role="group" aria-label="提交说明风格预设">
+          <button
+            v-for="preset in COMMIT_PROMPT_PRESETS"
+            :key="preset.id"
+            type="button"
+            class="prompt-preset-pill"
+            :class="{ 'is-active': (modelValue.commitPrompt || DEFAULT_GIT_COMMIT_PROMPT) === preset.prompt }"
+            :disabled="formBusy"
+            @click.prevent="update({ commitPrompt: preset.prompt })"
+          >
+            {{ preset.label }}
+          </button>
+        </div>
         <textarea
           :id="`${id}-commit-prompt`"
           :value="modelValue.commitPrompt ?? DEFAULT_GIT_COMMIT_PROMPT"
@@ -294,6 +308,33 @@ defineExpose({ validate, focusInvalid })
 .git-repositories-heading,
 .git-prompt-heading {
   justify-content: space-between;
+}
+.git-prompt-presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 4px;
+  margin-bottom: 4px;
+}
+.prompt-preset-pill {
+  padding: 3px 9px;
+  font-size: var(--text-small);
+  border: 1px solid var(--skin-border);
+  border-radius: 999px;
+  background: var(--skin-canvas);
+  color: var(--skin-text-secondary);
+  cursor: pointer;
+  transition: all var(--motion-fast);
+}
+.prompt-preset-pill:hover:not(:disabled) {
+  border-color: var(--skin-accent);
+  color: var(--skin-accent);
+}
+.prompt-preset-pill.is-active {
+  background: var(--skin-accent-soft);
+  border-color: var(--skin-accent);
+  color: var(--skin-accent);
+  font-weight: 500;
 }
 .git-repositories-heading h4 {
   margin: 0;

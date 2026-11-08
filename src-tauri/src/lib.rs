@@ -705,6 +705,7 @@ fn cancel_git_commit_message(runtime: State<'_, GitCommitRuntime>, request_id: S
 async fn generate_git_commit_message(
     state: State<'_, AppState>, runtime: State<'_, GitCommitRuntime>,
     workspace_path: String, repository_id: String, request_id: String,
+    on_chunk: tauri::ipc::Channel<String>,
 ) -> Result<String, String> {
     let token = runtime.0.begin(request_id.clone())?;
     let result = async {
@@ -718,7 +719,16 @@ async fn generate_git_commit_message(
         }).await?;
         let source = git_client::commit_source(&configuration, &repository_id).await?;
         validate_git_configuration(state.0.clone(), workspace_path.clone(), configuration.clone()).await?;
-        let message = ai::git_commit_message(&provider, &source.content, &configuration.commit_prompt, token.clone()).await?;
+        let cb = move |chunk: &str| {
+            let _ = on_chunk.send(chunk.to_string());
+        };
+        let message = ai::git_commit_message_with_stream(
+            &provider,
+            &source.content,
+            &configuration.commit_prompt,
+            token.clone(),
+            Some(&cb),
+        ).await?;
         if token.is_cancelled() { return Err("已取消生成 Git 提交说明".into()); }
         validate_git_configuration(state.0.clone(), workspace_path, configuration.clone()).await?;
         let current = git_client::commit_source(&configuration, &repository_id).await?;
@@ -1131,6 +1141,10 @@ async fn list_cli_models(
     ai::list_cli_models(&kind, &executable).await
 }
 #[tauri::command]
+async fn test_ai_provider(provider: ai::Provider) -> Result<ai::TestProviderResult, String> {
+    ai::test_provider(&provider).await
+}
+#[tauri::command]
 fn cancel_ai(state: State<'_, ai::Runtime>, request_id: String) {
     state.cancel(&request_id);
 }
@@ -1142,6 +1156,8 @@ async fn polish_entry(
     content: String,
     format: Format,
     request_id: String,
+    prompt: Option<String>,
+    on_chunk: tauri::ipc::Channel<String>,
 ) -> Result<String, String> {
     let settings = read_ai_settings(&app, &workspace_state)?;
     let provider = settings
@@ -1151,12 +1167,21 @@ async fn polish_entry(
         .ok_or("请先在设置中选择默认 AI")?
         .clone();
     let token = state.begin(request_id.clone())?;
-    let result = ai::polish(
+    let preference = prompt
+        .as_deref()
+        .map(str::trim)
+        .filter(|p| !p.is_empty())
+        .unwrap_or(&settings.generation_preference);
+    let cb = move |chunk: &str| {
+        let _ = on_chunk.send(chunk.to_string());
+    };
+    let result = ai::polish_with_stream(
         &provider,
         &content,
         format.extension(),
-        &settings.generation_preference,
+        preference,
         token,
+        Some(&cb),
     )
     .await;
     state.finish(&request_id);
@@ -1170,6 +1195,7 @@ async fn summarize_entries(
     content: String,
     request_id: String,
     prompt: Option<String>,
+    on_chunk: tauri::ipc::Channel<String>,
 ) -> Result<String, String> {
     let settings = read_ai_settings(&app, &workspace_state)?;
     let prompt = ai::summary_request_prompt(&settings.summary_prompt, prompt)?;
@@ -1180,7 +1206,17 @@ async fn summarize_entries(
         .ok_or("请先在设置中选择默认 AI")?
         .clone();
     let token = state.begin(request_id.clone())?;
-    let result = ai::summarize(&provider, &content, &prompt, token).await;
+    let cb = move |chunk: &str| {
+        let _ = on_chunk.send(chunk.to_string());
+    };
+    let result = ai::summarize_with_stream(
+        &provider,
+        &content,
+        &prompt,
+        token,
+        Some(&cb),
+    )
+    .await;
     state.finish(&request_id);
     result
 }
@@ -1317,6 +1353,7 @@ pub fn run() {
             detect_ai_clis,
             list_ai_models,
             list_cli_models,
+            test_ai_provider,
             cancel_ai,
             polish_entry,
             summarize_entries

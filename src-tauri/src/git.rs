@@ -6,7 +6,11 @@ use std::{
     process::Stdio,
     time::Duration,
 };
-use tokio::{io::AsyncReadExt, process::Command, time::timeout};
+use tokio::{
+    io::{AsyncReadExt, AsyncWriteExt},
+    process::Command,
+    time::timeout,
+};
 
 const MAX_COMMITS: usize = 1000;
 const MAX_OUTPUT: u64 = 4 * 1024 * 1024;
@@ -230,6 +234,79 @@ pub(super) async fn run_with_credential_set(
         value.redact(&mut stdout);
         value.redact_error(&mut stderr);
     }
+    Ok(std::process::Output {
+        stdout,
+        stderr,
+        status,
+    })
+}
+
+pub(super) async fn run_with_stdin(
+    settings: &Settings,
+    path: &Path,
+    args: &[String],
+    input: &[u8],
+) -> Result<std::process::Output, String> {
+    let mut command = Command::new(settings.executable.trim());
+    crate::network::current()?.command(&mut command, true)?;
+    command
+        .current_dir(path)
+        .args(["--no-pager", "--no-optional-locks"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("GIT_PAGER", "cat")
+        .kill_on_drop(true);
+    command.args(args);
+    let mut paths: Vec<_> =
+        std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()).collect();
+    paths.extend(["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin"].map(Into::into));
+    if let Ok(path) = std::env::join_paths(paths) {
+        command.env("PATH", path);
+    }
+    for key in [
+        "GIT_DIR",
+        "GIT_WORK_TREE",
+        "GIT_COMMON_DIR",
+        "GIT_INDEX_FILE",
+        "GIT_OBJECT_DIRECTORY",
+        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    ] {
+        command.env_remove(key);
+    }
+    #[cfg(windows)]
+    command.creation_flags(0x08000000);
+    let mut child = command
+        .spawn()
+        .map_err(|error| format!("无法启动 Git，请检查 Git 程序和仓库目录：{error}"))?;
+    let mut stdin = child.stdin.take().ok_or("无法打开 Git 标准输入")?;
+    let stdout = child.stdout.take().ok_or("无法读取 Git 输出")?;
+    let stderr = child.stderr.take().ok_or("无法读取 Git 错误信息")?;
+    let input_bytes = input.to_vec();
+    let write_task = async move {
+        stdin
+            .write_all(&input_bytes)
+            .await
+            .map_err(|error| format!("写入 Git 输入失败：{error}"))?;
+        drop(stdin);
+        Ok::<(), String>(())
+    };
+    let (stdout, stderr, status, _) = timeout(Duration::from_secs(30), async {
+        tokio::try_join!(
+            read_limited(stdout),
+            read_limited(stderr),
+            async {
+                child
+                    .wait()
+                    .await
+                    .map_err(|error| format!("Git 运行失败：{error}"))
+            },
+            write_task
+        )
+    })
+    .await
+    .map_err(|_| "Git 操作超时，请检查仓库后重试".to_string())??;
     Ok(std::process::Output {
         stdout,
         stderr,

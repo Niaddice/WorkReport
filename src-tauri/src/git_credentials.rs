@@ -385,7 +385,7 @@ mod tests {
         }
     }
     fn action(credentials: Option<Credentials>) -> crate::git_client::Action {
-        crate::git_client::Action { operation: "push".into(), paths: vec![], message: String::new(), reference: String::new(), credentials }
+        crate::git_client::Action { operation: "push".into(), paths: vec![], message: String::new(), reference: String::new(), patch: String::new(), credentials }
     }
     #[tokio::test]
     async fn saved_logins_are_used_on_the_first_fetch_pull_and_push_attempt() {

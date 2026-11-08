@@ -1,5 +1,5 @@
 import { computed, ref } from 'vue'
-import { invoke } from '@tauri-apps/api/core'
+import { Channel, invoke } from '@tauri-apps/api/core'
 
 export type ProviderKind = 'codex' | 'claude' | 'opencode' | 'cursor' | 'grok' | 'http' | 'anthropic'
 export interface AiProvider {
@@ -54,6 +54,12 @@ export interface AiModel {
   id: string
   name: string
 }
+export interface TestProviderResult {
+  success: boolean
+  latencyMs: number
+  reply: string
+  error?: string | null
+}
 export type SummaryMode = 'ai' | 'direct' | ''
 export const DEFAULT_SUMMARY_PROMPT =
   '根据所选日期的日报，按项目或主题归纳工作成果、进展、问题和下一步计划，突出跨日期的变化与关联。只使用日报中的事实，保持数字、状态和原意，不编造、不夸大，使用 Markdown 输出清晰、精炼的总结。'
@@ -63,8 +69,22 @@ export const aiApi = {
   models: (baseUrl: string, apiKey: string, kind: ProviderKind) =>
     invoke<AiModel[]>('list_ai_models', { baseUrl, apiKey, kind }),
   cliModels: (kind: ProviderKind, executable: string) => invoke<AiModel[]>('list_cli_models', { kind, executable }),
-  summarize: (content: string, requestId: string, prompt?: string) =>
-    invoke<string>('summarize_entries', { content, requestId, ...(prompt === undefined ? {} : { prompt }) }),
+  testProvider: (provider: AiProvider) => invoke<TestProviderResult>('test_ai_provider', { provider }),
+  summarize: (content: string, requestId: string, prompt?: string, onChunk?: Channel<string>) =>
+    invoke<string>('summarize_entries', {
+      content,
+      requestId,
+      ...(prompt === undefined ? {} : { prompt }),
+      onChunk: onChunk ?? new Channel<string>(),
+    }),
+  polish: (content: string, requestId: string, format = 'md', prompt?: string, onChunk?: Channel<string>) =>
+    invoke<string>('polish_entry', {
+      content,
+      format,
+      requestId,
+      ...(prompt === undefined ? {} : { prompt }),
+      onChunk: onChunk ?? new Channel<string>(),
+    }),
   cancel: (requestId: string) => invoke<void>('cancel_ai', { requestId }),
 }
 export function useAi() {
@@ -162,10 +182,22 @@ export function useAi() {
     summaryError.value = ''
     summaryResult.value = ''
     startSummaryProgress()
+    const onChunk = new Channel<string>()
+    let streamed = false
+    onChunk.onmessage = (chunk) => {
+      if (summaryRequestId === id && summaryVisible.value) {
+        if (!streamed) {
+          summaryResult.value = chunk
+          streamed = true
+        } else {
+          summaryResult.value += chunk
+        }
+      }
+    }
     try {
       const text = await (prompt === undefined
-        ? aiApi.summarize(summaryContent, id)
-        : aiApi.summarize(summaryContent, id, prompt))
+        ? aiApi.summarize(summaryContent, id, undefined, onChunk)
+        : aiApi.summarize(summaryContent, id, prompt, onChunk))
       if (summaryRequestId === id && summaryVisible.value) summaryResult.value = text
     } catch (cause) {
       if (summaryRequestId === id && summaryVisible.value) summaryError.value = String(cause)
@@ -175,6 +207,48 @@ export function useAi() {
         stopSummaryProgress()
       }
     }
+  }
+
+  const polishing = ref(false)
+  const polishError = ref('')
+  let polishRequestId = ''
+
+  async function polishContent(
+    content: string,
+    options?: { prompt?: string; format?: string; onChunk?: (chunk: string) => void },
+  ): Promise<string> {
+    if (polishing.value) throw new Error('AI 正在处理中，请稍候')
+    if (!content.trim()) throw new Error('没有可润色的内容')
+    const id = crypto.randomUUID()
+    polishRequestId = id
+    polishing.value = true
+    polishError.value = ''
+    try {
+      const channel = new Channel<string>()
+      if (options?.onChunk) {
+        channel.onmessage = (chunk) => {
+          if (polishing.value && polishRequestId === id) {
+            options.onChunk!(chunk)
+          }
+        }
+      }
+      const result = await aiApi.polish(content, id, options?.format ?? 'md', options?.prompt, channel)
+      return result
+    } catch (cause) {
+      polishError.value = String(cause)
+      throw cause
+    } finally {
+      if (polishRequestId === id) {
+        polishing.value = false
+      }
+    }
+  }
+
+  function cancelPolish() {
+    const id = polishRequestId
+    polishRequestId = ''
+    polishing.value = false
+    if (id) void aiApi.cancel(id).catch(() => {})
   }
   function directSummary() {
     if (!summaryVisible.value || summaryGenerating.value) return
@@ -232,5 +306,9 @@ export function useAi() {
     openSummary,
     closeSummary,
     cancelSummary,
+    polishing,
+    polishError,
+    polishContent,
+    cancelPolish,
   }
 }
