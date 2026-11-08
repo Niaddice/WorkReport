@@ -1,5 +1,6 @@
 import { invoke, isTauri } from '@tauri-apps/api/core'
 import { ref } from 'vue'
+import { aiApi } from './ai'
 
 export interface GitCommitItem {
   hash: string
@@ -67,7 +68,7 @@ export function useGitJournalDraft() {
 
   function cancel() {
     if (currentRequestId && isTauri()) {
-      void invoke('cancel_ai', { requestId: currentRequestId }).catch(() => {})
+      void aiApi.cancel(currentRequestId).catch(() => {})
     }
     currentRequestId = ''
     generating.value = false
@@ -105,11 +106,7 @@ export function useGitJournalDraft() {
       }
 
       const prompt = customPrompt || DEFAULT_GIT_JOURNAL_PROMPT
-      const content = await invoke<string>('summarize_entries', {
-        content: text,
-        requestId,
-        prompt,
-      })
+      const content = await aiApi.summarize(text, requestId, prompt)
 
       if (currentRequestId !== requestId) return null
       if (!content?.trim()) {

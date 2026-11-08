@@ -106,6 +106,15 @@ describe('useGitJournalDraft', () => {
     expect(result?.content).toContain('### 今日工作进展与成果')
     expect(error.value).toBe('')
     expect(generating.value).toBe(false)
+    expect(invoke).toHaveBeenCalledWith(
+      'summarize_entries',
+      expect.objectContaining({
+        content: expect.any(String),
+        requestId: expect.any(String),
+        prompt: expect.any(String),
+        onChunk: expect.anything(),
+      }),
+    )
   })
 
   it('reports error when no commits are found', async () => {
