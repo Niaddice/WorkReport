@@ -833,4 +833,31 @@ describe('journal Markdown tools', () => {
     await shortcutBtn.trigger('click')
     expect(wrapper.emitted('shortcuts')).toHaveLength(1)
   })
+
+  it('opens Git draft popover on click and emits generate-git on confirmation', async () => {
+    const wrapper = await mountEditor()
+    await flushPromises()
+
+    const gitBtn = wrapper.find('.git-draft-button')
+    expect(gitBtn.exists()).toBe(true)
+    expect(gitBtn.attributes('aria-expanded')).toBe('false')
+
+    // Click to open GitDraftPopover
+    await gitBtn.trigger('click')
+    await flushPromises()
+
+    expect(gitBtn.attributes('aria-expanded')).toBe('true')
+    const popover = document.querySelector('.git-draft-popover')
+    expect(popover).not.toBeNull()
+    expect(popover?.textContent).toContain('从 Git 提交生成日报')
+
+    // Confirm inside popover
+    const confirmBtn = popover?.querySelector<HTMLButtonElement>('.popover-btn-primary')
+    confirmBtn?.click()
+    await flushPromises()
+
+    expect(wrapper.emitted('generate-git')).toEqual([[{ mode: 'append', customPrompt: undefined }]])
+    expect(document.querySelector('.git-draft-popover')).toBeNull()
+    expect(gitBtn.attributes('aria-expanded')).toBe('false')
+  })
 })

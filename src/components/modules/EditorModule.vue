@@ -46,7 +46,7 @@ onBeforeUnmount(() => {
   if (context.editor.value?.focus === focus) context.editor.value = null
 })
 
-async function onGenerateGitDraft() {
+async function onGenerateGitDraft(options?: { mode?: 'replace' | 'append'; customPrompt?: string }) {
   const path = journal.workspace.value?.path
   if (!path || disabled.value || gitDraft.generating.value) return
   if (!context.ai.defaultProvider.value) {
@@ -56,7 +56,7 @@ async function onGenerateGitDraft() {
   }
   const date = selectedDate.value
   pushMessage({ tone: 'info', text: '正在读取 Git 提交并生成日报草稿…' })
-  const result = await gitDraft.generate(path, date)
+  const result = await gitDraft.generate(path, date, options?.customPrompt)
   if (!result) {
     if (gitDraft.error.value) {
       reportError(gitDraft.error.value)
@@ -66,7 +66,8 @@ async function onGenerateGitDraft() {
   }
 
   const currentContent = draft.value.trim()
-  if (!currentContent) {
+  const insertMode = options?.mode ?? (currentContent ? 'append' : 'replace')
+  if (insertMode === 'replace' || !currentContent) {
     edit(result.content, true)
   } else {
     const separator = currentContent.endsWith('\n\n') ? '' : currentContent.endsWith('\n') ? '\n' : '\n\n'
@@ -77,6 +78,11 @@ async function onGenerateGitDraft() {
   }
   await flush()
   pushMessage({ tone: 'success', text: `已成功根据 ${result.commitCount} 条 Git 提交生成日报！` })
+}
+
+function onCancelGitDraft() {
+  gitDraft.cancel()
+  pushMessage({ tone: 'info', text: '已取消从 Git 生成日报' })
 }
 </script>
 
@@ -134,6 +140,7 @@ async function onGenerateGitDraft() {
         @restore="actions.requestRestore"
         @error="reportError"
         @generate-git="onGenerateGitDraft"
+        @cancel-git="onCancelGitDraft"
         @open-editor-settings="actions.openEditorSettings?.()"
         @shortcuts="actions.openShortcuts?.()"
       />

@@ -51,6 +51,7 @@ import { markdownWithSourceLines } from '../lib/markdownScroll'
 import RichMarkdownEditor from './RichMarkdownEditor.vue'
 import PreviousJournalButton from './PreviousJournalButton.vue'
 import JournalTemplateButton from './JournalTemplateButton.vue'
+import GitDraftPopover from './GitDraftPopover.vue'
 import PolishDiffDialog from './PolishDiffDialog.vue'
 import { DEFAULT_EDITOR_SETTINGS, type EditorSettings } from '../lib/settingsDraft'
 
@@ -85,7 +86,8 @@ const emit = defineEmits<{
   restore: []
   error: [value: string]
   'update:preview': [value: boolean]
-  'generate-git': []
+  'generate-git': [options?: { mode: 'replace' | 'append'; customPrompt?: string }]
+  'cancel-git': []
   'open-editor-settings': []
   shortcuts: []
 }>()
@@ -201,6 +203,8 @@ const polishMenu = ref<HTMLDivElement>()
 const polishMenuId = useId()
 const polishMenuStyle = ref<CSSProperties>({ position: 'fixed', visibility: 'hidden' })
 const currentPolishId = ref<string | null>(null)
+const gitDraftOpened = ref(false)
+const gitDraftTrigger = ref<HTMLButtonElement>()
 interface PendingPolishState {
   original: string
   polished: string
@@ -685,6 +689,7 @@ function closePopovers() {
   closeMore()
   closeActionPopover()
   closePolishMenu()
+  gitDraftOpened.value = false
 }
 async function openActionPopover(kind: 'heading' | 'table', last = false) {
   if (actionPopover.value === kind) return closeActionPopover(true)
@@ -846,6 +851,18 @@ function onPolishButtonClick() {
     return
   }
   togglePolishMenu()
+}
+function onGitDraftButtonClick() {
+  if (props.disabled) return
+  if (props.generatingGitDraft) {
+    const next = !gitDraftOpened.value
+    closePopovers()
+    gitDraftOpened.value = next
+    return
+  }
+  const next = !gitDraftOpened.value
+  closePopovers()
+  gitDraftOpened.value = next
 }
 function selectPolishOption(prompt?: string) {
   closePolishMenu()
@@ -1197,13 +1214,16 @@ defineExpose({ focus })
               </button>
               <button
                 v-if="document && !filePath"
+                ref="gitDraftTrigger"
                 type="button"
                 class="editor-tool-button git-draft-button"
-                :class="{ 'is-loading': generatingGitDraft }"
-                :aria-label="generatingGitDraft ? '正在从 Git 提交生成日报…' : '从今日 Git 提交生成日报'"
-                :title="generatingGitDraft ? '正在从 Git 提交生成日报…' : '从今日 Git 提交生成日报'"
-                :disabled="disabled || generatingGitDraft"
-                @click="emit('generate-git')"
+                :class="{ 'is-loading': generatingGitDraft, 'is-active': gitDraftOpened }"
+                :aria-label="generatingGitDraft ? '正在从 Git 提交生成日报… 点击查看进度' : '从今日 Git 提交生成日报'"
+                :title="generatingGitDraft ? '正在从 Git 提交生成日报… 点击查看进度' : '从今日 Git 提交生成日报'"
+                :aria-expanded="gitDraftOpened"
+                aria-haspopup="dialog"
+                :disabled="disabled"
+                @click="onGitDraftButtonClick"
               >
                 <PhCircleNotch v-if="generatingGitDraft" class="spin" :size="15" aria-hidden="true" />
                 <PhSparkle v-else :size="15" aria-hidden="true" />
@@ -1486,6 +1506,16 @@ defineExpose({ focus })
       :option-label="pendingPolish?.optionLabel"
       @accept="applyPendingPolish"
       @discard="discardPendingPolish"
+    />
+    <GitDraftPopover
+      :anchor="gitDraftTrigger"
+      :opened="gitDraftOpened"
+      :date="date"
+      :has-content="hasContent"
+      :generating="generatingGitDraft"
+      @confirm="(opts) => emit('generate-git', opts)"
+      @cancel-generation="emit('cancel-git')"
+      @close="gitDraftOpened = false"
     />
   </aside>
 </template>
