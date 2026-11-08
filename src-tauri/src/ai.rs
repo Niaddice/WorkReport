@@ -784,7 +784,7 @@ async fn http_completion_with_stream<'a>(
     if let Some(cb) = on_chunk {
         let mut full_text = String::new();
         let mut line_buffer = String::new();
-        while let Some(chunk) = response.chunk().await.map_err(|e| format!("读取 AI 流式数据失败：{e}"))? {
+        'stream_loop: while let Some(chunk) = response.chunk().await.map_err(|e| format!("读取 AI 流式数据失败：{e}"))? {
             let chunk_str = String::from_utf8_lossy(&chunk);
             line_buffer.push_str(&chunk_str);
             while let Some(pos) = line_buffer.find('\n') {
@@ -793,10 +793,13 @@ async fn http_completion_with_stream<'a>(
                 if let Some(data) = line.strip_prefix("data:") {
                     let data = data.trim();
                     if data == "[DONE]" {
-                        break;
+                        break 'stream_loop;
                     }
                     if let Ok(value) = serde_json::from_str::<Value>(data) {
-                        if let Some(delta) = value["choices"][0]["delta"]["content"].as_str() {
+                        let text_chunk = value["choices"][0]["delta"]["content"]
+                            .as_str()
+                            .or_else(|| value["choices"][0]["text"].as_str());
+                        if let Some(delta) = text_chunk {
                             if !delta.is_empty() {
                                 cb(delta);
                                 full_text.push_str(delta);
@@ -808,6 +811,12 @@ async fn http_completion_with_stream<'a>(
         }
         if !full_text.trim().is_empty() {
             return clean_result(&full_text);
+        }
+        if let Ok(value) = serde_json::from_str::<Value>(&line_buffer) {
+            if let Some(content) = text_content(&value["choices"][0]["message"]["content"]) {
+                cb(&content);
+                return clean_result(&content);
+            }
         }
     }
     let value: Value = response
@@ -867,7 +876,7 @@ async fn anthropic_completion_with_stream<'a>(
     if let Some(cb) = on_chunk {
         let mut full_text = String::new();
         let mut line_buffer = String::new();
-        while let Some(chunk) = response.chunk().await.map_err(|e| format!("读取 AI 流式数据失败：{e}"))? {
+        'stream_loop: while let Some(chunk) = response.chunk().await.map_err(|e| format!("读取 AI 流式数据失败：{e}"))? {
             let chunk_str = String::from_utf8_lossy(&chunk);
             line_buffer.push_str(&chunk_str);
             while let Some(pos) = line_buffer.find('\n') {
@@ -876,7 +885,7 @@ async fn anthropic_completion_with_stream<'a>(
                 if let Some(data) = line.strip_prefix("data:") {
                     let data = data.trim();
                     if data == "[DONE]" {
-                        break;
+                        break 'stream_loop;
                     }
                     if let Ok(value) = serde_json::from_str::<Value>(data) {
                         if value["type"] == "content_block_delta" {
@@ -887,7 +896,7 @@ async fn anthropic_completion_with_stream<'a>(
                                 }
                             }
                         } else if value["type"] == "message_stop" {
-                            break;
+                            break 'stream_loop;
                         }
                     }
                 }
@@ -895,6 +904,22 @@ async fn anthropic_completion_with_stream<'a>(
         }
         if !full_text.trim().is_empty() {
             return clean_result(&full_text);
+        }
+        if let Ok(value) = serde_json::from_str::<Value>(&line_buffer) {
+            let text = value["content"]
+                .as_array()
+                .map(|parts| {
+                    parts
+                        .iter()
+                        .filter_map(|part| part["text"].as_str())
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                })
+                .unwrap_or_default();
+            if !text.trim().is_empty() {
+                cb(&text);
+                return clean_result(&text);
+            }
         }
     }
     let value: Value = response

@@ -327,6 +327,30 @@ describe('AI commit messages', () => {
     }
   })
 
+  it('streams commit message chunks incrementally into the textarea and displays the final result', async () => {
+    const wrapper = await mountReady()
+    invoke.mockImplementation(async (command, args) => {
+      if (command === 'generate_git_commit_message') {
+        const onChunk = (args as { onChunk?: { onmessage?: (chunk: string) => void } }).onChunk
+        if (onChunk?.onmessage) {
+          onChunk.onmessage('feat: ')
+          onChunk.onmessage('流式生成')
+          onChunk.onmessage('完成')
+        }
+        return 'feat: 流式生成完成'
+      }
+      return state()
+    })
+    try {
+      await wrapper.get('[aria-label="AI 生成提交说明"]').trigger('click')
+      await flushPromises()
+      expect(wrapper.get<HTMLTextAreaElement>('[aria-label="提交说明"]').element.value).toBe('feat: 流式生成完成')
+      expect(wrapper.text()).toContain('AI 提交说明已生成')
+    } finally {
+      wrapper.unmount()
+    }
+  })
+
   it('preserves manual edits made while generation is pending', async () => {
     const wrapper = await mountReady()
     const pending = deferred<string>()

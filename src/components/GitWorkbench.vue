@@ -184,10 +184,13 @@ const aiHint = computed(() => {
   return `使用${props.aiProviderName || '默认 AI'}，根据 ${staged.value.length} 个已暂存文件生成提交说明`
 })
 let commitMessageRevision = 0
+let isAiUpdating = false
 watch(
   commitMessage,
   () => {
-    commitMessageRevision++
+    if (!isAiUpdating) {
+      commitMessageRevision++
+    }
   },
   { flush: 'sync' },
 )
@@ -586,23 +589,44 @@ async function generateMessage() {
   }
   if (!canGenerate.value) return
   const revision = commitMessageRevision
+  const initialDraft = commitMessage.value
   commitExpanded.value = true
   let streamed = false
   const message = await client.generateCommitMessage((chunk) => {
     if (!props.active || revision !== commitMessageRevision) return
-    if (!streamed) {
-      commitMessage.value = chunk
-      streamed = true
-    } else {
-      commitMessage.value += chunk
+    isAiUpdating = true
+    try {
+      if (!streamed) {
+        commitMessage.value = chunk
+        streamed = true
+      } else {
+        commitMessage.value += chunk
+      }
+    } finally {
+      isAiUpdating = false
     }
   })
-  if (!message || !props.active) return
+  if (!message || !props.active) {
+    if (streamed && revision === commitMessageRevision) {
+      isAiUpdating = true
+      try {
+        commitMessage.value = initialDraft
+      } finally {
+        isAiUpdating = false
+      }
+    }
+    return
+  }
   if (revision !== commitMessageRevision) {
     notice.value = '提交说明已被编辑，已保留你的修改。'
     return
   }
-  commitMessage.value = message
+  isAiUpdating = true
+  try {
+    commitMessage.value = message
+  } finally {
+    isAiUpdating = false
+  }
   notice.value = 'AI 提交说明已生成，可修改后再提交。'
 }
 
