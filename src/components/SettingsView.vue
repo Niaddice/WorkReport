@@ -796,11 +796,15 @@ async function testConnection(provider: AiProvider) {
                   添加
                 </button>
               </div>
-              <Transition name="status-fade"
-                ><p v-if="!draft.ai.providers.length" class="settings-empty">
-                  尚未配置 AI。检测本机 CLI，或添加一个模型接口。
-                </p></Transition
-              >
+              <Transition name="status-fade">
+                <div v-if="!draft.ai.providers.length" class="settings-empty-card">
+                  <div class="settings-empty-icon">
+                    <PhSparkle :size="24" aria-hidden="true" />
+                  </div>
+                  <p class="settings-empty-title">尚未配置 AI</p>
+                  <p class="settings-empty-desc">检测本机 CLI，或从上方选择预设添加模型接口。</p>
+                </div>
+              </Transition>
               <TransitionGroup name="provider-list" tag="div" class="provider-list">
                 <article
                   v-for="provider in draft.ai.providers"

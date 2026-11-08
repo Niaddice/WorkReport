@@ -1,6 +1,5 @@
-/* 模块设置共用一条说明栏和一条表单栏；所有颜色跟随当前皮肤。 */
+/* 模块设置采用分组卡片布局；所有颜色跟随当前皮肤。 */
 .module-settings-dialog {
-  --module-settings-label-width: 136px;
   --control-height: 30px;
   width: min(780px, 100%);
 }
@@ -42,33 +41,41 @@
 .module-settings-body {
   container: module-settings / inline-size;
   display: block;
-  padding: 0 18px;
+  padding: 12px 18px;
   overscroll-behavior: contain;
   scrollbar-gutter: stable;
 }
 .module-settings-stack,
 .module-settings-body > .git-settings {
-  display: grid;
-  gap: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
 }
 .module-settings-body .module-settings-section {
-  display: grid;
-  grid-template-columns: var(--module-settings-label-width) minmax(0, 1fr);
-  align-items: start;
-  gap: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
   min-width: 0;
-  padding: 14px 0;
+  padding: 14px 16px;
+  border: 1px solid var(--skin-border);
+  border-radius: 8px;
+  background: var(--skin-surface);
   scroll-margin-top: 12px;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.02);
 }
 .module-settings-section > .settings-section-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   min-width: 0;
-  padding-top: 2px;
+  padding: 0 0 8px 0;
   margin: 0;
+  border-bottom: 1px solid var(--skin-border);
 }
 .settings-section-title-wrap {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: 6px;
 }
 .setting-field-header {
   display: inline-flex;
@@ -80,7 +87,8 @@
   color: var(--skin-text);
   font-size: var(--text-subtitle);
   font-weight: 600;
-  line-height: 1.5;
+  line-height: 1.4;
+  margin: 0;
 }
 .module-settings-section .settings-section-heading p {
   margin: 4px 0 0;
@@ -88,9 +96,11 @@
   line-height: 1.55;
 }
 .module-settings-section-content {
-  display: grid;
-  gap: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
   min-width: 0;
+  width: 100%;
 }
 .module-settings-body :is(.field-hint, .settings-muted, .git-hint, .settings-error) {
   margin: 0;
@@ -441,16 +451,12 @@
   outline-offset: 2px;
 }
 @container module-settings (max-width: 600px) {
+  .module-settings-body {
+    padding: 10px 12px;
+  }
   .module-settings-body .module-settings-section {
-    grid-template-columns: minmax(0, 1fr);
+    padding: 12px 14px;
     gap: 10px;
-    padding-block: 12px;
-  }
-  .module-settings-section > .settings-section-heading {
-    padding-top: 0;
-  }
-  .module-settings-section .settings-section-heading p {
-    margin-top: 3px;
   }
 }
 @container module-settings (max-width: 400px) {

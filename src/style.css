@@ -2830,6 +2830,41 @@ input[type='radio'] {
   text-align: center;
   padding: 30px 12px;
 }
+.settings-empty-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 24px 20px;
+  border: 1.5px dashed var(--skin-border);
+  border-radius: 8px;
+  background: var(--skin-canvas, transparent);
+  gap: 6px;
+}
+.settings-empty-icon {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  background: var(--skin-subtle);
+  color: var(--skin-text-muted);
+  margin-bottom: 4px;
+}
+.settings-empty-title {
+  margin: 0;
+  font-size: var(--text-body);
+  font-weight: 600;
+  color: var(--skin-text);
+}
+.settings-empty-desc {
+  max-width: 440px;
+  margin: 0;
+  font-size: var(--text-small);
+  line-height: 1.55;
+  color: var(--skin-text-muted);
+}
 /* Settings controls share one surface, size, and focus treatment. */
 :is(.settings-page, .module-settings-body)
   :is(input:not([type='radio']):not([type='checkbox']):not([type='range']), textarea),

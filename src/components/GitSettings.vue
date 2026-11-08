@@ -3,7 +3,7 @@ import ModuleSettingsSection from './moduleSettings/ModuleSettingsSection.vue'
 import { computed, nextTick, ref, useId } from 'vue'
 import { isTauri } from '@tauri-apps/api/core'
 import { open } from '@tauri-apps/plugin-dialog'
-import { PhCaretRight, PhFolderOpen, PhPlus, PhTrash } from '@phosphor-icons/vue'
+import { PhCaretRight, PhFolderOpen, PhGitBranch, PhPlus, PhTrash } from '@phosphor-icons/vue'
 import SavedGitCredentials from './SavedGitCredentials.vue'
 import GithubAuthentication from './GithubAuthentication.vue'
 import {
@@ -114,9 +114,15 @@ defineExpose({ validate, focusInvalid })
           <PhPlus :size="16" />添加仓库
         </button>
       </div>
-      <p v-if="!modelValue.repositories.length" class="git-hint">
-        添加项目仓库后，即可在 Git 工作台中切换项目、管理更改与分支，并多选提交获取信息或整理工作记录。
-      </p>
+      <div v-if="!modelValue.repositories.length" class="settings-empty-card">
+        <div class="settings-empty-icon">
+          <PhGitBranch :size="24" aria-hidden="true" />
+        </div>
+        <p class="settings-empty-title">暂未添加本地仓库</p>
+        <p class="settings-empty-desc">
+          添加项目仓库后，即可在 Git 工作台中切换项目、管理更改与分支，并多选提交获取信息或整理工作记录。
+        </p>
+      </div>
       <details
         v-for="(repository, index) in modelValue.repositories"
         :key="repository.id"
