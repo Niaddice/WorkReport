@@ -7,7 +7,11 @@ import {
   PhCaretDown,
   PhCaretUp,
   PhCheck,
+  PhCheckSquare,
+  PhFileDashed,
   PhGearSix,
+  PhRocketLaunch,
+  PhSlidersHorizontal,
 } from '@phosphor-icons/vue'
 import type { FileFormat } from '../lib/workspace'
 import { selectMenuPosition } from '../lib/select'
@@ -44,6 +48,15 @@ interface DisplayTemplate {
   name: string
   description: string
   content: string
+}
+
+const TEMPLATE_ICONS: Record<string, any> = {
+  none: PhFileDashed,
+  standard: PhArticle,
+  agile: PhArrowsClockwise,
+  project: PhRocketLaunch,
+  minimal: PhCheckSquare,
+  custom: PhSlidersHorizontal,
 }
 
 const displayTemplates = computed<DisplayTemplate[]>(() => {
@@ -204,9 +217,20 @@ onBeforeUnmount(() => {
         </header>
 
         <div class="template-popover-body">
-          <div v-for="item in displayTemplates" :key="item.id" class="template-card">
+          <div
+            v-for="item in displayTemplates"
+            :key="item.id"
+            class="template-card"
+            :class="{ 'is-default': editorSettings.defaultTemplateId === item.id }"
+          >
             <div class="template-card-header">
               <span class="template-card-title">
+                <component
+                  :is="TEMPLATE_ICONS[item.id] || PhArticle"
+                  :size="15"
+                  aria-hidden="true"
+                  class="template-card-icon"
+                />
                 <strong>{{ item.name }}</strong>
                 <span
                   v-if="editorSettings.defaultTemplateId === item.id"
@@ -327,12 +351,21 @@ onBeforeUnmount(() => {
 }
 
 .template-card {
-  padding: 9px 11px;
+  padding: 10px 12px;
   border: 1px solid var(--skin-border);
   border-radius: 9px;
   background: var(--skin-canvas);
   display: grid;
-  gap: 5px;
+  gap: 6px;
+  transition:
+    background-color var(--motion-fast, 140ms) ease,
+    border-color var(--motion-fast, 140ms) ease,
+    box-shadow var(--motion-fast, 140ms) ease;
+}
+
+.template-card.is-default {
+  border-color: var(--skin-accent-border, var(--skin-accent));
+  background: color-mix(in srgb, var(--skin-accent-soft) 35%, var(--skin-canvas));
 }
 
 .template-card-header {
@@ -348,13 +381,24 @@ onBeforeUnmount(() => {
   font-size: var(--text-body);
 }
 
+.template-card-icon {
+  flex-shrink: 0;
+  color: var(--skin-text-muted);
+}
+
+.template-card.is-default .template-card-icon {
+  color: var(--skin-accent);
+}
+
 .template-default-badge {
-  padding: 1px 5px;
-  border-radius: 4px;
+  padding: 1px 6px;
+  border-radius: 999px;
   background: var(--skin-accent-soft);
   color: var(--skin-accent);
+  border: 1px solid var(--skin-accent-border, transparent);
   font-size: var(--text-micro);
   font-weight: 600;
+  line-height: 1.3;
 }
 
 .template-preview-toggle {

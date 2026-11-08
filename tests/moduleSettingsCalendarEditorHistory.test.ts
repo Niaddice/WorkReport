@@ -191,6 +191,58 @@ describe('编辑模块设置', () => {
     await flushPromises()
     expect(wrapper.text()).toContain('使用默认 AI：DeepSeek')
   })
+
+  it('切换每日预设骨架选项并切换自动载入开关', async () => {
+    const { context, draft } = createContext()
+    const wrapper = mountWithContext(EditorModuleSettings, context)
+    await flushPromises()
+
+    // 默认骨架初始为 none
+    expect(draft.value.editor.defaultTemplateId).toBe('none')
+
+    // 切换至敏捷站会三问
+    const agileRadio = wrapper.get('input[name="editor-default-template"][value="agile"]')
+    await agileRadio.setValue(true)
+    expect(draft.value.editor.defaultTemplateId).toBe('agile')
+
+    // 开启自动载入
+    const switchInput = wrapper.get('.skeleton-switch-input')
+    await switchInput.setValue(true)
+    expect(draft.value.editor.autoApplyTemplate).toBe(true)
+
+    // 展开骨架预览抽屉
+    const previewBtn = wrapper.find('.skeleton-preview-toggle-btn')
+    expect(previewBtn.exists()).toBe(true)
+    await previewBtn.trigger('click')
+    await nextTick()
+
+    const previewDrawer = wrapper.find('.skeleton-preview-drawer')
+    expect(previewDrawer.exists()).toBe(true)
+    expect(previewDrawer.text()).toContain('结构预览')
+  })
+
+  it('选择自定义预设骨架并通过变量药丸快捷插入占位符', async () => {
+    const { context, draft } = createContext()
+    const wrapper = mountWithContext(EditorModuleSettings, context)
+    await flushPromises()
+
+    // 选中自定义模板
+    const customRadio = wrapper.get('input[name="editor-default-template"][value="custom"]')
+    await customRadio.setValue(true)
+    expect(draft.value.editor.defaultTemplateId).toBe('custom')
+    await nextTick()
+
+    const textarea = wrapper.find('#custom-template-input')
+    expect(textarea.exists()).toBe(true)
+
+    // 点击变量药丸快捷插入
+    const dateChip = wrapper.findAll('.placeholder-chip').find((btn) => btn.text().includes('{date}'))
+    expect(dateChip).toBeDefined()
+    await dateChip!.trigger('click')
+    await nextTick()
+
+    expect(draft.value.editor.customTemplate).toContain('{date}')
+  })
 })
 
 describe('历史记录模块设置', () => {
