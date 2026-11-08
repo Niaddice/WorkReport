@@ -306,7 +306,7 @@ onBeforeUnmount(() => {
   background: var(--skin-surface);
   color: var(--skin-text-muted);
   font: inherit;
-  font-size: 11px;
+  font-size: var(--text-caption);
   cursor: pointer;
   transition:
     background-color 120ms ease,
@@ -353,7 +353,7 @@ onBeforeUnmount(() => {
   border-radius: 4px;
   background: var(--skin-accent-soft);
   color: var(--skin-accent);
-  font-size: 10px;
+  font-size: var(--text-micro);
   font-weight: 600;
 }
 
@@ -366,7 +366,7 @@ onBeforeUnmount(() => {
   background: transparent;
   color: var(--skin-text-muted);
   font: inherit;
-  font-size: 11px;
+  font-size: var(--text-caption);
   cursor: pointer;
 }
 
@@ -388,7 +388,7 @@ onBeforeUnmount(() => {
   background: var(--skin-surface);
   color: var(--skin-text-secondary);
   font-family: var(--font-code, monospace);
-  font-size: 11px;
+  font-size: var(--text-caption);
   line-height: 1.45;
   white-space: pre-wrap;
   word-break: break-word;

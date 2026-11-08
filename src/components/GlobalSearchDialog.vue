@@ -477,7 +477,7 @@ onBeforeUnmount(() => {
   background: var(--skin-surface);
   color: var(--skin-text-muted);
   font-family: inherit;
-  font-size: 11px;
+  font-size: var(--text-micro);
   line-height: 1.3;
   flex-shrink: 0;
 }
@@ -519,7 +519,7 @@ onBeforeUnmount(() => {
 }
 
 .search-filter-count {
-  font-size: 11px;
+  font-size: var(--text-caption);
   opacity: 0.85;
 }
 
@@ -621,7 +621,7 @@ onBeforeUnmount(() => {
   border-radius: 4px;
   background: var(--skin-canvas);
   color: var(--skin-text-muted);
-  font-size: 11px;
+  font-size: var(--text-caption);
   flex-shrink: 0;
 }
 
@@ -636,7 +636,7 @@ onBeforeUnmount(() => {
 .search-item-matches {
   margin-left: auto;
   color: var(--skin-accent);
-  font-size: 11px;
+  font-size: var(--text-caption);
   flex-shrink: 0;
 }
 
@@ -685,7 +685,7 @@ onBeforeUnmount(() => {
   align-items: center;
   gap: 14px;
   color: var(--skin-text-muted);
-  font-size: 12px;
+  font-size: var(--text-small);
 }
 
 .search-footer-hints kbd {
@@ -696,6 +696,6 @@ onBeforeUnmount(() => {
   border-radius: 4px;
   background: var(--skin-surface);
   font-family: inherit;
-  font-size: 11px;
+  font-size: var(--text-micro);
 }
 </style>

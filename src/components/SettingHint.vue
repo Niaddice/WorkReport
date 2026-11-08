@@ -26,7 +26,7 @@ defineProps<{
   border-radius: 50%;
   background: var(--skin-subtle, rgba(127, 127, 127, 0.08));
   color: var(--skin-text-muted, #71717a);
-  font-size: 11px;
+  font-size: var(--text-micro);
   line-height: 1;
   cursor: help;
   vertical-align: middle;

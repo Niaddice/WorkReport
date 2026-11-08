@@ -266,21 +266,21 @@ function onKeydown(event: KeyboardEvent) {
 
 .shortcuts-title {
   margin: 0;
-  font-size: 16px;
+  font-size: var(--text-title);
   font-weight: 600;
   color: var(--skin-text);
 }
 
 .shortcuts-subtitle {
   margin: 2px 0 0;
-  font-size: 12px;
+  font-size: var(--text-small);
   color: var(--skin-text-muted);
 }
 
 .shortcuts-subtitle kbd {
   display: inline-block;
   padding: 1px 5px;
-  font-size: 11px;
+  font-size: var(--text-caption);
   font-family: inherit;
   border: 1px solid var(--skin-border);
   border-radius: 4px;
@@ -338,7 +338,7 @@ function onKeydown(event: KeyboardEvent) {
   border-radius: 6px;
   background: var(--skin-surface);
   color: var(--skin-text);
-  font-size: 13px;
+  font-size: var(--text-body);
   outline: none;
   transition:
     border-color 140ms ease,
@@ -385,7 +385,7 @@ function onKeydown(event: KeyboardEvent) {
   border-radius: 13px;
   background: transparent;
   color: var(--skin-text-muted);
-  font-size: 12px;
+  font-size: var(--text-small);
   cursor: pointer;
   white-space: nowrap;
   transition: all 140ms ease;
@@ -417,7 +417,7 @@ function onKeydown(event: KeyboardEvent) {
   justify-content: center;
   height: 200px;
   color: var(--skin-text-muted);
-  font-size: 14px;
+  font-size: var(--text-subtitle);
 }
 
 .shortcuts-group-list {
@@ -428,7 +428,7 @@ function onKeydown(event: KeyboardEvent) {
 
 .group-title {
   margin: 0 0 10px;
-  font-size: 13px;
+  font-size: var(--text-body);
   font-weight: 600;
   color: var(--skin-text-muted);
   letter-spacing: 0.02em;
@@ -468,7 +468,7 @@ function onKeydown(event: KeyboardEvent) {
 }
 
 .shortcut-name {
-  font-size: 13px;
+  font-size: var(--text-body);
   font-weight: 500;
   color: var(--skin-text);
   white-space: nowrap;
@@ -477,7 +477,7 @@ function onKeydown(event: KeyboardEvent) {
 }
 
 .shortcut-desc {
-  font-size: 11px;
+  font-size: var(--text-caption);
   color: var(--skin-text-muted);
   white-space: nowrap;
   overflow: hidden;
@@ -492,7 +492,7 @@ function onKeydown(event: KeyboardEvent) {
 }
 
 .key-plus {
-  font-size: 11px;
+  font-size: var(--text-micro);
   color: var(--skin-text-muted);
 }
 
@@ -503,7 +503,7 @@ function onKeydown(event: KeyboardEvent) {
   min-width: 22px;
   height: 22px;
   padding: 0 6px;
-  font-size: 11px;
+  font-size: var(--text-micro);
   font-weight: 600;
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
   border: 1px solid var(--skin-border);
@@ -524,13 +524,13 @@ function onKeydown(event: KeyboardEvent) {
 }
 
 .shortcuts-footer-hint {
-  font-size: 12px;
+  font-size: var(--text-small);
   color: var(--skin-text-muted);
 }
 
 .shortcuts-confirm-close {
   height: 30px;
   padding: 0 14px;
-  font-size: 13px;
+  font-size: var(--text-body);
 }
 </style>

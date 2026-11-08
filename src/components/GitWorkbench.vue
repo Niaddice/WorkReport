@@ -2777,10 +2777,10 @@ h4 {
   height: 23px;
   min-height: 23px;
   padding: 0;
-  font-size: 18px;
+  font-size: var(--text-headline);
 }
 .discard-action {
-  font-size: 16px;
+  font-size: var(--text-title);
   color: var(--skin-danger);
 }
 @media (hover: hover) and (pointer: fine) {

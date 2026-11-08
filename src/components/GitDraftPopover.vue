@@ -302,7 +302,7 @@ onBeforeUnmount(() => {
 }
 
 .popover-title {
-  font-size: 13px;
+  font-size: var(--text-body);
   font-weight: 600;
   color: var(--skin-text);
 }
@@ -353,7 +353,7 @@ onBeforeUnmount(() => {
 }
 
 .info-badge {
-  font-size: 11px;
+  font-size: var(--text-caption);
   font-weight: 600;
   padding: 1px 6px;
   border-radius: 4px;
@@ -362,13 +362,13 @@ onBeforeUnmount(() => {
 }
 
 .info-status {
-  font-size: 11px;
+  font-size: var(--text-caption);
   color: var(--skin-text-muted);
 }
 
 .info-description {
   margin: 0;
-  font-size: 12px;
+  font-size: var(--text-small);
   line-height: 1.5;
   color: var(--skin-text-muted);
 }
@@ -380,7 +380,7 @@ onBeforeUnmount(() => {
 }
 
 .mode-title {
-  font-size: 12px;
+  font-size: var(--text-small);
   font-weight: 500;
   color: var(--skin-text);
 }
@@ -425,12 +425,12 @@ onBeforeUnmount(() => {
 }
 
 .mode-option-text strong {
-  font-size: 12px;
+  font-size: var(--text-small);
   color: var(--skin-text);
 }
 
 .mode-option-text span {
-  font-size: 11px;
+  font-size: var(--text-caption);
   color: var(--skin-text-muted);
   line-height: 1.35;
 }
@@ -449,7 +449,7 @@ onBeforeUnmount(() => {
   border: none;
   background: transparent;
   color: var(--skin-accent);
-  font-size: 11px;
+  font-size: var(--text-caption);
   cursor: pointer;
   align-self: flex-start;
 }
@@ -466,7 +466,7 @@ onBeforeUnmount(() => {
   background: var(--skin-canvas);
   color: var(--skin-text);
   font-family: inherit;
-  font-size: 12px;
+  font-size: var(--text-small);
   line-height: 1.45;
   resize: vertical;
   outline: none;
@@ -489,7 +489,7 @@ onBeforeUnmount(() => {
 .footer-status {
   display: flex;
   align-items: center;
-  font-size: 11px;
+  font-size: var(--text-caption);
   color: var(--skin-text-muted);
 }
 
@@ -504,7 +504,7 @@ onBeforeUnmount(() => {
   border: none;
   background: transparent;
   color: var(--skin-danger, #dc2626);
-  font-size: 11px;
+  font-size: var(--text-caption);
   cursor: pointer;
   padding: 0 4px;
   text-decoration: underline;
@@ -523,7 +523,7 @@ onBeforeUnmount(() => {
   gap: 5px;
   padding: 5px 12px;
   border-radius: 6px;
-  font-size: 12px;
+  font-size: var(--text-small);
   font-weight: 500;
   cursor: pointer;
   transition: all 120ms ease;

@@ -59,7 +59,7 @@
   border-radius: 5px;
   background: var(--skin-accent-fill);
   color: var(--skin-on-accent);
-  font-size: 12px;
+  font-size: var(--text-small);
   font-weight: 700;
 }
 .app-toolbar .titlebar-app-name {
@@ -652,7 +652,7 @@
 .app-shell .settings-save-kbd {
   height: 16px;
   padding: 0 4px;
-  font-size: 10px;
+  font-size: var(--text-micro);
   border-radius: 3px;
 }
 .app-shell .setting-secret-input-wrap input {

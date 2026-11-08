@@ -491,14 +491,14 @@ function onKeydown(event: KeyboardEvent) {
 
 .backup-title {
   margin: 0;
-  font-size: 16px;
+  font-size: var(--text-title);
   font-weight: 600;
   color: var(--skin-text);
 }
 
 .backup-subtitle {
   margin: 2px 0 0;
-  font-size: 12px;
+  font-size: var(--text-small);
   color: var(--skin-text-muted);
 }
 
@@ -539,7 +539,7 @@ function onKeydown(event: KeyboardEvent) {
   border-bottom: 2px solid transparent;
   background: transparent;
   color: var(--skin-text-muted);
-  font-size: 13px;
+  font-size: var(--text-body);
   font-weight: 500;
   cursor: pointer;
   transition: all 140ms ease;
@@ -574,7 +574,7 @@ function onKeydown(event: KeyboardEvent) {
 .info-row {
   display: flex;
   align-items: baseline;
-  font-size: 13px;
+  font-size: var(--text-body);
   line-height: 1.5;
 }
 
@@ -600,7 +600,7 @@ function onKeydown(event: KeyboardEvent) {
 }
 
 .backup-instruction {
-  font-size: 12px;
+  font-size: var(--text-small);
   line-height: 1.6;
   color: var(--skin-text-muted);
   margin: 0 0 18px;
@@ -622,7 +622,7 @@ function onKeydown(event: KeyboardEvent) {
   border-radius: 8px;
   background: var(--skin-success-soft);
   color: var(--skin-success);
-  font-size: 13px;
+  font-size: var(--text-body);
   margin-bottom: 18px;
 }
 
@@ -669,14 +669,14 @@ function onKeydown(event: KeyboardEvent) {
 
 .dropzone-copy strong {
   display: block;
-  font-size: 14px;
+  font-size: var(--text-subtitle);
   color: var(--skin-text);
   margin-bottom: 4px;
 }
 
 .dropzone-copy p {
   margin: 0;
-  font-size: 12px;
+  font-size: var(--text-small);
   color: var(--skin-text-muted);
 }
 
@@ -689,7 +689,7 @@ function onKeydown(event: KeyboardEvent) {
   border-radius: 8px;
   background: var(--skin-danger-soft, #fef2f2);
   color: var(--skin-danger, #dc2626);
-  font-size: 13px;
+  font-size: var(--text-body);
   margin-top: 14px;
 }
 
@@ -711,7 +711,7 @@ function onKeydown(event: KeyboardEvent) {
 
 .options-title {
   margin: 0;
-  font-size: 13px;
+  font-size: var(--text-body);
   font-weight: 600;
   color: var(--skin-text);
 }
@@ -727,7 +727,7 @@ function onKeydown(event: KeyboardEvent) {
   align-items: flex-start;
   gap: 10px;
   cursor: pointer;
-  font-size: 13px;
+  font-size: var(--text-body);
 }
 
 .radio-label input[type='radio'] {
@@ -742,7 +742,7 @@ function onKeydown(event: KeyboardEvent) {
 
 .radio-label p {
   margin: 0;
-  font-size: 11px;
+  font-size: var(--text-caption);
   color: var(--skin-text-muted);
   line-height: 1.4;
 }
@@ -757,7 +757,7 @@ function onKeydown(event: KeyboardEvent) {
   align-items: center;
   gap: 8px;
   cursor: pointer;
-  font-size: 12px;
+  font-size: var(--text-small);
   color: var(--skin-text);
 }
 
@@ -778,7 +778,7 @@ function onKeydown(event: KeyboardEvent) {
 }
 
 .backup-footer-left {
-  font-size: 11px;
+  font-size: var(--text-caption);
   color: var(--skin-text-muted);
 }
 </style>

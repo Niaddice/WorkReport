@@ -423,7 +423,7 @@ onBeforeUnmount(() => {
 
 .history-diff-title {
   margin: 0;
-  font-size: var(--text-base);
+  font-size: var(--text-subtitle);
   font-weight: 600;
   line-height: 1.25;
 }
@@ -534,7 +534,7 @@ onBeforeUnmount(() => {
   display: inline-block;
   padding: 1px 6px;
   border-radius: 4px;
-  font-size: 11px;
+  font-size: var(--text-caption);
   font-weight: 600;
   margin-right: 6px;
 }
@@ -556,7 +556,7 @@ onBeforeUnmount(() => {
 
 .target-col-arrow {
   color: var(--skin-text-muted);
-  font-size: 13px;
+  font-size: var(--text-body);
 }
 
 .target-col-selector {
@@ -602,7 +602,7 @@ onBeforeUnmount(() => {
   overflow: auto;
   background: var(--skin-canvas);
   font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', monospace;
-  font-size: calc(12 * var(--font-unit));
+  font-size: var(--text-small);
   line-height: 1.6;
   outline: none;
 }
@@ -616,7 +616,7 @@ onBeforeUnmount(() => {
   height: 100%;
   color: var(--skin-text-muted);
   font-family: inherit;
-  font-size: var(--text-base);
+  font-size: var(--text-body);
 }
 
 .history-diff-placeholder.error {
@@ -643,7 +643,7 @@ onBeforeUnmount(() => {
   background: var(--skin-surface);
   border-bottom: 1px solid var(--skin-border);
   font-family: var(--font-sans, system-ui, sans-serif);
-  font-size: 11px;
+  font-size: var(--text-caption);
   font-weight: 600;
   color: var(--skin-text-muted);
 }
@@ -726,7 +726,7 @@ onBeforeUnmount(() => {
   padding-right: 8px;
   color: var(--skin-text-muted);
   user-select: none;
-  font-size: 11px;
+  font-size: var(--text-caption);
 }
 
 .line-marker {
@@ -822,7 +822,7 @@ onBeforeUnmount(() => {
 .btn.small {
   height: 26px;
   padding: 0 8px;
-  font-size: 12px;
+  font-size: var(--text-small);
 }
 
 .restore-confirm-popover {

@@ -172,7 +172,7 @@ const emit = defineEmits<{
   background: var(--skin-canvas);
   color: var(--skin-text-muted);
   font-family: inherit;
-  font-size: 11px;
+  font-size: var(--text-micro);
   line-height: 1.25;
 }
 </style>
