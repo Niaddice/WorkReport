@@ -484,4 +484,53 @@ describe('module settings entry in module title bars', () => {
       wrapper.unmount()
     }
   })
+
+  it('switches between modules using the left navigation sidebar and saves across modules atomically', async () => {
+    const wrapper = await openDemoWorkspace()
+    try {
+      await openModuleSettings(wrapper, 'editor')
+      const dialog = wrapper.get('.module-settings-dialog')
+
+      // 验证左侧导航栏存在并列出模块
+      const navItems = dialog.findAll('.module-settings-nav-item')
+      expect(navItems.length).toBe(6)
+      expect(dialog.get('.module-settings-sidebar-title').text()).toBe('模块设置')
+
+      // 编辑模块处于选中状态
+      expect(navItems[0]!.classes()).toContain('is-active')
+      expect(dialog.get('.module-settings-heading h2').text()).toBe('编辑设置')
+
+      // 修改编辑设置并验证产生未保存标记
+      await dialog.get('#polish-prompt').setValue('测试多模块联动润色')
+      await flushPromises()
+      expect(navItems[0]!.find('.module-settings-dirty-dot').exists()).toBe(true)
+
+      // 点击左侧导航切换到 Excel 报告
+      const excelNav = navItems.find((item) => item.text().includes('Excel 报告'))
+      expect(excelNav).toBeDefined()
+      await excelNav!.trigger('click')
+      await flushPromises()
+
+      // 右侧内容切换为 Excel 设置
+      expect(dialog.get('.module-settings-heading h2').text()).toBe('Excel 设置')
+      expect(dialog.find('#excel-save-directory').exists()).toBe(true)
+
+      // 修改 Excel 设置
+      await dialog.get('#excel-save-directory').setValue('集中导出')
+      await flushPromises()
+      expect(excelNav!.find('.module-settings-dirty-dot').exists()).toBe(true)
+
+      // 保存设置，一次性原子持久化多个模块的修改
+      await dialog.get('.module-settings-save').trigger('click')
+      await flushPromises()
+      await flushPromises()
+
+      expect(saveCalls()).toHaveLength(1)
+      expect(savedSettings().ai.generationPreference).toBe('测试多模块联动润色')
+      expect(savedSettings().files!.excel.directory).toBe('集中导出')
+      expect(wrapper.get('.module-settings-dialog').isVisible()).toBe(false)
+    } finally {
+      wrapper.unmount()
+    }
+  })
 })

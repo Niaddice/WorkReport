@@ -441,6 +441,19 @@
   border-radius: 10px;
   background: var(--desktop-tool);
 }
+.app-shell .module-settings-sidebar {
+  background: var(--desktop-tool);
+}
+.app-shell .module-settings-sidebar-header {
+  min-height: 36px;
+  background: var(--desktop-frame);
+}
+.app-shell .module-settings-sidebar-footer {
+  background: var(--desktop-tool);
+}
+.app-shell .module-settings-main {
+  background: var(--skin-surface);
+}
 :root .app-shell .module-settings-heading {
   min-height: 36px;
   padding: 4px 8px 4px 14px;
