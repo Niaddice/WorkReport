@@ -115,7 +115,9 @@
 }
 .module-settings-body
   :is(
+    .excel-path-field label,
     .excel-path-field > label,
+    .database-field label,
     .database-field-label,
     .generation-preference > label,
     .git-field > span:first-child,

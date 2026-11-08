@@ -93,7 +93,7 @@ body,
 body {
   margin: 0;
   min-width: 360px;
-  font-size: var(--text-headline);
+  font-size: var(--text-body);
 }
 button,
 textarea,
@@ -101,6 +101,8 @@ a {
   -webkit-tap-highlight-color: transparent;
 }
 button,
+input,
+select,
 textarea {
   font: inherit;
 }
@@ -2268,6 +2270,15 @@ input[type='radio'] {
   gap: 40px;
   align-items: stretch;
   overflow: hidden;
+  font-size: var(--text-body);
+  color: var(--skin-text);
+}
+.settings-page
+  label:not(.database-mode-label):not(.provider-choice):not(.radio-label):not(.checkbox-label):not(.mode-option-label) {
+  color: var(--skin-text-body);
+  font-size: var(--text-body);
+  font-weight: 500;
+  line-height: 1.5;
 }
 .settings-sidebar {
   display: flex;
@@ -2726,8 +2737,9 @@ input[type='radio'] {
 .generation-preference > label,
 .excel-prompt-heading > label {
   color: var(--skin-text-body);
-  font-size: var(--text-subtitle);
+  font-size: var(--text-body);
   font-weight: 500;
+  line-height: 1.5;
 }
 .generation-preference > p {
   color: var(--skin-text-muted);
@@ -2878,7 +2890,7 @@ input[type='radio'] {
   background: var(--control-surface);
   color: var(--control-text);
   font-family: inherit;
-  font-size: var(--text-subtitle);
+  font-size: var(--text-body);
   padding: 5px 10px;
   box-shadow: 0 1px 2px #344d7003;
   transition:
@@ -3160,8 +3172,10 @@ input[type='radio'] {
   padding-bottom: 20px;
 }
 .custom-ai-add label {
-  color: var(--skin-text-muted);
-  font-size: var(--text-subtitle);
+  color: var(--skin-text-body);
+  font-size: var(--text-body);
+  font-weight: 500;
+  line-height: 1.5;
 }
 .custom-ai-add > .app-select {
   width: 180px;
@@ -3232,7 +3246,9 @@ input[type='radio'] {
   flex-direction: column;
   gap: 8px;
   font-size: var(--text-body);
-  color: var(--skin-text-muted);
+  font-weight: 500;
+  color: var(--skin-text-body);
+  line-height: 1.5;
 }
 .model-picker {
   min-width: 0;
@@ -3244,6 +3260,11 @@ input[type='radio'] {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
+}
+.model-picker-heading label {
+  font-size: var(--text-body);
+  font-weight: 500;
+  color: var(--skin-text-body);
 }
 .model-picker-heading .text-action,
 .model-entry-toggle {
@@ -3268,9 +3289,9 @@ input[type='radio'] {
   margin: 0;
 }
 .field-hint {
-  font-size: var(--text-caption);
-  color: var(--skin-text-faint);
-  line-height: 1.7;
+  font-size: var(--text-small);
+  color: var(--skin-text-muted);
+  line-height: 1.6;
   margin: 0;
 }
 .provider-test-bar {
@@ -4773,10 +4794,12 @@ input[type='radio'] {
   gap: 9px;
   min-width: 0;
 }
+.excel-path-field label,
 .excel-path-field > label {
   color: var(--skin-text-body);
-  font-size: var(--text-subtitle);
+  font-size: var(--text-body);
   font-weight: 500;
+  line-height: 1.5;
 }
 .excel-path-control {
   display: flex;
@@ -4817,8 +4840,9 @@ input[type='radio'] {
 }
 .directory-settings-card-heading h3 {
   margin: 0;
-  font-size: var(--text-title);
-  font-weight: 500;
+  font-size: var(--text-subtitle);
+  font-weight: 600;
+  line-height: 1.4;
 }
 .filename-placeholder-options {
   display: flex;
@@ -4936,6 +4960,18 @@ input[type='radio'] {
   align-items: center;
   gap: 4px;
   min-width: 0;
+  font-size: var(--text-body);
+  font-weight: 500;
+  color: var(--skin-text-body);
+  line-height: 1.5;
+}
+.setting-field-header :is(label, h4, span),
+.setting-field-title {
+  margin: 0;
+  font-size: var(--text-body);
+  font-weight: 500;
+  color: var(--skin-text-body);
+  line-height: 1.5;
 }
 .backup-card-main {
   display: flex;
@@ -5036,15 +5072,16 @@ input[type='radio'] {
   font-size: var(--text-body);
   line-height: 1.6;
 }
-.database-field > label {
+.database-field label,
+.database-field > label,
+.database-field-label,
+.database-fields-grid label,
+.database-transfer-direction label,
+.database-transfer label {
   color: var(--skin-text-body);
-  font-size: var(--text-subtitle);
+  font-size: var(--text-body);
   font-weight: 500;
-}
-.database-field-label {
-  color: var(--skin-text-body);
-  font-size: var(--text-subtitle);
-  font-weight: 500;
+  line-height: 1.5;
 }
 .history-limit {
   display: flex;
@@ -5264,7 +5301,7 @@ input[type='radio'] {
 .database-mode-label {
   color: var(--skin-text-body);
   font-weight: 500;
-  font-size: var(--text-subtitle);
+  font-size: var(--text-body);
   line-height: 1.6;
 }
 .database-mode-copy > span,
@@ -9342,9 +9379,10 @@ body.is-preview-window-resizing * {
   gap: 10px;
 }
 .proxy-settings .proxy-fields label {
-  margin-top: 12px;
+  color: var(--skin-text-body);
   font-size: var(--text-body);
   font-weight: 500;
+  line-height: 1.5;
 }
 .proxy-settings .proxy-fields input {
   width: 100%;
@@ -9352,8 +9390,8 @@ body.is-preview-window-resizing * {
 }
 .proxy-settings .field-hint {
   margin: 0;
-  color: var(--md-sys-color-on-surface-variant);
-  font-size: var(--text-body);
+  color: var(--skin-text-muted);
+  font-size: var(--text-small);
   line-height: 1.6;
 }
 .proxy-settings .proxy-actions {

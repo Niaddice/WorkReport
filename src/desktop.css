@@ -562,7 +562,8 @@
 }
 .app-shell .settings-content-heading p {
   margin-top: 4px;
-  font-size: var(--text-small);
+  font-size: var(--text-body);
+  line-height: 1.6;
 }
 .app-shell .settings-section {
   padding: 0 0 18px;
@@ -581,6 +582,7 @@
 }
 .app-shell .settings-section-heading :is(h2, h3) {
   font-size: var(--text-subtitle);
+  font-weight: 600;
 }
 .app-shell .appearance-setting-row {
   display: grid;
@@ -595,6 +597,7 @@
 .app-shell .appearance-setting-copy :is(h3, h4) {
   margin-bottom: 4px;
   font-size: var(--text-body);
+  font-weight: 500;
 }
 .app-shell .appearance-setting-copy p {
   font-size: var(--text-small);
@@ -662,6 +665,7 @@
 :root .app-select-trigger {
   border-radius: var(--desktop-control-radius);
   box-shadow: none;
+  font-size: var(--text-body);
 }
 .app-shell .settings-page .app-select-trigger {
   border-radius: var(--desktop-control-radius);
