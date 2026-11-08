@@ -110,6 +110,7 @@ function onKeydown(event: KeyboardEvent) {
       class="shortcuts-dialog confirmation-dialog"
       aria-labelledby="shortcuts-dialog-title"
       @cancel.prevent="emit('close')"
+      @click.self="emit('close')"
       @keydown="onKeydown"
     >
       <div class="shortcuts-window">
@@ -223,7 +224,7 @@ function onKeydown(event: KeyboardEvent) {
   background: transparent;
   color: inherit;
   max-width: min(720px, calc(100vw - 32px));
-  width: 720px;
+  width: min(720px, calc(100vw - 32px));
 }
 
 .shortcuts-window {

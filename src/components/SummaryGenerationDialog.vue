@@ -94,6 +94,7 @@ async function copy() {
       aria-labelledby="summary-generation-title"
       aria-describedby="summary-generation-description"
       @cancel.prevent="!exporting && emit('close')"
+      @click.self="!exporting && emit('close')"
     >
       <header class="ai-dialog-heading">
         <div>

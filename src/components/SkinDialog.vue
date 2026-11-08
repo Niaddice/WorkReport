@@ -25,7 +25,13 @@ onBeforeUnmount(() => motion.dispose())
 </script>
 
 <template>
-  <dialog ref="dialog" class="skin-dialog" aria-labelledby="skin-dialog-title" @cancel.prevent="emit('close')">
+  <dialog
+    ref="dialog"
+    class="skin-dialog"
+    aria-labelledby="skin-dialog-title"
+    @cancel.prevent="emit('close')"
+    @click.self="emit('close')"
+  >
     <header class="skin-dialog-heading">
       <div>
         <PhPalette :size="22" aria-hidden="true" />

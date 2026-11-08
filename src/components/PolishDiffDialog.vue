@@ -92,7 +92,11 @@ function onKeydown(event: KeyboardEvent) {
   if (event.key === 'Escape') {
     event.preventDefault()
     emit('discard')
-  } else if (event.key === 'Enter' && (event.metaKey || event.ctrlKey || !event.shiftKey)) {
+  } else if (event.key === 'Enter') {
+    const active = document.activeElement
+    if (active instanceof HTMLButtonElement && !active.classList.contains('polish-diff-accept')) {
+      return
+    }
     event.preventDefault()
     emit('accept')
   }
@@ -110,6 +114,7 @@ function onKeydown(event: KeyboardEvent) {
       class="polish-diff-dialog confirmation-dialog"
       aria-labelledby="polish-diff-title"
       @cancel.prevent="emit('discard')"
+      @click.self="emit('discard')"
       @keydown="onKeydown"
     >
       <div class="polish-diff-window">
@@ -271,17 +276,12 @@ function onKeydown(event: KeyboardEvent) {
   background: var(--skin-canvas);
   color: var(--skin-text);
   box-shadow: 0 16px 40px rgba(0, 0, 0, 0.28);
-  width: min(92vw, 980px);
-  max-width: 980px;
-  height: min(88vh, 720px);
-  max-height: 720px;
+  width: min(980px, calc(100vw - 32px));
+  max-width: min(980px, calc(100vw - 32px));
+  height: min(720px, calc(100vh - 48px));
+  max-height: min(720px, calc(100vh - 48px));
   outline: none;
   overflow: hidden;
-}
-
-.polish-diff-dialog::backdrop {
-  background: rgba(0, 0, 0, 0.45);
-  backdrop-filter: blur(2px);
 }
 
 .polish-diff-window {
@@ -680,7 +680,7 @@ function onKeydown(event: KeyboardEvent) {
 .dialog-button-primary {
   background: var(--skin-accent);
   border: 1px solid var(--skin-accent);
-  color: #fff;
+  color: var(--skin-on-accent, #ffffff);
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.15);
 }
 

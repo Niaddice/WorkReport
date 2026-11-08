@@ -179,6 +179,7 @@ onBeforeUnmount(() => {
     class="history-diff-dialog confirmation-dialog"
     aria-labelledby="history-diff-title"
     @cancel.prevent="close"
+    @click.self="close"
     @keydown="onKeydown"
   >
     <div class="history-diff-window">
@@ -379,15 +380,11 @@ onBeforeUnmount(() => {
   color: var(--skin-text);
   box-shadow: 0 16px 48px rgba(0, 0, 0, 0.28);
   padding: 0;
-  width: min(1080px, 94vw);
-  max-width: 1200px;
-  height: min(720px, 86vh);
+  width: min(1080px, calc(100vw - 32px));
+  max-width: min(1080px, calc(100vw - 32px));
+  height: min(720px, calc(100vh - 48px));
+  max-height: min(720px, calc(100vh - 48px));
   overflow: hidden;
-}
-
-.history-diff-dialog::backdrop {
-  background: rgba(0, 0, 0, 0.45);
-  backdrop-filter: blur(2px);
 }
 
 .history-diff-window {

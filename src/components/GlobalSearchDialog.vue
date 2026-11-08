@@ -193,6 +193,11 @@ function chooseItem(item: SearchResultItem | undefined) {
 
 function onKeydown(event: KeyboardEvent) {
   if (event.isComposing || event.keyCode === 229) return
+  if (event.key === 'Escape') {
+    event.preventDefault()
+    emit('close')
+    return
+  }
   const total = filteredItems.value.length
   if (event.key === 'ArrowDown') {
     event.preventDefault()
@@ -249,7 +254,7 @@ onBeforeUnmount(() => {
 <template>
   <dialog
     ref="dialog"
-    class="global-search-dialog"
+    class="global-search-dialog confirmation-dialog"
     aria-labelledby="global-search-dialog-title"
     @cancel.prevent="emit('close')"
     @click.self="emit('close')"
@@ -381,13 +386,14 @@ onBeforeUnmount(() => {
 <style scoped>
 .global-search-dialog {
   width: min(640px, calc(100vw - 32px));
+  max-width: min(640px, calc(100vw - 32px));
   max-height: min(560px, calc(100vh - 64px));
   padding: 0;
   border: 1px solid var(--skin-border);
   border-radius: 14px;
   background: var(--skin-surface);
   color: var(--skin-text);
-  box-shadow: 0 20px 48px #0000002e;
+  box-shadow: 0 20px 48px rgba(0, 0, 0, 0.28);
   overflow: hidden;
 }
 

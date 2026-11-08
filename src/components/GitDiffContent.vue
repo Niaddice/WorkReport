@@ -102,6 +102,7 @@ function onHunkAction(patch: string) {
   gap: 6px;
   position: sticky;
   right: 8px;
+  z-index: 2;
 }
 .hunk-action-btn {
   font-family: var(--font-sans, system-ui, sans-serif);

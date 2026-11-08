@@ -982,6 +982,7 @@ function onHistoryKeydown(event: KeyboardEvent) {
     return
   }
   if (saveShortcut(event, isMac)) {
+    if (document.querySelector('dialog[open]:not(.is-inline)')) return
     event.preventDefault()
     if (workspaceDocument.path.value) {
       void workspaceDocument.flush()
@@ -992,6 +993,9 @@ function onHistoryKeydown(event: KeyboardEvent) {
     return
   }
   if (cheatsheetShortcut(event, isMac)) {
+    if (!shortcutsOpened.value && document.querySelector('dialog[open]:not(#shortcuts-dialog):not(.is-inline)')) {
+      return
+    }
     event.preventDefault()
     shortcutsOpened.value = !shortcutsOpened.value
     return

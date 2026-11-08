@@ -2005,23 +2005,23 @@ function statusLabel(file: GitFileChange, staged: boolean) {
   align-items: center;
   justify-content: center;
 }
-.batch-fetch-btn {
+.repository-sidebar-actions button.batch-fetch-btn {
   display: inline-flex;
   align-items: center;
   gap: 4px;
   font-size: calc(11 * var(--font-unit));
-  padding: 2px 6px !important;
+  padding: 2px 6px;
   border-radius: 4px;
   color: var(--skin-text-muted);
-  border: 1px solid transparent !important;
+  border: 1px solid transparent;
   cursor: pointer;
   background: transparent;
   line-height: 1;
 }
-.batch-fetch-btn:hover:not(:disabled) {
+.repository-sidebar-actions button.batch-fetch-btn:hover:not(:disabled) {
   color: var(--skin-accent);
-  background: var(--skin-accent-soft) !important;
-  border-color: var(--skin-accent-border) !important;
+  background: var(--skin-accent-soft);
+  border-color: var(--skin-accent-border);
 }
 .spin-icon {
   animation: spin 1s linear infinite;

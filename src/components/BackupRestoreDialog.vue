@@ -175,8 +175,18 @@ async function handleRestore() {
   }
 }
 
+function formatExportedAt(dateStr: string): string {
+  try {
+    const d = new Date(dateStr)
+    return isNaN(d.getTime()) ? dateStr : d.toLocaleString()
+  } catch {
+    return dateStr
+  }
+}
+
 function onKeydown(event: KeyboardEvent) {
   if (event.key === 'Escape') {
+    if (restoring.value) return
     event.preventDefault()
     emit('close')
   }
@@ -193,7 +203,8 @@ function onKeydown(event: KeyboardEvent) {
       aria-modal="true"
       class="backup-dialog confirmation-dialog"
       aria-labelledby="backup-dialog-title"
-      @cancel.prevent="emit('close')"
+      @cancel.prevent="!restoring && emit('close')"
+      @click.self="!restoring && emit('close')"
       @keydown="onKeydown"
     >
       <div class="backup-window">
@@ -338,7 +349,7 @@ function onKeydown(event: KeyboardEvent) {
                 </div>
                 <div class="info-row">
                   <span class="info-label">备份生成时间：</span>
-                  <span class="info-value">{{ new Date(restoreBundle.exportedAt).toLocaleString() }}</span>
+                  <span class="info-value">{{ formatExportedAt(restoreBundle.exportedAt) }}</span>
                 </div>
                 <div class="info-row">
                   <span class="info-label">备份日报总数：</span>
@@ -439,7 +450,7 @@ function onKeydown(event: KeyboardEvent) {
   background: transparent;
   color: inherit;
   max-width: min(640px, calc(100vw - 32px));
-  width: 640px;
+  width: min(640px, calc(100vw - 32px));
 }
 
 .backup-window {
