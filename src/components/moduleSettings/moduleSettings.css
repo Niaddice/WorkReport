@@ -33,11 +33,22 @@
   place-items: center;
   color: var(--skin-accent);
 }
+.module-settings-sidebar-title-wrap {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  gap: 1px;
+}
 .module-settings-sidebar-title {
   font-size: var(--text-subtitle);
   font-weight: 600;
   color: var(--skin-text);
   letter-spacing: 0.02em;
+}
+.module-settings-sidebar-badge {
+  font-size: var(--text-caption);
+  color: var(--skin-text-muted);
+  line-height: 1.2;
 }
 .module-settings-nav {
   flex: 1;

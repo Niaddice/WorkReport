@@ -1,6 +1,22 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, provide, ref, useId, watch } from 'vue'
-import { PhGearSix, PhSlidersHorizontal, PhX } from '@phosphor-icons/vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, provide, ref, useId, watch, type Component } from 'vue'
+import {
+  PhCalendarDots,
+  PhChatTeardropText,
+  PhClockCounterClockwise,
+  PhCpu,
+  PhFileText,
+  PhFileXls,
+  PhFolder,
+  PhGearSix,
+  PhGitBranch,
+  PhKey,
+  PhLayout,
+  PhSliders,
+  PhSlidersHorizontal,
+  PhSparkle,
+  PhX,
+} from '@phosphor-icons/vue'
 import { moduleById } from '../modules/registry'
 import { MODULE_SETTINGS_CONTEXT, type ModuleSettingsContext } from '../modules/settingsContext'
 import type { ModuleType } from '../modules/types'
@@ -37,40 +53,133 @@ const emit = defineEmits<{
   'sync-holidays': [year: number]
 }>()
 
-// 可配置模块导航列表
-const MODULE_NAV_ITEMS = [
-  { id: 'editor' as ModuleType, label: '编辑模块', desc: '格式、预设骨架与润色' },
-  { id: 'git' as ModuleType, label: '本地 Git', desc: '仓库、提交风格与凭据' },
-  { id: 'excel' as ModuleType, label: 'Excel 报告', desc: '导出配置、模板与提示词' },
-  { id: 'summary' as ModuleType, label: '智能总结', desc: '输出位置与提示词预设' },
-  { id: 'calendar' as ModuleType, label: '日历设置', desc: '放假与调休同步' },
-  { id: 'history' as ModuleType, label: '历史版本', desc: '快照与存储限制' },
-]
+export interface ModuleSectionItem {
+  id: string
+  title: string
+  desc: string
+  icon: Component
+  targetId: string
+}
 
-// 各模块内部小节快捷锚点
-const MODULE_SECTIONS: Record<string, Array<{ id: string; label: string }>> = {
+// 保持各模块自身的设置选项列表
+const MODULE_SECTIONS_CONFIG: Record<string, ModuleSectionItem[]> = {
   editor: [
-    { id: 'editor-format-title', label: '默认格式' },
-    { id: 'editor-files-title', label: '保存位置' },
-    { id: 'editor-skeleton-title', label: '每日骨架' },
-    { id: 'editor-prompt-title', label: '日报润色' },
+    {
+      id: 'editor-format',
+      title: '默认格式',
+      desc: 'Markdown 与纯文本格式',
+      icon: PhFileText,
+      targetId: 'editor-format-title',
+    },
+    {
+      id: 'editor-files',
+      title: '保存位置',
+      desc: '保存目录与命名规则',
+      icon: PhFolder,
+      targetId: 'editor-files-title',
+    },
+    {
+      id: 'editor-skeleton',
+      title: '每日骨架',
+      desc: '空白日报模板与骨架',
+      icon: PhLayout,
+      targetId: 'editor-skeleton-title',
+    },
+    {
+      id: 'editor-prompt',
+      title: '日报润色',
+      desc: 'AI 润色提示词及模型',
+      icon: PhSparkle,
+      targetId: 'editor-prompt-title',
+    },
   ],
   git: [
-    { id: 'git-repositories-heading', label: '仓库管理' },
-    { id: 'git-prompt-heading', label: '提交风格' },
-    { id: 'github-authentication-heading', label: 'GitHub 账号' },
-    { id: 'saved-git-heading', label: '凭据管理' },
+    {
+      id: 'git-repositories',
+      title: '本地仓库',
+      desc: '添加与管理项目仓库',
+      icon: PhGitBranch,
+      targetId: 'git-repositories-heading',
+    },
+    {
+      id: 'git-prompt',
+      title: '提交说明',
+      desc: 'AI 提交说明与风格预设',
+      icon: PhSparkle,
+      targetId: 'prompt-title',
+    },
+    {
+      id: 'git-credentials',
+      title: '认证凭据',
+      desc: 'GitHub 账号与本机凭据',
+      icon: PhKey,
+      targetId: 'git-auth-heading',
+    },
+    {
+      id: 'git-advanced',
+      title: '高级设置',
+      desc: 'Git 程序执行路径',
+      icon: PhSliders,
+      targetId: 'git-advanced-heading',
+    },
   ],
   excel: [
-    { id: 'excel-settings-title', label: '导出配置' },
-    { id: 'excel-prompt-title', label: '提示词' },
+    {
+      id: 'excel-export',
+      title: 'Excel 输出',
+      desc: '生成配置、模板与提示词',
+      icon: PhFileXls,
+      targetId: 'excel-output-title',
+    },
+    {
+      id: 'excel-files',
+      title: '保存位置',
+      desc: '导出目录与命名规则',
+      icon: PhFolder,
+      targetId: 'excel-directory-title',
+    },
   ],
   summary: [
-    { id: 'summary-output-title', label: '输出位置' },
-    { id: 'summary-prompt-title', label: '提示词预设' },
+    {
+      id: 'summary-ai',
+      title: '默认 AI',
+      desc: '全局模型与服务状态',
+      icon: PhCpu,
+      targetId: 'summary-default-ai-title',
+    },
+    {
+      id: 'summary-prompt',
+      title: '总结提示词',
+      desc: '多方案提示词与系统设定',
+      icon: PhChatTeardropText,
+      targetId: 'summary-prompt-title',
+    },
+    {
+      id: 'summary-files',
+      title: '保存位置',
+      desc: '总结保存目录与命名规则',
+      icon: PhFolder,
+      targetId: 'summary-directory-title',
+    },
   ],
-  calendar: [{ id: 'calendar-sync-title', label: '放假调休' }],
-  history: [{ id: 'history-limit-title', label: '存储上限' }],
+  calendar: [
+    {
+      id: 'calendar-sync',
+      title: '放假与调休',
+      desc: '法定节假日与调休安排',
+      icon: PhCalendarDots,
+      targetId: 'calendar-sync-title',
+    },
+  ],
+  history: [
+    {
+      id: 'history-limit',
+      title: '存储上限',
+      desc: '历史版本空间限制',
+      icon: PhClockCounterClockwise,
+      targetId: 'history-limit-title',
+    },
+  ],
 }
 
 // 父组件关闭时会清空 module；收缩结束前保留标题、表单及布局。
@@ -130,43 +239,97 @@ const {
   (settings) => props.save(settings),
 )
 
-const moduleDirty = computed<Record<ModuleType, boolean>>(() => {
+// 当前模块自身拥有的设置选项列表
+const currentSections = computed<ModuleSectionItem[]>(() => {
+  if (!displayedModule.value) return []
+  return MODULE_SECTIONS_CONFIG[displayedModule.value] ?? []
+})
+const activeSectionId = ref('')
+
+watch(
+  displayedModule,
+  (mod) => {
+    if (mod && MODULE_SECTIONS_CONFIG[mod]?.length) {
+      activeSectionId.value = MODULE_SECTIONS_CONFIG[mod]![0]!.id
+    } else {
+      activeSectionId.value = ''
+    }
+  },
+  { immediate: true },
+)
+
+// 检测每个设置选项是否有未保存修改，供左侧导航展示未保存标记
+const sectionDirty = computed<Record<string, boolean>>(() => {
   const current = draft.value
   const baseline = props.bundle
   const differs = (a: unknown, b: unknown) => JSON.stringify(a) !== JSON.stringify(b)
 
   return {
-    editor:
-      differs(current.editor, baseline.editor) ||
-      differs(current.files?.journal, baseline.files?.journal) ||
-      current.database.defaultFormat !== baseline.database.defaultFormat ||
-      current.ai.generationPreference !== baseline.ai.generationPreference,
-    git: differs(current.git, baseline.git),
-    excel: differs(current.excel, baseline.excel) || differs(current.files?.excel, baseline.files?.excel),
-    summary: differs(current.summary, baseline.summary) || differs(current.files?.summary, baseline.files?.summary),
-    calendar: false,
-    history: current.database.historyLimitBytes !== baseline.database.historyLimitBytes,
-    overview: false,
-    directory: false,
+    // Editor
+    'editor-format': current.database.defaultFormat !== baseline.database.defaultFormat,
+    'editor-files': differs(current.files?.journal, baseline.files?.journal),
+    'editor-skeleton': differs(current.editor, baseline.editor),
+    'editor-prompt': current.ai.generationPreference !== baseline.ai.generationPreference,
+
+    // Git
+    'git-repositories': differs(current.git.repositories, baseline.git.repositories),
+    'git-prompt': (current.git.commitPrompt ?? '') !== (baseline.git.commitPrompt ?? ''),
+    'git-credentials': false,
+    'git-advanced': current.git.executable !== baseline.git.executable,
+
+    // Excel
+    'excel-export': differs(current.excel, baseline.excel),
+    'excel-files': differs(current.files?.excel, baseline.files?.excel),
+
+    // Summary
+    'summary-ai': false,
+    'summary-prompt': current.ai.summaryPrompt !== baseline.ai.summaryPrompt,
+    'summary-files': differs(current.files?.summary, baseline.files?.summary),
+
+    // Calendar
+    'calendar-sync': false,
+
+    // History
+    'history-limit': current.database.historyLimitBytes !== baseline.database.historyLimitBytes,
   }
 })
 
-function selectModule(id: ModuleType) {
-  if (displayedModule.value === id) return
-  displayedModule.value = id
-  localError.value = ''
-  void nextTick(() => {
-    body.value?.scrollTo({ top: 0, behavior: 'instant' })
-  })
-}
-
 function scrollToSection(targetId: string) {
   void nextTick(() => {
-    const el = body.value?.querySelector(`[heading-id="${targetId}"], #${targetId}, .${targetId}`)
+    const container = body.value
+    if (!container) return
+    const el = container.querySelector(
+      `[heading-id="${targetId}"], [heading-id$="${targetId}"], #${targetId}, .${targetId}`,
+    )
     if (el) {
       el.scrollIntoView({ behavior: 'smooth', block: 'start' })
     }
   })
+}
+
+function selectSection(item: ModuleSectionItem) {
+  activeSectionId.value = item.id
+  scrollToSection(item.targetId)
+}
+
+function onBodyScroll() {
+  const container = body.value
+  if (!container) return
+  const sections = currentSections.value
+  const containerTop = container.getBoundingClientRect().top
+  for (let i = sections.length - 1; i >= 0; i--) {
+    const item = sections[i]!
+    const el = container.querySelector(
+      `[heading-id="${item.targetId}"], [heading-id$="${item.targetId}"], #${item.targetId}, .${item.targetId}`,
+    )
+    if (el) {
+      const rect = el.getBoundingClientRect()
+      if (rect.top - containerTop <= 80) {
+        activeSectionId.value = item.id
+        break
+      }
+    }
+  }
 }
 
 const busy = computed(() => props.busy || saving.value)
@@ -244,7 +407,7 @@ watch(
       closeTarget = 'settings'
       pendingAction.value = null
       localError.value = ''
-      displayedModule.value = props.module ?? 'editor'
+      displayedModule.value = props.module
       if (!definition.value) {
         emit('close')
         return
@@ -306,55 +469,43 @@ defineExpose({ requestClose, unchanged, isOpen: () => props.visible })
         :aria-describedby="definition?.description ? `${titleId}-description` : undefined"
         tabindex="-1"
       >
-        <!-- 左侧导航侧栏 -->
+        <!-- 左侧模块自身选项导航侧栏 -->
         <aside class="module-settings-sidebar">
           <div class="module-settings-sidebar-header">
             <span class="module-settings-sidebar-icon">
-              <PhGearSix :size="16" aria-hidden="true" />
+              <component :is="moduleDefinition?.icon ?? PhGearSix" :size="18" aria-hidden="true" />
             </span>
-            <span class="module-settings-sidebar-title">模块设置</span>
+            <div class="module-settings-sidebar-title-wrap">
+              <span class="module-settings-sidebar-title">{{ definition?.title ?? '模块设置' }}</span>
+              <span class="module-settings-sidebar-badge">设置选项</span>
+            </div>
           </div>
 
-          <nav class="module-settings-nav" aria-label="模块设置分类">
-            <div v-for="item in MODULE_NAV_ITEMS" :key="item.id" class="module-settings-nav-group">
-              <button
-                type="button"
-                class="module-settings-nav-item"
-                :class="{ 'is-active': displayedModule === item.id }"
-                :aria-current="displayedModule === item.id ? 'page' : undefined"
-                @click="selectModule(item.id)"
-              >
-                <span class="module-settings-nav-icon">
-                  <component :is="moduleById(item.id)?.icon ?? PhGearSix" :size="16" aria-hidden="true" />
-                </span>
-                <span class="module-settings-nav-copy">
-                  <strong>{{ item.label }}</strong>
-                  <small>{{ item.desc }}</small>
-                </span>
-                <span
-                  v-if="moduleDirty[item.id]"
-                  class="module-settings-dirty-dot"
-                  role="img"
-                  aria-label="有未保存修改"
-                  title="有未保存修改"
-                ></span>
-              </button>
-
-              <div
-                v-if="displayedModule === item.id && MODULE_SECTIONS[item.id]?.length"
-                class="module-settings-subnav"
-              >
-                <button
-                  v-for="sec in MODULE_SECTIONS[item.id]"
-                  :key="sec.id"
-                  type="button"
-                  class="module-settings-subnav-item"
-                  @click="scrollToSection(sec.id)"
-                >
-                  <span>{{ sec.label }}</span>
-                </button>
-              </div>
-            </div>
+          <nav class="module-settings-nav" :aria-label="`${definition?.title ?? '模块'}设置选项`">
+            <button
+              v-for="item in currentSections"
+              :key="item.id"
+              type="button"
+              class="module-settings-nav-item"
+              :class="{ 'is-active': activeSectionId === item.id }"
+              :aria-current="activeSectionId === item.id ? 'page' : undefined"
+              @click="selectSection(item)"
+            >
+              <span class="module-settings-nav-icon">
+                <component :is="item.icon" :size="16" aria-hidden="true" />
+              </span>
+              <span class="module-settings-nav-copy">
+                <strong>{{ item.title }}</strong>
+                <small>{{ item.desc }}</small>
+              </span>
+              <span
+                v-if="sectionDirty[item.id]"
+                class="module-settings-dirty-dot"
+                role="img"
+                aria-label="有未保存修改"
+                title="有未保存修改"
+              ></span>
+            </button>
           </nav>
 
           <div class="module-settings-sidebar-footer">
@@ -395,7 +546,7 @@ defineExpose({ requestClose, unchanged, isOpen: () => props.visible })
             </button>
           </header>
 
-          <div ref="body" class="module-settings-body">
+          <div ref="body" class="module-settings-body" @scroll.passive="onBodyScroll">
             <component :is="definition?.component" v-if="definition" ref="content" />
           </div>
 

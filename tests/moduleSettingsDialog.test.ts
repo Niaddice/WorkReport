@@ -485,50 +485,60 @@ describe('module settings entry in module title bars', () => {
     }
   })
 
-  it('switches between modules using the left navigation sidebar and saves across modules atomically', async () => {
+  it("maintains each module's own settings options in the left navigation sidebar", async () => {
     const wrapper = await openDemoWorkspace()
     try {
+      // 1. 打开编辑设置：左侧导航展示编辑模块自身的设置选项
       await openModuleSettings(wrapper, 'editor')
       const dialog = wrapper.get('.module-settings-dialog')
 
-      // 验证左侧导航栏存在并列出模块
-      const navItems = dialog.findAll('.module-settings-nav-item')
-      expect(navItems.length).toBe(6)
-      expect(dialog.get('.module-settings-sidebar-title').text()).toBe('模块设置')
+      expect(dialog.get('.module-settings-sidebar-title').text()).toBe('编辑设置')
+      const editorNavItems = dialog.findAll('.module-settings-nav-item')
+      expect(editorNavItems.length).toBe(4)
+      expect(editorNavItems[0]!.text()).toContain('默认格式')
+      expect(editorNavItems[1]!.text()).toContain('保存位置')
+      expect(editorNavItems[2]!.text()).toContain('每日骨架')
+      expect(editorNavItems[3]!.text()).toContain('日报润色')
+      expect(editorNavItems[0]!.classes()).toContain('is-active')
 
-      // 编辑模块处于选中状态
-      expect(navItems[0]!.classes()).toContain('is-active')
-      expect(dialog.get('.module-settings-heading h2').text()).toBe('编辑设置')
-
-      // 修改编辑设置并验证产生未保存标记
-      await dialog.get('#polish-prompt').setValue('测试多模块联动润色')
+      // 点击“每日骨架”导航项
+      await editorNavItems[2]!.trigger('click')
       await flushPromises()
-      expect(navItems[0]!.find('.module-settings-dirty-dot').exists()).toBe(true)
+      expect(editorNavItems[2]!.classes()).toContain('is-active')
 
-      // 点击左侧导航切换到 Excel 报告
-      const excelNav = navItems.find((item) => item.text().includes('Excel 报告'))
-      expect(excelNav).toBeDefined()
-      await excelNav!.trigger('click')
+      // 修改润色提示词，对应的选项项显示未保存标记
+      await dialog.get('#polish-prompt').setValue('测试润色提示词修改')
       await flushPromises()
+      expect(editorNavItems[3]!.find('.module-settings-dirty-dot').exists()).toBe(true)
 
-      // 右侧内容切换为 Excel 设置
-      expect(dialog.get('.module-settings-heading h2').text()).toBe('Excel 设置')
-      expect(dialog.find('#excel-save-directory').exists()).toBe(true)
-
-      // 修改 Excel 设置
-      await dialog.get('#excel-save-directory').setValue('集中导出')
-      await flushPromises()
-      expect(excelNav!.find('.module-settings-dirty-dot').exists()).toBe(true)
-
-      // 保存设置，一次性原子持久化多个模块的修改
+      // 保存设置
       await dialog.get('.module-settings-save').trigger('click')
       await flushPromises()
       await flushPromises()
-
-      expect(saveCalls()).toHaveLength(1)
-      expect(savedSettings().ai.generationPreference).toBe('测试多模块联动润色')
-      expect(savedSettings().files!.excel.directory).toBe('集中导出')
+      expect(savedSettings().ai.generationPreference).toBe('测试润色提示词修改')
       expect(wrapper.get('.module-settings-dialog').isVisible()).toBe(false)
+
+      // 2. 打开 Git 设置：左侧导航展示 Git 模块自身的设置选项
+      await addModule(wrapper, 'Git')
+      await openModuleSettings(wrapper, 'git')
+      expect(dialog.get('.module-settings-sidebar-title').text()).toBe('Git 设置')
+      const gitNavItems = dialog.findAll('.module-settings-nav-item')
+      expect(gitNavItems.length).toBe(4)
+      expect(gitNavItems[0]!.text()).toContain('本地仓库')
+      expect(gitNavItems[1]!.text()).toContain('提交说明')
+      expect(gitNavItems[2]!.text()).toContain('认证凭据')
+      expect(gitNavItems[3]!.text()).toContain('高级设置')
+      await dialog.get('.module-settings-close').trigger('click')
+      await flushPromises()
+
+      // 3. 打开 Excel 设置：左侧导航展示 Excel 模块自身的设置选项
+      await addModule(wrapper, 'Excel报告')
+      await openModuleSettings(wrapper, 'excel')
+      expect(dialog.get('.module-settings-sidebar-title').text()).toBe('Excel 设置')
+      const excelNavItems = dialog.findAll('.module-settings-nav-item')
+      expect(excelNavItems.length).toBe(2)
+      expect(excelNavItems[0]!.text()).toContain('Excel 输出')
+      expect(excelNavItems[1]!.text()).toContain('保存位置')
     } finally {
       wrapper.unmount()
     }

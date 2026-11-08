@@ -97,7 +97,11 @@ defineExpose({ validate, focusInvalid })
 
 <template>
   <div ref="root" class="git-settings">
-    <ModuleSettingsSection title="本地仓库" description="添加项目仓库，在工作台切换项目、管理更改与分支。">
+    <ModuleSettingsSection
+      title="本地仓库"
+      heading-id="git-repositories-heading"
+      description="添加项目仓库，在工作台切换项目、管理更改与分支。"
+    >
       <div class="git-repositories-heading">
         <span
           class="git-hint"
@@ -230,11 +234,19 @@ defineExpose({ validate, focusInvalid })
         </div>
       </div>
     </ModuleSettingsSection>
-    <ModuleSettingsSection title="认证与凭据" description="管理 GitHub 登录和本机保存的 Git 凭据。">
+    <ModuleSettingsSection
+      title="认证与凭据"
+      heading-id="git-auth-heading"
+      description="管理 GitHub 登录和本机保存的 Git 凭据。"
+    >
       <GithubAuthentication :disabled="formBusy" />
       <SavedGitCredentials :disabled="formBusy" />
     </ModuleSettingsSection>
-    <ModuleSettingsSection title="高级设置" description="找不到本机 Git 时，可指定程序的安装路径。">
+    <ModuleSettingsSection
+      title="高级设置"
+      heading-id="git-advanced-heading"
+      description="找不到本机 Git 时，可指定程序的安装路径。"
+    >
       <details ref="advanced" class="git-advanced">
         <summary>高级设置<span>Git 程序路径</span></summary>
         <label class="git-field">
