@@ -13,6 +13,7 @@ vi.mock('@tauri-apps/api/core', () => {
 import { useGitWorkbench, type GitHistoryCommit, type GitRepositoryState } from '../src/lib/useGitWorkbench'
 import GitWorkbench from '../src/components/GitWorkbench.vue'
 import type { GitRepository } from '../src/lib/useGit'
+import { clearMessages, messages } from '../src/lib/messages'
 
 const repositories: GitRepository[] = [
   { id: 'one', name: '项目一', path: '/tmp/project-one', author: '', branch: '' },
@@ -98,6 +99,7 @@ async function mountReady(repository = state()) {
 beforeEach(() => {
   invoke.mockReset()
   desktop.value = true
+  clearMessages()
 })
 
 describe('multi-repository workbench', () => {
@@ -345,7 +347,7 @@ describe('AI commit messages', () => {
       await wrapper.get('[aria-label="AI 生成提交说明"]').trigger('click')
       await flushPromises()
       expect(wrapper.get<HTMLTextAreaElement>('[aria-label="提交说明"]').element.value).toBe('feat: 流式生成完成')
-      expect(wrapper.text()).toContain('AI 提交说明已生成')
+      expect(messages.value.at(-1)?.text).toContain('AI 提交说明已生成')
     } finally {
       wrapper.unmount()
     }
@@ -365,7 +367,7 @@ describe('AI commit messages', () => {
       pending.resolve('AI 返回的旧说明')
       await flushPromises()
       expect(wrapper.get<HTMLTextAreaElement>('[aria-label="提交说明"]').element.value).toBe('手动修改后的提交说明')
-      expect(wrapper.text()).toContain('已保留你的修改')
+      expect(messages.value.at(-1)?.text).toContain('已保留你的修改')
     } finally {
       wrapper.unmount()
     }
@@ -1060,7 +1062,7 @@ describe('Git workbench controls', () => {
       })
       expect(wrapper.find('[aria-label="Git 远程认证"]').exists()).toBe(false)
       expect(wrapper.text()).not.toContain('fetch-test-token')
-      expect(wrapper.text()).toContain('获取完成')
+      expect(messages.value.at(-1)?.text).toContain('获取完成')
     } finally {
       wrapper.unmount()
     }
@@ -1116,7 +1118,7 @@ describe('Git workbench controls', () => {
       save: true,
     })
     expect(wrapper.text()).not.toContain('saved-test-token')
-    expect(wrapper.text()).toContain('已加密保存到本机')
+    expect(messages.value.at(-1)?.text).toContain('已加密保存到本机')
     wrapper.unmount()
   })
 
@@ -1275,7 +1277,7 @@ describe('GitHub browser authorization retries', () => {
       expect(actionCalls().map(([, args]) => args.request.operation)).toEqual([operation, operation])
       expect(actionCalls().at(-1)![1].request.credentials).toBeUndefined()
       expect(wrapper.find('[aria-label="Git 远程认证"]').exists()).toBe(false)
-      expect(wrapper.text()).toContain('GitHub 操作完成')
+      expect(messages.value.at(-1)?.text).toContain('GitHub 操作完成')
     } finally {
       wrapper.unmount()
       vi.useRealTimers()
@@ -1552,7 +1554,7 @@ describe('Git workbench layout', () => {
       expect(fetchCalls.some((call) => call[1]?.repositoryId === 'one')).toBe(true)
       expect(fetchCalls.some((call) => call[1]?.repositoryId === 'two')).toBe(true)
 
-      expect(wrapper.text()).toContain('已完成全部 2 个仓库的远端更新同步')
+      expect(messages.value.at(-1)?.text).toContain('已完成全部 2 个仓库的远端更新同步')
     } finally {
       wrapper.unmount()
     }

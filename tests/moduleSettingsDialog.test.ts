@@ -501,10 +501,14 @@ describe('module settings entry in module title bars', () => {
       expect(editorNavItems[3]!.text()).toContain('日报润色')
       expect(editorNavItems[0]!.classes()).toContain('is-active')
 
-      // 点击“每日骨架”导航项
+      // 点击“每日骨架”导航项，仅滚动右侧内容容器，不滚动弹窗外壳
+      const bodyEl = dialog.get<HTMLElement>('.module-settings-body').element
+      const bodyScrollToSpy = vi.spyOn(bodyEl, 'scrollTo')
       await editorNavItems[2]!.trigger('click')
       await flushPromises()
       expect(editorNavItems[2]!.classes()).toContain('is-active')
+      expect(bodyScrollToSpy).toHaveBeenCalled()
+      expect((dialog.element as HTMLElement).scrollTop).toBe(0)
 
       // 修改润色提示词，对应的选项项显示未保存标记
       await dialog.get('#polish-prompt').setValue('测试润色提示词修改')

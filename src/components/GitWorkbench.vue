@@ -45,6 +45,7 @@ import { cloneSelectedCommit, useGitCommitSelection, type SelectedGitCommit } fr
 import GitCommitCollection from './GitCommitCollection.vue'
 import GitAuthenticationForm from './GitAuthenticationForm.vue'
 import { isGithubHttpsOrigin } from '../lib/gitAuthentication'
+import { pushMessage } from '../lib/messages'
 
 const props = withDefaults(
   defineProps<{
@@ -87,6 +88,13 @@ const {
   authentication,
   generatingMessage,
 } = client
+
+watch(notice, (value) => {
+  if (value) {
+    pushMessage({ tone: 'success', text: value })
+    notice.value = ''
+  }
+})
 const tab = ref<'changes' | 'history' | 'branches' | 'stashes' | 'collection'>('changes')
 const tabs = [
   { id: 'changes', label: '本地更改', icon: PhFiles },
@@ -627,9 +635,9 @@ async function fetchAllRepositories() {
       await client.refresh()
     }
     if (failedCount === 0) {
-      notice.value = `已完成全部 ${successCount} 个仓库的远端更新同步。`
+      pushMessage({ tone: 'success', text: `已完成全部 ${successCount} 个仓库的远端更新同步。` })
     } else {
-      notice.value = `已同步 ${successCount} 个仓库，${failedCount} 个仓库同步失败。`
+      pushMessage({ tone: 'warning', text: `已同步 ${successCount} 个仓库，${failedCount} 个仓库同步失败。` })
     }
   } finally {
     fetchingAll.value = false
@@ -717,7 +725,7 @@ async function generateMessage() {
     return
   }
   if (revision !== commitMessageRevision) {
-    notice.value = '提交说明已被编辑，已保留你的修改。'
+    pushMessage({ tone: 'info', text: '提交说明已被编辑，已保留你的修改。' })
     return
   }
   isAiUpdating = true
@@ -726,7 +734,7 @@ async function generateMessage() {
   } finally {
     isAiUpdating = false
   }
-  notice.value = 'AI 提交说明已生成，可修改后再提交。'
+  pushMessage({ tone: 'success', text: 'AI 提交说明已生成，可修改后再提交。' })
 }
 
 const fullCommitMessage = ref('')
@@ -737,11 +745,11 @@ function toggleSingleLineCommit() {
     fullCommitMessage.value = commitMessage.value
     const firstLine = commitMessage.value.split('\n')[0].trim()
     commitMessage.value = firstLine
-    notice.value = '已切换为紧凑单行说明。'
+    pushMessage({ tone: 'info', text: '已切换为紧凑单行说明。' })
   } else if (fullCommitMessage.value && fullCommitMessage.value.startsWith(commitMessage.value.trim())) {
     commitMessage.value = fullCommitMessage.value
     fullCommitMessage.value = ''
-    notice.value = '已恢复完整多行说明。'
+    pushMessage({ tone: 'info', text: '已恢复完整多行说明。' })
   }
 }
 
@@ -778,7 +786,7 @@ async function confirm() {
       commitMessage.value = prevMsg
     }
     commitExpanded.value = true
-    notice.value = '已撤销最近一次提交，修改已保留在暂存区。'
+    pushMessage({ tone: 'info', text: '已撤销最近一次提交，修改已保留在暂存区。' })
   }
 }
 
@@ -796,7 +804,7 @@ async function copyValue(value: string, label: string) {
   const current = () => revision === copyRevision && scope === `${props.workspacePath}\0${repositoryId.value}`
   try {
     await api.copy(value)
-    if (current()) notice.value = `${label}已复制。`
+    if (current()) pushMessage({ tone: 'success', text: `${label}已复制。` })
   } catch (cause) {
     if (current()) error.value = `复制失败：${String(cause)}`
   }
@@ -1126,7 +1134,6 @@ function statusLabel(file: GitFileChange, staged: boolean) {
         </button>
       </nav>
       <p v-if="error" class="workbench-message workbench-error" role="alert">{{ error }}</p>
-      <p v-if="notice" class="workbench-message workbench-notice" role="status">{{ notice }}</p>
       <GitAuthenticationForm
         v-if="authentication"
         :url="authentication.url"
@@ -1305,35 +1312,37 @@ function statusLabel(file: GitFileChange, staged: boolean) {
                 />
               </button>
               <span v-if="!commitExpanded && commitMessage.trim()" class="commit-draft-indicator">草稿</span>
-              <span v-if="aiProviderName" class="ai-provider" :title="`默认 AI：${aiProviderName}`">{{
-                aiProviderName
-              }}</span>
-              <span class="generate-action" :title="aiHint"
-                ><button
+              <div class="commit-heading-actions">
+                <button
+                  v-if="hasMultilineCommit || (fullCommitMessage && fullCommitMessage.startsWith(commitMessage.trim()))"
                   type="button"
-                  class="generate-commit-message"
-                  :aria-label="generatingMessage ? '取消生成提交说明' : 'AI 生成提交说明'"
-                  :title="aiHint"
-                  :aria-describedby="`${id}-ai-hint`"
-                  :aria-busy="generatingMessage"
-                  :disabled="!generatingMessage && !canGenerate"
-                  @click="generateMessage"
+                  class="text-action single-line-toggle"
+                  :title="hasMultilineCommit ? '切换为首行紧凑说明' : '恢复完整多行说明'"
+                  @click="toggleSingleLineCommit"
                 >
-                  <PhStop v-if="generatingMessage" :size="17" aria-hidden="true" /><PhSparkle
-                    v-else
-                    :size="17"
-                    aria-hidden="true"
-                  /></button
-              ></span>
-              <button
-                v-if="hasMultilineCommit || (fullCommitMessage && fullCommitMessage.startsWith(commitMessage.trim()))"
-                type="button"
-                class="text-action single-line-toggle"
-                :title="hasMultilineCommit ? '切换为首行紧凑说明' : '恢复完整多行说明'"
-                @click="toggleSingleLineCommit"
-              >
-                {{ hasMultilineCommit ? '紧凑' : '详细' }}
-              </button>
+                  {{ hasMultilineCommit ? '紧凑' : '详细' }}
+                </button>
+                <span v-if="aiProviderName" class="ai-provider" :title="`默认 AI：${aiProviderName}`">{{
+                  aiProviderName
+                }}</span>
+                <span class="generate-action" :title="aiHint"
+                  ><button
+                    type="button"
+                    class="generate-commit-message"
+                    :aria-label="generatingMessage ? '取消生成提交说明' : 'AI 生成提交说明'"
+                    :title="aiHint"
+                    :aria-describedby="`${id}-ai-hint`"
+                    :aria-busy="generatingMessage"
+                    :disabled="!generatingMessage && !canGenerate"
+                    @click="generateMessage"
+                  >
+                    <PhStop v-if="generatingMessage" :size="17" aria-hidden="true" /><PhSparkle
+                      v-else
+                      :size="17"
+                      aria-hidden="true"
+                    /></button
+                ></span>
+              </div>
             </div>
             <div v-show="commitExpanded" :id="`${id}-commit-fields`" class="commit-fields">
               <label class="sr-only" :for="`${id}-message`">提交说明</label>
@@ -1347,11 +1356,13 @@ function statusLabel(file: GitFileChange, staged: boolean) {
                 @keydown.enter.ctrl.prevent="commit()"
                 @keydown.enter.meta.prevent="commit()"
               />
-              <p v-if="generatingMessage" class="workbench-hint" role="status">
-                正在根据暂存区更改生成说明，可继续编辑或取消生成…
-              </p>
-              <p :id="`${id}-ai-hint`" class="workbench-hint">
-                <template v-if="aiProviderName === null"
+              <p
+                :id="`${id}-ai-hint`"
+                class="workbench-hint commit-hint"
+                :role="generatingMessage ? 'status' : undefined"
+              >
+                <template v-if="generatingMessage">正在生成提交说明，可继续编辑或取消生成…</template>
+                <template v-else-if="aiProviderName === null"
                   ><button type="button" class="configure-ai" :disabled="disabled || busy" @click="emit('configureAi')">
                     配置默认 AI</button
                   >后可生成提交说明。</template
@@ -1937,12 +1948,35 @@ function statusLabel(file: GitFileChange, staged: boolean) {
   align-items: center;
   justify-content: space-between;
   gap: 8px;
+  height: var(--git-control-height);
+  min-height: var(--git-control-height);
+  flex-shrink: 0;
+}
+.commit-heading-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+.generate-action {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+.single-line-toggle {
+  font-size: var(--text-caption);
+  padding: 1px 6px;
+  line-height: 1.4;
+  height: var(--git-control-height);
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 .generate-commit-message {
   width: var(--git-control-height);
   height: var(--git-control-height);
   padding: 0;
   color: var(--skin-accent);
+  flex-shrink: 0;
 }
 .git-workbench {
   --git-control-height: 26px;
@@ -2481,10 +2515,6 @@ h4 > span {
   background: var(--skin-danger-soft);
   color: var(--skin-danger);
 }
-.workbench-notice {
-  background: var(--skin-subtle);
-  color: var(--skin-success);
-}
 .workbench-confirm {
   margin: 0;
   border: 1px solid var(--skin-warning-border);
@@ -2795,20 +2825,38 @@ h4 {
 .commit-form {
   grid-area: commit;
   min-width: 0;
-  display: grid;
+  display: flex;
+  flex-direction: column;
   gap: 8px;
   border-top: 1px solid var(--skin-border);
   padding: 8px 10px;
   background: var(--skin-canvas);
+  box-sizing: border-box;
 }
 .commit-fields {
-  display: grid;
+  display: flex;
+  flex-direction: column;
   gap: 8px;
 }
 .commit-fields textarea {
+  height: 72px;
   min-height: 60px;
+  max-height: 160px;
   resize: vertical;
   background: var(--skin-surface);
+  scrollbar-gutter: stable;
+  line-height: 1.5;
+  box-sizing: border-box;
+}
+.commit-hint {
+  height: 20px;
+  min-height: 20px;
+  line-height: 20px;
+  margin: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex-shrink: 0;
 }
 .commit-disclosure {
   flex: 1;
@@ -2831,6 +2879,12 @@ h4 {
   color: var(--skin-warning);
   font-size: var(--text-caption);
 }
+.commit-fields .button-row {
+  display: flex;
+  gap: 8px;
+  min-height: 28px;
+  flex-shrink: 0;
+}
 .commit-fields .button-row > .commit-primary {
   flex: 0 0 auto;
   min-width: 70px;
@@ -2852,6 +2906,8 @@ h4 {
   justify-content: space-between;
   gap: 8px;
   font-size: var(--text-small);
+  min-height: 24px;
+  flex-shrink: 0;
 }
 .commit-amend-label {
   display: inline-flex;

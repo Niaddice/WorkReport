@@ -398,7 +398,8 @@ md-filled-tonal-button svg[slot='icon'] {
   z-index: 1;
   display: grid;
   grid-template-columns: 210px minmax(0, 1fr);
-  grid-template-rows: minmax(0, 1fr);
+  grid-template-rows: 100%;
+  align-items: stretch;
   width: min(1040px, 94vw);
   height: min(720px, 86vh);
   max-height: 88vh;
@@ -415,10 +416,13 @@ md-filled-tonal-button svg[slot='icon'] {
   outline: none;
 }
 .module-settings-main {
+  position: relative;
   display: flex;
   flex-direction: column;
+  height: 100%;
   min-width: 0;
   min-height: 0;
+  max-height: 100%;
   overflow: hidden;
   background: var(--skin-canvas);
 }
@@ -465,6 +469,7 @@ md-filled-tonal-button svg[slot='icon'] {
   transform: scale(0.92);
 }
 .module-settings-body {
+  position: relative;
   flex: 1;
   min-width: 0;
   min-height: 0;
@@ -483,10 +488,16 @@ md-filled-tonal-button svg[slot='icon'] {
 .module-settings-section {
   display: grid;
   gap: 14px;
-  padding-block: 16px;
+  padding-block: 20px;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
 }
 .module-settings-section:first-child {
-  padding-top: 2px;
+  padding-top: 4px;
+}
+.module-settings-section:last-child {
+  padding-bottom: 10px;
 }
 .module-settings-section + .module-settings-section {
   border-top: 1px solid var(--skin-border);
@@ -2583,13 +2594,17 @@ input[type='radio'] {
   color: var(--skin-success, #10b981);
 }
 .settings-section {
-  padding: 28px 30px;
-  border: 1px solid var(--skin-border);
-  background: var(--skin-surface);
-  border-radius: 22px;
+  padding: 0 0 20px;
+  border: 0;
+  background: transparent;
+  border-radius: 0;
   margin: 0;
   scroll-margin-top: 24px;
-  box-shadow: 0 3px 12px #344d7003;
+  box-shadow: none;
+}
+.settings-section + .settings-section {
+  padding-top: 20px;
+  border-top: 1px solid var(--skin-border);
 }
 .settings-section-heading {
   display: flex;
@@ -6297,23 +6312,12 @@ dialog[open].has-window-motion.is-closing::backdrop {
   line-height: 1.6;
   overflow-wrap: anywhere;
 }
-.directory-name-note,
-.directory-operation-notice {
-  margin: 4px 0;
+.directory-name-note {
+  margin: 4px 0 4px 20px;
   color: var(--skin-text-muted);
   font-size: var(--text-caption);
   line-height: 1.6;
   overflow-wrap: anywhere;
-}
-.directory-name-note {
-  margin-left: 20px;
-}
-.directory-operation-notice {
-  flex-shrink: 0;
-  padding: 5px 8px;
-  border-radius: 6px;
-  background: var(--skin-accent-soft);
-  color: var(--skin-text-body);
 }
 .directory-empty {
   margin: auto;

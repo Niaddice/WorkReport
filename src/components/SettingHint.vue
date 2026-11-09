@@ -15,6 +15,7 @@ defineProps<{
 
 <style scoped>
 .setting-hint-trigger {
+  position: relative;
   display: inline-flex;
   align-items: center;
   justify-content: center;

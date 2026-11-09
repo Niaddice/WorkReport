@@ -24,7 +24,15 @@ let excelInvalid = false
 let directoryInvalid = false
 
 function scrollToDirectory() {
-  directorySection.value?.$el.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  const sectionEl = directorySection.value?.$el as HTMLElement | undefined
+  if (!sectionEl) return
+  const container = sectionEl.closest<HTMLElement>('.module-settings-body')
+  if (container) {
+    const containerRect = container.getBoundingClientRect()
+    const targetRect = sectionEl.getBoundingClientRect()
+    const top = Math.max(0, container.scrollTop + (targetRect.top - containerRect.top) - 12)
+    container.scrollTo({ top, behavior: 'smooth' })
+  }
 }
 
 function validate(): boolean {

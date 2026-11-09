@@ -296,13 +296,18 @@ const sectionDirty = computed<Record<string, boolean>>(() => {
 
 function scrollToSection(targetId: string) {
   void nextTick(() => {
+    if (panel.value) panel.value.scrollTop = 0
     const container = body.value
     if (!container) return
-    const el = container.querySelector(
+    const el = container.querySelector<HTMLElement>(
       `[heading-id="${targetId}"], [heading-id$="${targetId}"], #${targetId}, .${targetId}`,
     )
     if (el) {
-      el.scrollIntoView({ behavior: 'smooth', block: 'start' })
+      const section = el.closest<HTMLElement>('.module-settings-section') ?? el
+      const containerRect = container.getBoundingClientRect()
+      const targetRect = section.getBoundingClientRect()
+      const top = Math.max(0, container.scrollTop + (targetRect.top - containerRect.top) - 12)
+      container.scrollTo({ top, behavior: 'smooth' })
     }
   })
 }
@@ -416,6 +421,7 @@ watch(
       const focused = document.activeElement
       if (focused instanceof HTMLElement && !panel.value?.contains(focused)) returnFocus = focused
       await nextTick()
+      if (panel.value) panel.value.scrollTop = 0
       body.value?.scrollTo({ top: 0 })
       if (props.visible) panel.value?.focus({ preventScroll: true })
     }
@@ -439,7 +445,10 @@ provide<ModuleSettingsContext>(MODULE_SETTINGS_CONTEXT, {
   syncHolidays: (year: number) => emit('sync-holidays', year),
 })
 
-onMounted(() => window.addEventListener('keydown', onKeydown))
+onMounted(() => {
+  if (panel.value) panel.value.scrollTop = 0
+  window.addEventListener('keydown', onKeydown)
+})
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', onKeydown)
   motion.dispose()

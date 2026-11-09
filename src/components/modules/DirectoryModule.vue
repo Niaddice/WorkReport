@@ -30,6 +30,7 @@ import {
 } from '../../lib/workspaceFiles'
 import { api, type FileNode } from '../../lib/workspace'
 import { useModuleContext } from '../../modules/context'
+import { pushMessage } from '../../lib/messages'
 
 const context = useModuleContext()
 const { journal } = context
@@ -38,7 +39,6 @@ const { selectedDate } = journal
 const operationPending = ref(false)
 const rootElement = ref<HTMLElement>()
 const selectedPath = ref('')
-const notice = ref('')
 const creationParent = computed(() => {
   const selected = nodes.value.find((node) => node.path === selectedPath.value)
   return selected ? (selected.isDir ? selected.path : parentPath(selected.path)) : ''
@@ -479,7 +479,7 @@ function onRowKeydown(event: KeyboardEvent, node: TreeNode) {
 async function copyPath(path: string) {
   try {
     await api.copy(path)
-    notice.value = '相对路径已复制'
+    pushMessage({ tone: 'success', text: '相对路径已复制' })
   } catch (cause) {
     error.value = `复制路径失败：${String(cause)}`
   }
@@ -513,7 +513,6 @@ async function beginAction(action: Exclude<FileAction, 'restore'> | 'trash', pat
     }
   } else cancelNewNode()
   closePanel(false)
-  notice.value = ''
   if (action === 'createFile' || action === 'createDirectory' || action === 'rename') {
     await startNewNode(action, action === 'rename' ? parentPath(path) : path, node)
     return
@@ -572,7 +571,7 @@ async function confirmDelete() {
     selectedPath.value = parentPath(request.path)
     operationPending.value = false
     closePanel(false)
-    notice.value = '已移入工作空间回收站，可通过回收站恢复。'
+    pushMessage({ tone: 'info', text: '已移入工作空间回收站，可通过回收站恢复。' })
     await focusRow(selectedPath.value)
   } catch (cause) {
     if (revision === panelRevision) {
@@ -602,7 +601,7 @@ async function restore(entry: TrashEntry) {
     const entries = await workspaceFilesApi.trash(panelWorkspace)
     if (revision !== panelRevision) return
     trashEntries.value = entries
-    notice.value = `已恢复 ${entry.name}`
+    pushMessage({ tone: 'success', text: `已恢复 ${entry.name}` })
     panel.value?.focus()
   } catch (cause) {
     if (revision === panelRevision) panelError.value = String(cause)
@@ -618,7 +617,6 @@ watch(
   () => {
     clearTimeout(blurTimer)
     selectedPath.value = ''
-    notice.value = ''
     newNodeRevision++
     newNode.value = null
     panelRevision++
@@ -716,8 +714,6 @@ function formatSize(bytes: number) {
         </button>
       </span>
     </header>
-
-    <p v-if="notice" class="directory-operation-notice" role="status">{{ notice }}</p>
 
     <p v-if="error" class="directory-empty error-text" role="alert">{{ error }}</p>
     <p v-else-if="loading && !nodes.length" class="directory-empty" role="status">正在读取目录…</p>
