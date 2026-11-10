@@ -117,6 +117,37 @@ describe('global full-text search', () => {
       await shell.trigger('keydown', { key: 'Enter' })
 
       expect(wrapper.emitted('selectJournal')).toEqual([['20261030']])
+
+      // Search for settings (e.g. '网络代理')
+      invoke.mockResolvedValue([])
+      await input.setValue('代理')
+      vi.advanceTimersByTime(150)
+      await flushPromises()
+
+      const settingItems = wrapper.findAll('.search-result-item')
+      expect(settingItems.length).toBeGreaterThan(0)
+      expect(settingItems[0]!.text()).toContain('网络代理')
+      expect(settingItems[0]!.text()).toContain('设置')
+
+      await settingItems[0]!.trigger('click')
+      expect(wrapper.emitted('selectSetting')).toEqual([
+        [
+          {
+            type: 'global',
+            section: 'proxy',
+          },
+        ],
+      ])
+
+      // Switch to setting tab when empty
+      await input.setValue('')
+      vi.advanceTimersByTime(150)
+      await flushPromises()
+
+      const settingTab = wrapper.findAll('[role="tab"]')[3]!
+      await settingTab.trigger('click')
+      const allSettingsInTab = wrapper.findAll('.search-result-item')
+      expect(allSettingsInTab.length).toBeGreaterThan(5)
     } finally {
       vi.useRealTimers()
       wrapper.unmount()

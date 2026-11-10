@@ -48,6 +48,7 @@ import {
   type WorkspaceSettings,
 } from './lib/settingsDraft'
 import type { GlobalSettingsSection } from './lib/settingsSections'
+import type { SettingSearchTarget } from './lib/settingsSearch'
 import {
   cloneFileSettings,
   fileSettingsApi,
@@ -143,6 +144,7 @@ const moduleSettingsDialog = ref<InstanceType<typeof ModuleSettingsDialog>>()
 /** 当前从模块标题栏打开设置的模块；为空表示没有模块设置弹窗。 */
 const moduleSettingsModule = ref<ModuleType | null>(null)
 const moduleSettingsSource = ref<ModuleId | null>(null)
+const moduleSettingsInitialSection = ref<string | null>(null)
 const moduleSettingsVisible = computed(() => moduleSettingsModule.value !== null)
 const moduleSettingsBusy = computed(() => settingsLoading.value || settingsSaving.value || databaseBusy.value)
 const appRail = ref<InstanceType<typeof AppRail>>()
@@ -347,6 +349,19 @@ async function onSearchSelectFile(path: string) {
   await searchDialog.value?.close()
   await openWorkspaceFile(path)
 }
+async function onSearchSelectSetting(target: SettingSearchTarget) {
+  await searchDialog.value?.close()
+  if (target.type === 'global') {
+    if (page.value !== 'settings') {
+      await navigate('settings')
+    }
+    if ((page.value as string) === 'settings') {
+      await settingsView.value?.navigate(target.section, target.targetId)
+    }
+  } else if (target.type === 'module') {
+    await openModuleSettings(target.module, target.module, target.sectionId)
+  }
+}
 /** 目录或历史记录里选择单篇表示聚焦这一天：先解除框选，避免总结 / Excel 仍按旧范围统计。 */
 async function selectReport(date: string) {
   if (journal.appendingGit.value) return
@@ -499,7 +514,7 @@ async function toggleSettings() {
   }
 }
 /** 打开模块自己的设置弹窗；模块标题栏齿轮与模块内「设置」入口共用。 */
-async function openModuleSettings(module: ModuleType, source: ModuleId = module) {
+async function openModuleSettings(module: ModuleType, source: ModuleId = module, initialSectionId?: string) {
   if (busy.value || picking.value || settingsCommitting.value || databaseBusy.value || excelBusy.value) return
   if (page.value !== 'home') {
     await navigate('home')
@@ -509,10 +524,16 @@ async function openModuleSettings(module: ModuleType, source: ModuleId = module)
   if (!settingsReady.value) await loadWorkspaceSettings(false)
   if (busy.value || picking.value) return
   moduleSettingsSource.value = source
+  moduleSettingsInitialSection.value = initialSectionId ?? null
   moduleSettingsModule.value = module
+  if (initialSectionId) {
+    await nextTick()
+    moduleSettingsDialog.value?.navigateToSection(initialSectionId)
+  }
 }
 function closeModuleSettings() {
   moduleSettingsModule.value = null
+  moduleSettingsInitialSection.value = null
 }
 /** 模块设置里点「前往模型配置」等入口时，先关闭弹窗再去全局设置对应分类。 */
 async function openModuleGlobalSettings(section: GlobalSettingsSection) {
@@ -1640,6 +1661,7 @@ onBeforeUnmount(() => {
         ref="moduleSettingsDialog"
         :visible="moduleSettingsVisible"
         :module="moduleSettingsModule"
+        :initial-section-id="moduleSettingsInitialSection"
         :button-rect="moduleSettingsButtonRect"
         :workspace="workspace"
         :bundle="workspaceSettings"
@@ -1696,6 +1718,7 @@ onBeforeUnmount(() => {
         :is-mac="isMac"
         @select-journal="onSearchSelectJournal"
         @select-file="onSearchSelectFile"
+        @select-setting="onSearchSelectSetting"
         @close="closeSearchDialog"
       />
       <ShortcutsDialog :visible="shortcutsOpened" @close="shortcutsOpened = false" />

@@ -32,6 +32,7 @@ const props = defineProps<{
   visible: boolean
   /** 当前打开的模块；没有模块时弹窗为空。 */
   module: ModuleType | null
+  initialSectionId?: string | null
   buttonRect?: () => WindowMotionRect | null
   workspace: Workspace | null
   /** 打开弹窗时的已保存设置，作为草稿基线。 */
@@ -250,7 +251,11 @@ watch(
   displayedModule,
   (mod) => {
     if (mod && MODULE_SECTIONS_CONFIG[mod]?.length) {
-      activeSectionId.value = MODULE_SECTIONS_CONFIG[mod]![0]!.id
+      if (props.initialSectionId && MODULE_SECTIONS_CONFIG[mod]!.some((item) => item.id === props.initialSectionId)) {
+        activeSectionId.value = props.initialSectionId
+      } else {
+        activeSectionId.value = MODULE_SECTIONS_CONFIG[mod]![0]!.id
+      }
     } else {
       activeSectionId.value = ''
     }
@@ -422,7 +427,16 @@ watch(
       if (focused instanceof HTMLElement && !panel.value?.contains(focused)) returnFocus = focused
       await nextTick()
       if (panel.value) panel.value.scrollTop = 0
-      body.value?.scrollTo({ top: 0 })
+      if (props.initialSectionId) {
+        const target = currentSections.value.find((s) => s.id === props.initialSectionId)
+        if (target) {
+          selectSection(target)
+        } else {
+          body.value?.scrollTo({ top: 0 })
+        }
+      } else {
+        body.value?.scrollTo({ top: 0 })
+      }
       if (props.visible) panel.value?.focus({ preventScroll: true })
     }
   },
@@ -454,7 +468,15 @@ onBeforeUnmount(() => {
   motion.dispose()
 })
 
-defineExpose({ requestClose, unchanged, isOpen: () => props.visible })
+function navigateToSection(sectionId: string) {
+  const sections = currentSections.value
+  const found = sections.find((item) => item.id === sectionId)
+  if (found) {
+    selectSection(found)
+  }
+}
+
+defineExpose({ requestClose, unchanged, isOpen: () => props.visible, navigateToSection })
 </script>
 
 <template>

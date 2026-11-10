@@ -579,19 +579,19 @@
   line-height: 1.6;
 }
 .app-shell .settings-section {
-  padding: 0 0 18px;
+  padding: 0 0 28px;
   border: 0;
   border-radius: 0;
   background: transparent;
   box-shadow: none;
 }
 .app-shell .settings-section + .settings-section {
-  padding-top: 18px;
+  padding-top: 28px;
   border-top: 1px solid var(--skin-border);
 }
 .app-shell .settings-section-heading {
-  gap: 12px;
-  margin-bottom: 14px;
+  gap: 14px;
+  margin-bottom: 20px;
 }
 .app-shell .settings-section-heading :is(h2, h3) {
   font-size: var(--text-subtitle);
@@ -601,10 +601,10 @@
   display: grid;
   grid-template-columns: minmax(200px, 1fr) minmax(180px, 280px);
   align-items: center;
-  gap: 12px 20px;
+  gap: 16px 24px;
   max-width: 840px;
-  min-height: 52px;
-  padding-block: 10px;
+  min-height: 56px;
+  padding-block: 18px;
   border-bottom: 1px solid var(--skin-border);
 }
 .app-shell .appearance-setting-copy :is(h3, h4) {
@@ -639,13 +639,31 @@
 }
 .app-shell .appearance-preview {
   max-width: 840px;
-  margin-top: 16px;
-  padding: 14px;
-  border-radius: 6px;
+  margin-top: 24px;
+  padding: 16px 18px;
+  border-radius: 8px;
   background: var(--desktop-tool);
 }
 .app-shell .appearance-preview > span {
   margin-bottom: 8px;
+}
+.app-shell .workspace-backup-card {
+  margin-bottom: 20px;
+}
+.app-shell .workspace-storage-subnote {
+  margin: 0 0 22px;
+}
+.app-shell .provider-list {
+  gap: 16px;
+}
+.app-shell .custom-ai-add {
+  margin-bottom: 20px;
+}
+.app-shell .settings-details-list {
+  margin-top: 20px;
+}
+.app-shell .settings-details-list > div {
+  padding-block: 10px;
 }
 :root .app-shell .settings-savebar {
   background: var(--desktop-tool);

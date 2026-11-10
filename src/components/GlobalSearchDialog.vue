@@ -5,11 +5,26 @@ import {
   PhCalendarDots,
   PhCircleNotch,
   PhFileText,
+  PhGearSix,
   PhMagnifyingGlass,
   PhX,
 } from '@phosphor-icons/vue'
 import { createDialogMotion } from '../lib/dialogMotion'
-import { api, type Entry, type SearchResultItem } from '../lib/workspace'
+import { api, type Entry } from '../lib/workspace'
+import { searchSettings, SETTING_SEARCH_ENTRIES, type SettingSearchTarget } from '../lib/settingsSearch'
+
+export type SearchItemKind = 'journal' | 'file' | 'setting'
+
+export interface UnifiedSearchItem {
+  kind: SearchItemKind
+  date?: string | null
+  path: string
+  title: string
+  format?: 'md' | 'txt' | null
+  snippet: string
+  matchCount: number
+  settingTarget?: SettingSearchTarget
+}
 
 const props = defineProps<{
   workspacePath?: string
@@ -20,10 +35,11 @@ const props = defineProps<{
 const emit = defineEmits<{
   selectJournal: [date: string]
   selectFile: [path: string]
+  selectSetting: [target: SettingSearchTarget]
   close: []
 }>()
 
-type FilterKind = 'all' | 'journal' | 'file'
+type FilterKind = 'all' | 'journal' | 'file' | 'setting'
 
 const dialog = ref<HTMLDialogElement>()
 const searchInput = ref<HTMLInputElement>()
@@ -32,7 +48,7 @@ const motion = createDialogMotion(() => dialog.value)
 
 const query = ref('')
 const filter = ref<FilterKind>('all')
-const results = ref<SearchResultItem[]>([])
+const results = ref<UnifiedSearchItem[]>([])
 const loading = ref(false)
 const error = ref('')
 const activeIndex = ref(0)
@@ -47,7 +63,20 @@ function formatDateTitle(date: string): string {
   return date
 }
 
-const recentItems = computed<SearchResultItem[]>(() =>
+const allSettingItems = computed<UnifiedSearchItem[]>(() =>
+  SETTING_SEARCH_ENTRIES.map((entry) => ({
+    kind: 'setting' as const,
+    date: null,
+    path: entry.category,
+    title: entry.title,
+    format: null,
+    snippet: entry.desc,
+    matchCount: 0,
+    settingTarget: entry.target,
+  })),
+)
+
+const recentItems = computed<UnifiedSearchItem[]>(() =>
   [...props.entries]
     .sort((left, right) => right.date.localeCompare(left.date))
     .slice(0, 12)
@@ -64,20 +93,33 @@ const recentItems = computed<SearchResultItem[]>(() =>
 
 const isSearching = computed(() => query.value.trim().length > 0)
 
-const baseItems = computed<SearchResultItem[]>(() => (isSearching.value ? results.value : recentItems.value))
-
-const counts = computed(() => {
-  const all = baseItems.value.length
-  let journal = 0
-  let file = 0
-  for (const item of baseItems.value) {
-    if (item.kind === 'journal') journal++
-    else file++
-  }
-  return { all, journal, file }
+const baseItems = computed<UnifiedSearchItem[]>(() => {
+  if (isSearching.value) return results.value
+  if (filter.value === 'setting') return allSettingItems.value
+  return recentItems.value
 })
 
-const filteredItems = computed<SearchResultItem[]>(() => {
+const counts = computed(() => {
+  if (isSearching.value) {
+    let journal = 0
+    let file = 0
+    let setting = 0
+    for (const item of results.value) {
+      if (item.kind === 'journal') journal++
+      else if (item.kind === 'setting') setting++
+      else file++
+    }
+    return { all: results.value.length, journal, file, setting }
+  }
+  return {
+    all: recentItems.value.length,
+    journal: recentItems.value.length,
+    file: 0,
+    setting: allSettingItems.value.length,
+  }
+})
+
+const filteredItems = computed<UnifiedSearchItem[]>(() => {
   if (filter.value === 'all') return baseItems.value
   return baseItems.value.filter((item) => item.kind === filter.value)
 })
@@ -120,24 +162,44 @@ async function runSearch(rawQuery: string) {
   const trimmed = rawQuery.trim()
   const workspacePath = props.workspacePath
   const revision = ++searchRevision
-  if (!trimmed || !workspacePath) {
+  if (!trimmed) {
     results.value = []
     loading.value = false
     error.value = ''
     activeIndex.value = 0
     return
   }
+
+  const matchedSettings: UnifiedSearchItem[] = searchSettings(trimmed).map((res) => ({
+    kind: 'setting' as const,
+    date: null,
+    path: res.entry.category,
+    title: res.entry.title,
+    format: null,
+    snippet: res.entry.desc,
+    matchCount: res.matchCount,
+    settingTarget: res.entry.target,
+  }))
+
+  if (!workspacePath) {
+    results.value = matchedSettings
+    loading.value = false
+    error.value = ''
+    activeIndex.value = 0
+    return
+  }
+
   loading.value = true
   error.value = ''
   try {
     const found = await api.search(workspacePath, trimmed, 50)
     if (revision !== searchRevision) return
-    results.value = found
+    results.value = [...matchedSettings, ...found]
     activeIndex.value = 0
   } catch (cause) {
     if (revision !== searchRevision) return
     error.value = String(cause)
-    results.value = []
+    results.value = matchedSettings
   } finally {
     if (revision === searchRevision) loading.value = false
   }
@@ -182,10 +244,12 @@ function scrollActiveIntoView() {
   })
 }
 
-function chooseItem(item: SearchResultItem | undefined) {
+function chooseItem(item: UnifiedSearchItem | undefined) {
   if (!item) return
   if (item.kind === 'journal' && item.date) {
     emit('selectJournal', item.date)
+  } else if (item.kind === 'setting' && item.settingTarget) {
+    emit('selectSetting', item.settingTarget)
   } else {
     emit('selectFile', item.path)
   }
@@ -269,7 +333,7 @@ onBeforeUnmount(() => {
             v-model="query"
             type="search"
             class="search-input"
-            placeholder="搜索日报内容、日期（如 2026-10-30）或文件名…"
+            placeholder="搜索设置、日报内容、日期（如 2026-10-30）或文件名…"
             aria-label="全局全文检索"
             autocomplete="off"
             spellcheck="false"
@@ -321,14 +385,27 @@ onBeforeUnmount(() => {
             <span>文件</span>
             <span class="search-filter-count">{{ counts.file }}</span>
           </button>
-          <span class="search-section-hint">{{ isSearching ? '搜索结果' : '最近日报' }}</span>
+          <button
+            type="button"
+            role="tab"
+            class="search-filter-pill"
+            :class="{ 'is-active': filter === 'setting' }"
+            :aria-selected="filter === 'setting'"
+            @click="filter = 'setting'"
+          >
+            <span>设置</span>
+            <span class="search-filter-count">{{ counts.setting }}</span>
+          </button>
+          <span class="search-section-hint">{{
+            isSearching ? '搜索结果' : filter === 'setting' ? '全部设置' : '最近日报'
+          }}</span>
         </div>
       </header>
 
       <div ref="listRef" class="search-results-body" role="listbox" aria-label="检索结果列表">
         <p v-if="error" class="search-empty-state is-error" role="alert">{{ error }}</p>
         <p v-else-if="!filteredItems.length && !loading" class="search-empty-state">
-          {{ isSearching ? '没有找到匹配的日报或文件' : '当前工作空间还没有可展示的记录' }}
+          {{ isSearching ? '没有找到匹配的设置、日报或文件' : '当前工作空间还没有可展示的记录' }}
         </p>
         <ul v-else class="search-result-list">
           <li v-for="(item, index) in filteredItems" :key="`${item.kind}:${item.date ?? item.path}`">
@@ -344,6 +421,7 @@ onBeforeUnmount(() => {
             >
               <span class="search-item-icon" :class="`is-${item.kind}`" aria-hidden="true">
                 <PhCalendarDots v-if="item.kind === 'journal'" :size="18" />
+                <PhGearSix v-else-if="item.kind === 'setting'" :size="18" />
                 <PhFileText v-else :size="18" />
               </span>
               <span class="search-item-main">
@@ -354,7 +432,9 @@ onBeforeUnmount(() => {
                       <template v-else>{{ part.text }}</template>
                     </template>
                   </strong>
-                  <span class="search-item-tag">{{ item.kind === 'journal' ? '日报' : '文件' }}</span>
+                  <span class="search-item-tag">{{
+                    item.kind === 'journal' ? '日报' : item.kind === 'setting' ? '设置' : '文件'
+                  }}</span>
                   <span class="search-item-path" :title="item.path">{{ item.path }}</span>
                   <span v-if="item.matchCount > 0" class="search-item-matches">{{ item.matchCount }} 处匹配</span>
                 </span>
