@@ -47,20 +47,20 @@ onBeforeUnmount(() => motion.dispose())
     aria-describedby="settings-leave-description"
     @cancel.prevent="!busy && !saving && emit('cancel')"
   >
-    <div class="dialog-icon"><PhGearSix :size="28" weight="light" /></div>
+    <div class="dialog-icon"><PhGearSix :size="22" weight="duotone" /></div>
     <h2 id="settings-leave-title">保存设置修改？</h2>
     <p id="settings-leave-description">设置中有未保存的修改。保存后再{{ target }}，或放弃本次修改。</p>
     <p v-if="error" class="error-text dialog-error" role="alert">{{ error }}</p>
     <div class="dialog-actions">
       <md-text-button
-        class="dialog-button dialog-button-secondary"
+        class="dialog-button dialog-button-secondary dialog-button-cancel"
         data-window-close="default"
         :disabled="busy || saving"
         @click="emit('cancel')"
         >继续编辑</md-text-button
       >
       <md-text-button
-        class="dialog-button dialog-button-secondary"
+        class="dialog-button dialog-button-secondary dialog-button-discard"
         data-window-close
         :disabled="busy || saving"
         @click="emit('discard')"
