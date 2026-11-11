@@ -3,6 +3,7 @@ export interface GitDiffLine {
   kind: 'meta' | 'hunk' | 'add' | 'remove' | 'context'
   oldLine: number | null
   newLine: number | null
+  patch?: string
 }
 
 /** Parse unified hunks; metadata and missing-newline markers never advance line numbers. */
@@ -53,5 +54,35 @@ export function parseGitDiff(text: string) {
     }
     return row
   })
+
+  // Group diff header and each hunk to build valid unified patches for hunk staging
+  let currentHeader: string[] = []
+  let currentHunk: GitDiffLine | null = null
+  let currentHunkLines: string[] = []
+
+  function finalizeHunk() {
+    if (currentHunk && currentHeader.length > 0) {
+      currentHunk.patch = `${currentHeader.join('\n')}\n${currentHunkLines.join('\n')}\n`
+    }
+    currentHunk = null
+    currentHunkLines = []
+  }
+
+  for (const line of lines) {
+    if (line.text.startsWith('diff --git ')) {
+      finalizeHunk()
+      currentHeader = [line.text]
+    } else if (line.kind === 'hunk') {
+      finalizeHunk()
+      currentHunk = line
+      currentHunkLines = [line.text]
+    } else if (currentHunk) {
+      currentHunkLines.push(line.text)
+    } else {
+      currentHeader.push(line.text)
+    }
+  }
+  finalizeHunk()
+
   return { lines, additions, deletions }
 }

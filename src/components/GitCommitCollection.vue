@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
-import { PhCopy, PhNotePencil } from '@phosphor-icons/vue'
+import { PhCopy, PhNotePencil, PhSparkle, PhCircleNotch } from '@phosphor-icons/vue'
 import {
   selectedCommitInformation,
   selectedCommitReport,
@@ -8,6 +8,8 @@ import {
   type SelectedGitCommit,
 } from '../lib/gitCommitSelection'
 import { api } from '../lib/workspace'
+import { aiApi } from '../lib/ai'
+import { DEFAULT_GIT_JOURNAL_PROMPT } from '../lib/useGitJournalDraft'
 
 const props = defineProps<{
   entries: SelectedGitCommit[]
@@ -65,6 +67,44 @@ async function append() {
     appending.value = false
   }
 }
+const summarizing = ref(false)
+let summaryRequestId = ''
+
+async function appendAiSummary() {
+  if (
+    !props.appendReport ||
+    !props.appendDateLabel ||
+    props.disabled ||
+    appending.value ||
+    summarizing.value ||
+    !report.value.trim()
+  )
+    return
+  const current = revision
+  summarizing.value = true
+  error.value = ''
+  message.value = '正在 AI 归纳提交内容…'
+  const reqId = crypto.randomUUID()
+  summaryRequestId = reqId
+  try {
+    const summary = await aiApi.summarize(report.value, reqId, DEFAULT_GIT_JOURNAL_PROMPT)
+    if (current !== revision || summaryRequestId !== reqId) return
+    if (!summary?.trim()) throw new Error('AI 未能返回归纳结果。')
+    const formatted = `### 🤖 Git 提交智能归纳（${props.entries.length} 条提交）\n\n${summary.trim()}`
+    const saved = await props.appendReport(formatted)
+    if (current === revision && summaryRequestId === reqId) {
+      if (saved) message.value = 'AI 归纳已追加到日报'
+      else error.value = '追加未完成，请检查日报保存状态。'
+    }
+  } catch (cause) {
+    if (current === revision && summaryRequestId === reqId) error.value = `AI 归纳失败：${String(cause)}`
+  } finally {
+    if (summaryRequestId === reqId) {
+      summarizing.value = false
+      summaryRequestId = ''
+    }
+  }
+}
 </script>
 
 <template>
@@ -85,6 +125,21 @@ async function append() {
           @click="append"
         >
           <PhNotePencil :size="16" />{{ appending ? '正在追加…' : '追加工作记录到日报' }}
+        </button>
+        <button
+          v-if="appendReport"
+          type="button"
+          class="primary-action-btn"
+          :disabled="disabled || appending || summarizing || !appendDateLabel || !report.trim()"
+          :title="
+            appendDateLabel
+              ? `使用 AI 归纳这 ${entries.length} 条提交并追加到 ${appendDateLabel} 的日报`
+              : '在日历中选择单日后可追加到日报'
+          "
+          @click="appendAiSummary"
+        >
+          <PhCircleNotch v-if="summarizing" class="spin" :size="16" />
+          <PhSparkle v-else :size="16" />{{ summarizing ? '正在 AI 归纳…' : 'AI 归纳追加到日报' }}
         </button>
       </div>
     </header>
@@ -215,5 +270,25 @@ textarea {
 }
 .collection-note {
   margin: 0;
+}
+.primary-action-btn {
+  background: var(--skin-accent-fill);
+  color: var(--skin-on-accent);
+  border-color: var(--skin-accent-fill);
+}
+.primary-action-btn:hover:not(:disabled) {
+  background: var(--skin-accent-fill-hover);
+  border-color: var(--skin-accent-fill-hover);
+}
+.spin {
+  animation: spin 1s linear infinite;
+}
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
 }
 </style>

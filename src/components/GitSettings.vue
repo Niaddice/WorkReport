@@ -1,12 +1,15 @@
 <script setup lang="ts">
+import ModuleSettingsSection from './moduleSettings/ModuleSettingsSection.vue'
 import { computed, nextTick, ref, useId } from 'vue'
 import { isTauri } from '@tauri-apps/api/core'
 import { open } from '@tauri-apps/plugin-dialog'
-import { PhCaretRight, PhFolderOpen, PhPlus, PhTrash } from '@phosphor-icons/vue'
+import { PhCaretRight, PhFolderOpen, PhGitBranch, PhPlus, PhTrash } from '@phosphor-icons/vue'
 import SavedGitCredentials from './SavedGitCredentials.vue'
 import GithubAuthentication from './GithubAuthentication.vue'
+import GitInstaller from './GitInstaller.vue'
 import {
   cloneGitSettings,
+  COMMIT_PROMPT_PRESETS,
   DEFAULT_GIT_COMMIT_PROMPT,
   validateGitSettings,
   type GitRepository,
@@ -18,10 +21,36 @@ const emit = defineEmits<{ 'update:modelValue': [value: GitSettings] }>()
 const id = useId()
 const root = ref<HTMLElement>()
 const advanced = ref<HTMLDetailsElement>()
+const installer = ref<InstanceType<typeof GitInstaller>>()
 let invalidRepositoryId = ''
 const localError = ref('')
 const picking = ref(false)
-const formBusy = computed(() => props.busy || picking.value)
+const installing = ref(false)
+const customPrompt = ref(false)
+// Last hand-written prompt, restored when switching back to "自定义". Empty when none was configured.
+let savedCustom = ''
+const promptValue = computed(() => props.modelValue.commitPrompt ?? DEFAULT_GIT_COMMIT_PROMPT)
+const isPreset = (value: string) => COMMIT_PROMPT_PRESETS.some((preset) => preset.prompt === value)
+const customActive = computed(() => customPrompt.value || !promptValue.value.trim() || !isPreset(promptValue.value))
+function rememberCustom() {
+  if (customActive.value) savedCustom = promptValue.value
+}
+function choosePreset(prompt: string) {
+  rememberCustom()
+  customPrompt.value = false
+  update({ commitPrompt: prompt })
+}
+async function chooseCustom() {
+  if (!customActive.value) update({ commitPrompt: savedCustom })
+  customPrompt.value = true
+  await nextTick()
+  root.value?.querySelector<HTMLTextAreaElement>('textarea')?.focus()
+}
+function editPrompt(value: string) {
+  update({ commitPrompt: value })
+  if (customPrompt.value || !value.trim() || !isPreset(value)) savedCustom = value
+}
+const formBusy = computed(() => props.busy || picking.value || installing.value)
 
 function update(patch: Partial<GitSettings>) {
   localError.value = ''
@@ -95,90 +124,133 @@ defineExpose({ validate, focusInvalid })
 
 <template>
   <div ref="root" class="git-settings">
-    <div class="git-repositories-heading">
-      <h4>
-        本地仓库 <span>{{ modelValue.repositories.length }} / 20</span>
-      </h4>
-      <button
-        class="text-action"
-        type="button"
-        :disabled="formBusy || modelValue.repositories.length >= 20"
-        @click="add"
-      >
-        <PhPlus :size="16" />添加仓库
-      </button>
-    </div>
-    <p v-if="!modelValue.repositories.length" class="git-hint">
-      添加项目仓库后，即可在 Git 工作台中切换项目、管理更改与分支，并多选提交获取信息或整理工作记录。
-    </p>
-    <details
-      v-for="(repository, index) in modelValue.repositories"
-      :key="repository.id"
-      class="git-repository-form"
-      :data-repository-id="repository.id"
-      :open="modelValue.repositories.length === 1"
+    <ModuleSettingsSection
+      title="本地仓库"
+      heading-id="git-repositories-heading"
+      description="添加项目仓库，在工作台切换项目、管理更改与分支。"
     >
-      <summary>
-        <PhCaretRight :size="16" aria-hidden="true" /><span
-          ><strong>{{ repository.name || `仓库 ${index + 1}` }}</strong
-          ><small :title="repository.path">{{ repository.path || '尚未选择仓库目录' }}</small></span
+      <div class="git-repositories-heading">
+        <span
+          class="git-hint"
+          title="保存时会检查仓库实际目录和远程地址，相同仓库只能添加一次。支持识别同一远程仓库常见的 SSH / HTTPS 地址写法。"
         >
-      </summary>
-      <div class="git-repository-body">
-        <div class="git-repositories-heading">
-          <span class="git-hint">仓库配置</span>
-          <button
-            class="text-action"
-            type="button"
-            :aria-label="`删除仓库 ${index + 1}`"
-            :disabled="formBusy"
-            @click="update({ repositories: modelValue.repositories.filter((item) => item.id !== repository.id) })"
-          >
-            <PhTrash :size="16" />删除
-          </button>
-        </div>
-        <label class="git-field"
-          ><span>项目名称</span
-          ><input
-            :value="repository.name"
-            :disabled="formBusy"
-            maxlength="100"
-            placeholder="例如：客户管理平台"
-            @input="updateRepository(repository.id, { name: ($event.target as HTMLInputElement).value })"
-        /></label>
-        <label class="git-field"
-          ><span>仓库目录</span
-          ><span class="git-path-input"
-            ><input
-              :value="repository.path"
-              :disabled="formBusy"
-              placeholder="本地仓库的绝对路径"
-              @input="updateRepository(repository.id, { path: ($event.target as HTMLInputElement).value })" /><button
-              type="button"
-              class="text-action"
-              :disabled="formBusy"
-              :aria-label="`选择仓库 ${index + 1} 的目录`"
-              @click="choose(repository.id)"
-            >
-              <PhFolderOpen :size="18" /></button></span
-        ></label>
+          已添加 {{ modelValue.repositories.length }} / 20
+        </span>
+        <button
+          class="text-action"
+          type="button"
+          :disabled="formBusy || modelValue.repositories.length >= 20"
+          @click="add"
+        >
+          <PhPlus :size="16" />添加仓库
+        </button>
       </div>
-    </details>
-    <p class="git-hint">
-      保存时会检查仓库实际目录和主要远程地址，相同仓库只能添加一次。支持识别同一远程仓库常见的 SSH / HTTPS 地址写法。
-    </p>
-    <section class="git-settings-group" :aria-labelledby="`${id}-prompt-title`">
-      <h4 :id="`${id}-prompt-title`">AI 提交说明</h4>
+      <div v-if="!modelValue.repositories.length" class="settings-empty-card">
+        <div class="settings-empty-icon">
+          <PhGitBranch :size="24" aria-hidden="true" />
+        </div>
+        <p class="settings-empty-title">暂未添加本地仓库</p>
+        <p class="settings-empty-desc">
+          添加项目仓库后，即可在 Git 工作台中切换项目、管理更改与分支，并多选提交获取信息或整理工作记录。
+        </p>
+      </div>
+      <details
+        v-for="(repository, index) in modelValue.repositories"
+        :key="repository.id"
+        class="git-repository-form"
+        :data-repository-id="repository.id"
+        :open="modelValue.repositories.length === 1"
+      >
+        <summary>
+          <PhCaretRight :size="16" aria-hidden="true" /><span
+            ><strong>{{ repository.name || `仓库 ${index + 1}` }}</strong
+            ><small :title="repository.path">{{ repository.path || '尚未选择仓库目录' }}</small></span
+          >
+        </summary>
+        <div class="git-repository-body">
+          <div class="git-repositories-heading">
+            <span class="git-hint">仓库配置</span>
+            <button
+              class="text-action"
+              type="button"
+              :aria-label="`删除仓库 ${index + 1}`"
+              :disabled="formBusy"
+              @click="update({ repositories: modelValue.repositories.filter((item) => item.id !== repository.id) })"
+            >
+              <PhTrash :size="16" />删除
+            </button>
+          </div>
+          <label class="git-field"
+            ><span>项目名称</span
+            ><input
+              :value="repository.name"
+              :disabled="formBusy"
+              maxlength="100"
+              placeholder="例如：客户管理平台"
+              @input="updateRepository(repository.id, { name: ($event.target as HTMLInputElement).value })"
+          /></label>
+          <label class="git-field"
+            ><span>仓库目录</span
+            ><span class="git-path-input"
+              ><input
+                :value="repository.path"
+                :disabled="formBusy"
+                placeholder="本地仓库的绝对路径"
+                @input="updateRepository(repository.id, { path: ($event.target as HTMLInputElement).value })" /><button
+                type="button"
+                class="text-action"
+                :disabled="formBusy"
+                :aria-label="`选择仓库 ${index + 1} 的目录`"
+                @click="choose(repository.id)"
+              >
+                <PhFolderOpen :size="18" /></button></span
+          ></label>
+        </div>
+      </details>
+    </ModuleSettingsSection>
+    <ModuleSettingsSection
+      title="AI 提交说明"
+      :heading-id="`${id}-prompt-title`"
+      description="使用默认 AI，根据已暂存的更改生成提交说明。"
+    >
       <div class="git-field git-commit-prompt">
         <div class="git-prompt-heading">
-          <label :for="`${id}-commit-prompt`">提交说明提示词</label
-          ><button
+          <label
+            :for="`${id}-commit-prompt`"
+            title="使用默认 AI，根据已暂存的更改生成提交说明。最多 2000 字，留空使用默认提示词。"
+          >
+            提交说明提示词
+          </label>
+          <button
             type="button"
             class="text-action"
             :disabled="formBusy || modelValue.commitPrompt === DEFAULT_GIT_COMMIT_PROMPT"
-            @click.prevent="update({ commitPrompt: DEFAULT_GIT_COMMIT_PROMPT })"
+            @click.prevent="choosePreset(DEFAULT_GIT_COMMIT_PROMPT)"
           >
             恢复默认
+          </button>
+        </div>
+        <div class="git-prompt-presets" role="group" aria-label="提交说明风格预设">
+          <button
+            v-for="preset in COMMIT_PROMPT_PRESETS"
+            :key="preset.id"
+            type="button"
+            class="prompt-preset-pill"
+            :class="{ 'is-active': !customActive && promptValue === preset.prompt }"
+            :disabled="formBusy"
+            @click.prevent="choosePreset(preset.prompt)"
+          >
+            {{ preset.label }}
+          </button>
+          <button
+            type="button"
+            class="prompt-preset-pill prompt-custom-pill"
+            :class="{ 'is-active': customActive }"
+            :disabled="formBusy"
+            title="在下方文本框中编写自己的提示词"
+            @click.prevent="chooseCustom"
+          >
+            自定义
           </button>
         </div>
         <textarea
@@ -189,42 +261,55 @@ defineExpose({ validate, focusInvalid })
           rows="5"
           aria-label="Git 提交说明提示词"
           placeholder="留空使用默认提示词"
-          @input="update({ commitPrompt: ($event.target as HTMLTextAreaElement).value })"
+          @input="editPrompt(($event.target as HTMLTextAreaElement).value)"
         />
-        <small>工作台使用默认 AI，根据已暂存的更改生成提交说明。最多 2000 字，保存设置后生效。</small>
+        <div class="module-settings-field-footer">
+          <small>最多 2000 字，留空使用默认提示词。</small
+          ><span class="preference-count"
+            >{{ (modelValue.commitPrompt ?? DEFAULT_GIT_COMMIT_PROMPT).length }} / 2000</span
+          >
+        </div>
       </div>
-    </section>
-    <details ref="advanced" class="git-advanced">
-      <summary>高级设置<span>Git 程序路径</span></summary>
-      <label class="git-field">
-        <span>Git 程序</span>
-        <input
-          :value="modelValue.executable"
-          :disabled="formBusy"
-          placeholder="git 或可执行文件绝对路径"
-          @input="update({ executable: ($event.target as HTMLInputElement).value })"
+    </ModuleSettingsSection>
+    <ModuleSettingsSection
+      title="认证与凭据"
+      heading-id="git-auth-heading"
+      description="管理 GitHub 登录和本机保存的 Git 凭据。"
+    >
+      <GithubAuthentication :disabled="formBusy" />
+      <SavedGitCredentials :disabled="formBusy" />
+    </ModuleSettingsSection>
+    <ModuleSettingsSection
+      title="高级设置"
+      heading-id="git-advanced-heading"
+      description="本机没有 Git 时可一键安装，也可指定程序的安装路径。"
+    >
+      <details ref="advanced" class="git-advanced" @toggle="advanced?.open && void installer?.detect()">
+        <summary>高级设置<span>一键安装 Git · Git 程序路径</span></summary>
+        <GitInstaller
+          ref="installer"
+          :executable="modelValue.executable"
+          :disabled="props.busy || picking"
+          @busy="installing = $event"
+          @installed="update({ executable: $event })"
         />
-        <small>默认使用本机 Git；找不到程序时可填写安装路径。</small>
-      </label>
-    </details>
-    <GithubAuthentication :disabled="formBusy" />
-    <SavedGitCredentials :disabled="formBusy" />
+        <label class="git-field">
+          <span>Git 程序</span>
+          <input
+            :value="modelValue.executable"
+            :disabled="formBusy"
+            placeholder="git 或可执行文件绝对路径"
+            @input="update({ executable: ($event.target as HTMLInputElement).value })"
+          />
+          <small>默认使用本机 Git；找不到程序时可填写安装路径。</small>
+        </label>
+      </details>
+    </ModuleSettingsSection>
     <p v-if="localError" role="alert" class="field-error">{{ localError }}</p>
   </div>
 </template>
 
 <style scoped>
-.git-settings-group {
-  display: grid;
-  gap: 14px;
-  border-top: 1px solid var(--skin-border);
-  padding-top: 20px;
-}
-.git-settings-group h4 {
-  margin: 0;
-  font-size: var(--text-subtitle);
-  font-weight: 500;
-}
 .git-advanced {
   border-top: 1px solid var(--skin-border);
   padding-top: 16px;
@@ -292,6 +377,33 @@ defineExpose({ validate, focusInvalid })
 .git-repositories-heading,
 .git-prompt-heading {
   justify-content: space-between;
+}
+.git-prompt-presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 4px;
+  margin-bottom: 4px;
+}
+.prompt-preset-pill {
+  padding: 3px 9px;
+  font-size: var(--text-small);
+  border: 1px solid var(--skin-border);
+  border-radius: 999px;
+  background: var(--skin-canvas);
+  color: var(--skin-text-secondary);
+  cursor: pointer;
+  transition: all var(--motion-fast);
+}
+.prompt-preset-pill:hover:not(:disabled) {
+  border-color: var(--skin-accent);
+  color: var(--skin-accent);
+}
+.prompt-preset-pill.is-active {
+  background: var(--skin-accent-soft);
+  border-color: var(--skin-accent);
+  color: var(--skin-accent);
+  font-weight: 500;
 }
 .git-repositories-heading h4 {
   margin: 0;

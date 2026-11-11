@@ -7,7 +7,7 @@ import SettingsView from '../src/components/SettingsView.vue'
 import { cloneProxySettings, validateProxySettings } from '../src/lib/proxy'
 import { cloneDatabaseSettings, DEFAULT_DATABASE_SETTINGS } from '../src/lib/database'
 import { cloneGitSettings } from '../src/lib/useGit'
-import type { WorkspaceSettings } from '../src/lib/settingsDraft'
+import { cloneEditorSettings, DEFAULT_EDITOR_SETTINGS, type WorkspaceSettings } from '../src/lib/settingsDraft'
 
 const { invoke } = vi.hoisted(() => ({ invoke: vi.fn() }))
 vi.mock('@tauri-apps/api/core', () => ({ invoke, isTauri: () => true }))
@@ -121,6 +121,7 @@ function bundle(): WorkspaceSettings {
     ai: { providers: [], defaultProviderId: null, generationPreference: '', summaryPrompt: '' },
     excel: { enabled: false, templatePath: '', prompt: '' },
     summary: { outputDirectory: 'summary' },
+    editor: cloneEditorSettings(DEFAULT_EDITOR_SETTINGS),
   }
 }
 it('includes proxy edits in the settings save/discard flow and saves without a workspace', async () => {
@@ -136,21 +137,11 @@ it('includes proxy edits in the settings save/discard flow and saves without a w
       beforeDatabaseTransfer: async () => true,
       error: '',
       save: persist,
-      holidays: { years: [], failures: [] },
-      holidayLoading: false,
-      holidaySyncing: false,
-      holidayError: '',
-      currentYear: 2026,
     },
     global: {
       stubs: {
         AppSelect: select,
-        DirectorySettings: true,
         DatabaseSettings: true,
-        ExcelSettings: true,
-        GitSettings: true,
-        SummaryOutputSettings: true,
-        HolidaySettings: true,
       },
     },
   })

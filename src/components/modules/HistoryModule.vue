@@ -2,12 +2,13 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, useId, watch } from 'vue'
 import dayjs from 'dayjs'
 import { isTauri } from '@tauri-apps/api/core'
-import { PhArrowClockwise, PhCheck, PhCircleNotch, PhCopy, PhX } from '@phosphor-icons/vue'
+import { PhArrowClockwise, PhCheck, PhCircleNotch, PhCopy, PhGitDiff, PhX } from '@phosphor-icons/vue'
 import ContextMenu from '../ContextMenu.vue'
+import HistoryDiffDialog from '../HistoryDiffDialog.vue'
 import type { ContextMenuItem } from '../../lib/contextMenus'
 import { historyApi, type HistoryVersion } from '../../lib/history'
 import { pushMessage } from '../../lib/messages'
-import { api } from '../../lib/workspace'
+import { api, type FileFormat } from '../../lib/workspace'
 import { useModuleContext } from '../../modules/context'
 
 const context = useModuleContext()
@@ -101,6 +102,55 @@ function versionKey(version: HistoryVersion) {
 function copyLabel(version: HistoryVersion) {
   return `复制 ${versionDate(version)} ${versionTime(version)} 保存的 ${badgeOf(version)} 版本`
 }
+function diffLabel(version: HistoryVersion) {
+  return `对比 ${versionDate(version)} ${versionTime(version)} 保存的 ${badgeOf(version)} 版本与当前差异`
+}
+
+const diffDialog = ref<InstanceType<typeof HistoryDiffDialog>>()
+const diffBaseVersion = ref<HistoryVersion | null>(null)
+const diffTargetContent = ref<string>('')
+
+async function getTargetContentFor(date: string, format: FileFormat): Promise<string> {
+  if (journal.selectedDate.value === date && journal.document.value) {
+    return journal.draft.value
+  }
+  try {
+    const doc = await api.read(date, format)
+    return doc.content
+  } catch {
+    return ''
+  }
+}
+
+async function openDiff(version: HistoryVersion) {
+  hideTooltip()
+  diffBaseVersion.value = version
+  diffTargetContent.value = await getTargetContentFor(version.date, version.format)
+  diffDialog.value?.open()
+}
+
+async function handleRestoreFromDiff(version: HistoryVersion, content: string) {
+  try {
+    if (journal.selectedDate.value !== version.date && context.actions?.selectReport) {
+      await context.actions.selectReport(version.date)
+    }
+    journal.edit(content, true)
+    await journal.flush()
+    pushMessage({ tone: 'success', text: `已成功恢复到 ${versionTime(version)} 的历史版本` })
+  } catch (cause) {
+    pushMessage({ tone: 'error', text: `恢复历史版本失败：${String(cause)}` })
+  }
+}
+
+async function handleCopyContent(content: string) {
+  try {
+    if (isTauri()) await api.copy(content)
+    else await navigator.clipboard.writeText(content)
+    pushMessage({ tone: 'success', text: '历史版本已复制到剪贴板' })
+  } catch (cause) {
+    pushMessage({ tone: 'error', text: `复制历史版本失败：${String(cause)}` })
+  }
+}
 
 function closeMenu(restoreFocus = false) {
   const anchor = menu.value?.anchor
@@ -149,6 +199,18 @@ const menuItems = computed<ContextMenuItem[]>(() => {
           const rect = session.anchor.getBoundingClientRect()
           return showTooltip(version, rect.left + rect.width / 2, rect.bottom, true)
         },
+      },
+      {
+        id: 'diff',
+        label: '查看差异对比…',
+        disabled: listLoading.value,
+        run: () => openDiff(version),
+      },
+      {
+        id: 'restore',
+        label: '恢复至此版本…',
+        disabled: listLoading.value || !!context.disabled?.value || !!journal.busy?.value,
+        run: () => openDiff(version),
       },
       {
         id: 'copy',
@@ -489,6 +551,15 @@ onBeforeUnmount(() => {
           </button>
           <button
             type="button"
+            class="history-diff-button"
+            :aria-label="diffLabel(version)"
+            title="对比此历史版本与当前修改差异"
+            @click="openDiff(version)"
+          >
+            <PhGitDiff :size="14" aria-hidden="true" />
+          </button>
+          <button
+            type="button"
             class="history-copy-button"
             :class="{ 'is-copied': copiedKey === versionKey(version) }"
             :aria-label="copyLabel(version)"
@@ -544,5 +615,15 @@ onBeforeUnmount(() => {
         <pre v-else class="history-tooltip-content">{{ tooltip.content || '（这个版本没有内容）' }}</pre>
       </div>
     </Teleport>
+
+    <HistoryDiffDialog
+      ref="diffDialog"
+      :base-version="diffBaseVersion"
+      :available-versions="versions.filter((v) => v.date === diffBaseVersion?.date)"
+      :current-draft-content="diffTargetContent"
+      :read-content="readContent"
+      @restore="handleRestoreFromDiff"
+      @copy="handleCopyContent"
+    />
   </div>
 </template>

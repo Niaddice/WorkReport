@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, useId, watch } from 'vue'
+import { invoke } from '@tauri-apps/api/core'
 import dayjs from 'dayjs'
 import {
   PhArrowClockwise,
@@ -44,6 +45,7 @@ import { cloneSelectedCommit, useGitCommitSelection, type SelectedGitCommit } fr
 import GitCommitCollection from './GitCommitCollection.vue'
 import GitAuthenticationForm from './GitAuthenticationForm.vue'
 import { isGithubHttpsOrigin } from '../lib/gitAuthentication'
+import { pushMessage } from '../lib/messages'
 
 const props = withDefaults(
   defineProps<{
@@ -67,7 +69,8 @@ const selection = useGitCommitSelection(() => ({
 const { entries: selectedEntries, repositoryCount: selectedRepositoryCount, error: selectionError } = selection
 const collectedEntries = ref<SelectedGitCommit[]>([])
 const selectionAnchor = ref('')
-const repositoryStates = ref<Record<string, { branch: string; changes: number }>>({})
+const repositoryStates = ref<Record<string, { branch: string; changes: number; ahead?: number; behind?: number }>>({})
+const fetchingAll = ref(false)
 const repositoryDrafts = new Map<string, string>()
 let draftKey = ''
 let draftWorkspace = props.workspacePath
@@ -85,6 +88,13 @@ const {
   authentication,
   generatingMessage,
 } = client
+
+watch(notice, (value) => {
+  if (value) {
+    pushMessage({ tone: 'success', text: value })
+    notice.value = ''
+  }
+})
 const tab = ref<'changes' | 'history' | 'branches' | 'stashes' | 'collection'>('changes')
 const tabs = [
   { id: 'changes', label: '本地更改', icon: PhFiles },
@@ -113,6 +123,7 @@ const appliedQuery = ref('')
 const historyReference = ref('')
 const selectedFile = ref<{ path: string; staged: boolean } | null>(null)
 const selectedCommit = ref<GitHistoryCommit | null>(null)
+const selectedStash = ref<GitRepositoryState['stashes'][number] | null>(null)
 const compactDiff = ref(false)
 const splitRoot = ref<HTMLElement>()
 const compactBack = ref<HTMLButtonElement>()
@@ -129,11 +140,18 @@ const lock = computed(
     busy.value ||
     loading.value ||
     generatingMessage.value ||
+    fetchingAll.value ||
     !!confirmation.value ||
     !!authentication.value,
 )
 const repositorySwitchLocked = computed(
-  () => props.disabled || busy.value || generatingMessage.value || !!confirmation.value || !!authentication.value,
+  () =>
+    props.disabled ||
+    busy.value ||
+    generatingMessage.value ||
+    fetchingAll.value ||
+    !!confirmation.value ||
+    !!authentication.value,
 )
 const currentSelectionCount = computed(
   () => selectedEntries.value.filter((entry) => entry.repository.id === repositoryId.value).length,
@@ -155,11 +173,15 @@ const groups = computed(() => [
   { id: 'unstaged', label: '未暂存', files: unstaged.value, staged: false },
   { id: 'untracked', label: '未跟踪', files: untracked.value, staged: false },
 ])
+const isAmend = ref(false)
+const canAmend = computed(() => !lock.value && !!repository.value && !repository.value.detached)
+const canUndoCommit = computed(() => !lock.value && !!repository.value && !repository.value.detached)
+
 const canCommit = computed(
   () =>
     !lock.value &&
     !!repository.value &&
-    staged.value.length > 0 &&
+    (staged.value.length > 0 || isAmend.value) &&
     !conflicts.value.length &&
     !repository.value.detached &&
     !!commitMessage.value.trim(),
@@ -180,10 +202,13 @@ const aiHint = computed(() => {
   return `使用${props.aiProviderName || '默认 AI'}，根据 ${staged.value.length} 个已暂存文件生成提交说明`
 })
 let commitMessageRevision = 0
+let isAiUpdating = false
 watch(
   commitMessage,
   () => {
-    commitMessageRevision++
+    if (!isAiUpdating) {
+      commitMessageRevision++
+    }
   },
   { flush: 'sync' },
 )
@@ -212,9 +237,11 @@ const remoteBranches = computed(() => repository.value?.branches.filter((branch)
 const diffTitle = computed(() =>
   selectedCommit.value
     ? `${selectedCommit.value.hash.slice(0, 8)} · ${selectedCommit.value.message.split('\n')[0]}`
-    : selectedFile.value
-      ? `${selectedFile.value.staged ? '暂存区' : '工作区'} · ${selectedFile.value.path}`
-      : '差异预览',
+    : selectedStash.value
+      ? `${selectedStash.value.reference} · ${selectedStash.value.message}`
+      : selectedFile.value
+        ? `${selectedFile.value.staged ? '暂存区' : '工作区'} · ${selectedFile.value.path}`
+        : '差异预览',
 )
 const parsedDiff = computed(() => parseGitDiff(diff.value?.text ?? ''))
 watch(
@@ -229,6 +256,8 @@ watch(repository, (value) => {
     repositoryStates.value[repositoryId.value] = {
       branch: value.detached ? '分离 HEAD' : value.branch || '尚无提交',
       changes: value.files.length,
+      ahead: value.ahead,
+      behind: value.behind,
     }
 })
 watch(
@@ -325,6 +354,7 @@ watch(
     draftWorkspace = props.workspacePath
     draftKey = `${props.workspacePath}\0${repositoryId.value}\0${props.repositories.find((repo) => repo.id === repositoryId.value)?.path ?? ''}`
     commitMessage.value = repositoryDrafts.get(draftKey) ?? ''
+    isAmend.value = false
     branchName.value = ''
     stashMessage.value = ''
     query.value = ''
@@ -333,6 +363,7 @@ watch(
     selectedFile.value = null
     compactDiff.value = false
     selectedCommit.value = null
+    selectedStash.value = null
     selectionAnchor.value = ''
     confirmation.value = null
     if (available.value && props.active) void refresh()
@@ -356,11 +387,26 @@ watch(tab, () => {
   selectedFile.value = null
   compactDiff.value = false
   selectedCommit.value = null
+  selectedStash.value = null
   client.clearDiff()
   if (tab.value === 'history' && !history.value && available.value) void searchHistory()
 })
 watch(historyReference, () => {
   if (tab.value === 'history' && available.value && !lock.value) void searchHistory()
+})
+watch(isAmend, async (val) => {
+  if (val) {
+    if (!commitMessage.value.trim()) {
+      if (!history.value?.commits.length) {
+        await client.loadHistory({ skip: 0, query: '', reference: historyReference.value })
+      }
+      const last = history.value?.commits[0]
+      if (last?.message) {
+        commitMessage.value = last.message
+      }
+    }
+    commitExpanded.value = true
+  }
 })
 function onFocus() {
   if (props.active && available.value && !lock.value) void refresh()
@@ -390,6 +436,7 @@ async function refresh() {
   if (!available.value || busy.value || confirmation.value) return
   selectedFile.value = null
   selectedCommit.value = null
+  selectedStash.value = null
   client.clearDiff()
   if (await client.refresh()) {
     if (tab.value === 'history') await searchHistory()
@@ -453,6 +500,27 @@ async function returnToHistory() {
   await nextTick()
   splitRoot.value?.querySelector<HTMLButtonElement>('.history-entry.selected')?.focus({ preventScroll: true })
 }
+
+async function selectStash(item: GitRepositoryState['stashes'][number]) {
+  if (lock.value) return
+  selectedFile.value = null
+  selectedCommit.value = null
+  selectedStash.value = item
+  compactDiff.value = true
+  const pending = client.showDiff({ path: '', staged: false, commit: item.reference })
+  await nextTick()
+  if (splitRoot.value && splitRoot.value.clientWidth > 0 && splitRoot.value.clientWidth <= 560) {
+    compactBack.value?.focus({ preventScroll: true })
+  }
+  await pending
+}
+
+async function returnToStashes() {
+  compactDiff.value = false
+  await nextTick()
+  splitRoot.value?.querySelector<HTMLElement>('.stash-row.selected')?.focus({ preventScroll: true })
+}
+
 function resetHistorySearch() {
   query.value = ''
   if (historyReference.value) historyReference.value = ''
@@ -484,13 +552,96 @@ function branchActionHint(branch: GitBranch, operation: 'switch' | 'merge' | 'de
 async function act(request: Partial<GitActionRequest> & { operation: GitActionRequest['operation'] }) {
   if (lock.value || !available.value) return false
   const scope = `${props.workspacePath}\0${repositoryId.value}`
+  const currentSelectedFile = selectedFile.value
   const result = await client.runAction(request)
   if (scope !== `${props.workspacePath}\0${repositoryId.value}`) return false
-  selectedFile.value = null
-  selectedCommit.value = null
+  if (
+    (request.operation === 'stageHunk' || request.operation === 'unstageHunk' || request.operation === 'discardHunk') &&
+    currentSelectedFile
+  ) {
+    const list = currentSelectedFile.staged ? staged.value : unstaged.value
+    const stillThere = list.some((f) => f.path === currentSelectedFile.path)
+    if (stillThere) {
+      selectedFile.value = currentSelectedFile
+      await client.showDiff({ path: currentSelectedFile.path, staged: currentSelectedFile.staged, commit: '' })
+    } else {
+      selectedFile.value = null
+    }
+  } else {
+    selectedFile.value = null
+    selectedCommit.value = null
+    if (tab.value !== 'stashes') selectedStash.value = null
+  }
+  if (tab.value === 'stashes') {
+    if (selectedStash.value && repository.value?.stashes.some((s) => s.reference === selectedStash.value?.reference)) {
+      await client.showDiff({ path: '', staged: false, commit: selectedStash.value.reference })
+    } else {
+      selectedStash.value = null
+      client.clearDiff()
+    }
+  }
   emit('changed')
   if (result && tab.value === 'history') await searchHistory()
   return result
+}
+
+async function stageHunk(patch: string) {
+  if (lock.value || !patch) return
+  await act({ operation: 'stageHunk', patch })
+}
+
+async function unstageHunk(patch: string) {
+  if (lock.value || !patch) return
+  await act({ operation: 'unstageHunk', patch })
+}
+
+async function discardHunk(patch: string) {
+  if (lock.value || !patch) return
+  await ask('丢弃此代码块？', '将直接从工作区文件中撤销该修改，丢弃后无法恢复，请确认不再需要此部分修改。', {
+    operation: 'discardHunk',
+    patch,
+  })
+}
+
+async function fetchAllRepositories() {
+  if (fetchingAll.value || lock.value || !props.workspacePath || !props.repositories.length) return
+  fetchingAll.value = true
+  let successCount = 0
+  let failedCount = 0
+  try {
+    for (const repo of props.repositories) {
+      try {
+        await invoke('git_repository_action', {
+          workspacePath: props.workspacePath,
+          repositoryId: repo.id,
+          request: { operation: 'fetch', paths: [], message: '', reference: '', patch: '' },
+        })
+        const state = await invoke<GitRepositoryState>('read_git_repository', {
+          workspacePath: props.workspacePath,
+          repositoryId: repo.id,
+        })
+        repositoryStates.value[repo.id] = {
+          branch: state.detached ? '分离 HEAD' : state.branch || '尚无提交',
+          changes: state.files.length,
+          ahead: state.ahead,
+          behind: state.behind,
+        }
+        successCount++
+      } catch {
+        failedCount++
+      }
+    }
+    if (available.value) {
+      await client.refresh()
+    }
+    if (failedCount === 0) {
+      pushMessage({ tone: 'success', text: `已完成全部 ${successCount} 个仓库的远端更新同步。` })
+    } else {
+      pushMessage({ tone: 'warning', text: `已同步 ${successCount} 个仓库，${failedCount} 个仓库同步失败。` })
+    }
+  } finally {
+    fetchingAll.value = false
+  }
 }
 
 function filePaths(file: GitFileChange) {
@@ -500,12 +651,26 @@ function filePaths(file: GitFileChange) {
 
 async function commit(push = false) {
   if (!canCommit.value || (push && !canSync.value)) return
-  if (!(await act({ operation: 'commit', message: commitMessage.value.trim() }))) return
+  const op = isAmend.value ? 'commitAmend' : 'commit'
+  if (!(await act({ operation: op, message: commitMessage.value.trim() }))) return
   commitMessage.value = ''
+  isAmend.value = false
   if (push && !(await act({ operation: 'push' }))) {
     const retry = authentication.value ? '请在下方完成远程认证后重试推送。' : '可直接点击“Push 推送”重试。'
     error.value = `提交已保留在本地，推送失败；${retry}${error.value ? `\n${error.value}` : ''}`
   }
+}
+
+async function undoLastCommit() {
+  if (lock.value) return
+  if (!history.value?.commits.length) {
+    await client.loadHistory({ skip: 0, query: '', reference: historyReference.value })
+  }
+  const lastMsg = history.value?.commits[0]?.message
+  const detail = lastMsg
+    ? `将最近一次提交（${lastMsg.split('\n')[0]}）重置，所有修改将保留在暂存区中。确定继续吗？`
+    : '将最近一次提交重置（Soft Reset），所有修改将保留在暂存区中。确定继续吗？'
+  await ask('撤回最近一次提交', detail, { operation: 'undoCommit' })
 }
 
 async function authenticate(value: { username: string; password: string; save?: boolean }) {
@@ -531,15 +696,61 @@ async function generateMessage() {
   }
   if (!canGenerate.value) return
   const revision = commitMessageRevision
-  const message = await client.generateCommitMessage()
-  if (!message || !props.active) return
-  if (revision !== commitMessageRevision) {
-    notice.value = '提交说明已被编辑，已保留你的修改。'
+  const initialDraft = commitMessage.value
+  commitExpanded.value = true
+  let streamed = false
+  const message = await client.generateCommitMessage((chunk) => {
+    if (!props.active || revision !== commitMessageRevision) return
+    isAiUpdating = true
+    try {
+      if (!streamed) {
+        commitMessage.value = chunk
+        streamed = true
+      } else {
+        commitMessage.value += chunk
+      }
+    } finally {
+      isAiUpdating = false
+    }
+  })
+  if (!message || !props.active) {
+    if (streamed && revision === commitMessageRevision) {
+      isAiUpdating = true
+      try {
+        commitMessage.value = initialDraft
+      } finally {
+        isAiUpdating = false
+      }
+    }
     return
   }
-  commitMessage.value = message
-  commitExpanded.value = true
-  notice.value = 'AI 提交说明已生成，可修改后再提交。'
+  if (revision !== commitMessageRevision) {
+    pushMessage({ tone: 'info', text: '提交说明已被编辑，已保留你的修改。' })
+    return
+  }
+  isAiUpdating = true
+  try {
+    commitMessage.value = message
+  } finally {
+    isAiUpdating = false
+  }
+  pushMessage({ tone: 'success', text: 'AI 提交说明已生成，可修改后再提交。' })
+}
+
+const fullCommitMessage = ref('')
+const hasMultilineCommit = computed(() => commitMessage.value.includes('\n'))
+
+function toggleSingleLineCommit() {
+  if (hasMultilineCommit.value) {
+    fullCommitMessage.value = commitMessage.value
+    const firstLine = commitMessage.value.split('\n')[0].trim()
+    commitMessage.value = firstLine
+    pushMessage({ tone: 'info', text: '已切换为紧凑单行说明。' })
+  } else if (fullCommitMessage.value && fullCommitMessage.value.startsWith(commitMessage.value.trim())) {
+    commitMessage.value = fullCommitMessage.value
+    fullCommitMessage.value = ''
+    pushMessage({ tone: 'info', text: '已恢复完整多行说明。' })
+  }
 }
 
 async function createBranch() {
@@ -566,8 +777,17 @@ async function ask(
 async function confirm() {
   if (!confirmation.value || props.disabled || busy.value || loading.value) return
   const request = confirmation.value.request
+  const isUndo = request.operation === 'undoCommit'
+  const prevMsg = isUndo ? (history.value?.commits[0]?.message ?? '') : ''
   confirmation.value = null
-  await act(request)
+  const ok = await act(request)
+  if (ok && isUndo) {
+    if (prevMsg && !commitMessage.value.trim()) {
+      commitMessage.value = prevMsg
+    }
+    commitExpanded.value = true
+    pushMessage({ tone: 'info', text: '已撤销最近一次提交，修改已保留在暂存区。' })
+  }
 }
 
 function discard(file: GitFileChange) {
@@ -584,7 +804,7 @@ async function copyValue(value: string, label: string) {
   const current = () => revision === copyRevision && scope === `${props.workspacePath}\0${repositoryId.value}`
   try {
     await api.copy(value)
-    if (current()) notice.value = `${label}已复制。`
+    if (current()) pushMessage({ tone: 'success', text: `${label}已复制。` })
   } catch (cause) {
     if (current()) error.value = `复制失败：${String(cause)}`
   }
@@ -745,16 +965,31 @@ function statusLabel(file: GitFileChange, staged: boolean) {
     />
     <aside class="repository-sidebar" aria-label="Git 仓库列表">
       <div class="repository-sidebar-heading">
-        <strong>仓库</strong><span>{{ repositories.length }}</span
-        ><button
-          type="button"
-          aria-label="管理 Git 仓库"
-          title="添加或管理 Git 仓库"
-          :disabled="repositorySwitchLocked"
-          @click="emit('configureRepositories')"
-        >
-          <PhGearSix :size="16" />
-        </button>
+        <div class="repository-sidebar-title">
+          <strong>仓库</strong><span>{{ repositories.length }}</span>
+        </div>
+        <div class="repository-sidebar-actions">
+          <button
+            type="button"
+            class="batch-fetch-btn"
+            aria-label="全部 Fetch"
+            title="一键获取所有仓库的远程更新（Batch Fetch）"
+            :disabled="repositorySwitchLocked || fetchingAll || !repositories.length"
+            @click="fetchAllRepositories"
+          >
+            <PhCloudArrowDown :size="15" :class="{ 'spin-icon': fetchingAll }" aria-hidden="true" />
+            <span>全部 Fetch</span>
+          </button>
+          <button
+            type="button"
+            aria-label="管理 Git 仓库"
+            title="添加或管理 Git 仓库"
+            :disabled="repositorySwitchLocked || fetchingAll"
+            @click="emit('configureRepositories')"
+          >
+            <PhGearSix :size="16" />
+          </button>
+        </div>
       </div>
       <div class="repository-list">
         <button
@@ -784,12 +1019,28 @@ function statusLabel(file: GitFileChange, staged: boolean) {
             :aria-label="`已选 ${selectedEntries.filter((entry) => entry.repository.id === repo.id).length} 条提交`"
             >{{ selectedEntries.filter((entry) => entry.repository.id === repo.id).length }}</span
           >
-          <span
-            v-else-if="repositoryStates[repo.id]?.changes"
-            class="repository-change-count"
-            :title="`${repositoryStates[repo.id]?.changes} 个本地更改`"
-            >{{ repositoryStates[repo.id]?.changes }}</span
-          >
+          <div v-else class="repo-badges">
+            <span
+              v-if="repositoryStates[repo.id]?.behind"
+              class="repo-badge behind"
+              :title="`待拉取：落后远端 ${repositoryStates[repo.id]?.behind} 个提交`"
+              :aria-label="`待拉取 ${repositoryStates[repo.id]?.behind}`"
+              >↓{{ repositoryStates[repo.id]?.behind }}</span
+            >
+            <span
+              v-if="repositoryStates[repo.id]?.ahead"
+              class="repo-badge ahead"
+              :title="`待推送：领先远端 ${repositoryStates[repo.id]?.ahead} 个提交`"
+              :aria-label="`待推送 ${repositoryStates[repo.id]?.ahead}`"
+              >↑{{ repositoryStates[repo.id]?.ahead }}</span
+            >
+            <span
+              v-if="repositoryStates[repo.id]?.changes"
+              class="repository-change-count"
+              :title="`${repositoryStates[repo.id]?.changes} 个本地更改`"
+              >{{ repositoryStates[repo.id]?.changes }}</span
+            >
+          </div>
         </button>
         <p v-if="!repositories.length" class="repository-empty">尚未添加仓库</p>
       </div>
@@ -883,7 +1134,6 @@ function statusLabel(file: GitFileChange, staged: boolean) {
         </button>
       </nav>
       <p v-if="error" class="workbench-message workbench-error" role="alert">{{ error }}</p>
-      <p v-if="notice" class="workbench-message workbench-notice" role="status">{{ notice }}</p>
       <GitAuthenticationForm
         v-if="authentication"
         :url="authentication.url"
@@ -1062,26 +1312,37 @@ function statusLabel(file: GitFileChange, staged: boolean) {
                 />
               </button>
               <span v-if="!commitExpanded && commitMessage.trim()" class="commit-draft-indicator">草稿</span>
-              <span v-if="aiProviderName" class="ai-provider" :title="`默认 AI：${aiProviderName}`">{{
-                aiProviderName
-              }}</span>
-              <span class="generate-action" :title="aiHint"
-                ><button
+              <div class="commit-heading-actions">
+                <button
+                  v-if="hasMultilineCommit || (fullCommitMessage && fullCommitMessage.startsWith(commitMessage.trim()))"
                   type="button"
-                  class="generate-commit-message"
-                  :aria-label="generatingMessage ? '取消生成提交说明' : 'AI 生成提交说明'"
-                  :title="aiHint"
-                  :aria-describedby="`${id}-ai-hint`"
-                  :aria-busy="generatingMessage"
-                  :disabled="!generatingMessage && !canGenerate"
-                  @click="generateMessage"
+                  class="text-action single-line-toggle"
+                  :title="hasMultilineCommit ? '切换为首行紧凑说明' : '恢复完整多行说明'"
+                  @click="toggleSingleLineCommit"
                 >
-                  <PhStop v-if="generatingMessage" :size="17" aria-hidden="true" /><PhSparkle
-                    v-else
-                    :size="17"
-                    aria-hidden="true"
-                  /></button
-              ></span>
+                  {{ hasMultilineCommit ? '紧凑' : '详细' }}
+                </button>
+                <span v-if="aiProviderName" class="ai-provider" :title="`默认 AI：${aiProviderName}`">{{
+                  aiProviderName
+                }}</span>
+                <span class="generate-action" :title="aiHint"
+                  ><button
+                    type="button"
+                    class="generate-commit-message"
+                    :aria-label="generatingMessage ? '取消生成提交说明' : 'AI 生成提交说明'"
+                    :title="aiHint"
+                    :aria-describedby="`${id}-ai-hint`"
+                    :aria-busy="generatingMessage"
+                    :disabled="!generatingMessage && !canGenerate"
+                    @click="generateMessage"
+                  >
+                    <PhStop v-if="generatingMessage" :size="17" aria-hidden="true" /><PhSparkle
+                      v-else
+                      :size="17"
+                      aria-hidden="true"
+                    /></button
+                ></span>
+              </div>
             </div>
             <div v-show="commitExpanded" :id="`${id}-commit-fields`" class="commit-fields">
               <label class="sr-only" :for="`${id}-message`">提交说明</label>
@@ -1095,11 +1356,13 @@ function statusLabel(file: GitFileChange, staged: boolean) {
                 @keydown.enter.ctrl.prevent="commit()"
                 @keydown.enter.meta.prevent="commit()"
               />
-              <p v-if="generatingMessage" class="workbench-hint" role="status">
-                正在根据暂存区更改生成说明，可继续编辑或取消生成…
-              </p>
-              <p :id="`${id}-ai-hint`" class="workbench-hint">
-                <template v-if="aiProviderName === null"
+              <p
+                :id="`${id}-ai-hint`"
+                class="workbench-hint commit-hint"
+                :role="generatingMessage ? 'status' : undefined"
+              >
+                <template v-if="generatingMessage">正在生成提交说明，可继续编辑或取消生成…</template>
+                <template v-else-if="aiProviderName === null"
                   ><button type="button" class="configure-ai" :disabled="disabled || busy" @click="emit('configureAi')">
                     配置默认 AI</button
                   >后可生成提交说明。</template
@@ -1107,9 +1370,33 @@ function statusLabel(file: GitFileChange, staged: boolean) {
                 ><template v-else>仅提交已暂存的 {{ staged.length }} 个文件。⌘ / Ctrl + Enter 提交。</template>
               </p>
               <p v-if="repository.detached" class="workbench-hint">当前处于分离 HEAD，请先创建或切换本地分支。</p>
+              <div class="commit-options-row">
+                <label
+                  class="commit-amend-label"
+                  :title="
+                    canAmend ? '将修改合并到上一条提交，或直接修改上一条提交说明' : '处于分离 HEAD，无法修改上一条提交'
+                  "
+                >
+                  <input v-model="isAmend" type="checkbox" :disabled="disabled || busy || loading || !canAmend" />
+                  <span>修改上一条提交 (Amend)</span>
+                </label>
+                <button
+                  v-if="canUndoCommit"
+                  type="button"
+                  class="text-action muted-action undo-commit-btn"
+                  :disabled="disabled || busy || loading"
+                  title="撤回最近一次提交（保留更改在暂存区）"
+                  @click="undoLastCommit"
+                >
+                  撤回上次提交
+                </button>
+              </div>
               <div class="button-row">
-                <button type="submit" class="primary-button commit-primary" :disabled="!canCommit">提交</button
-                ><button type="button" :disabled="!canCommit || !canSync" @click="commit(true)">提交并推送</button>
+                <button type="submit" class="primary-button commit-primary" :disabled="!canCommit">
+                  {{ isAmend ? 'Amend 提交' : '提交' }}</button
+                ><button type="button" :disabled="!canCommit || !canSync" @click="commit(true)">
+                  {{ isAmend ? 'Amend 并推送' : '提交并推送' }}
+                </button>
               </div>
             </div>
           </form>
@@ -1152,7 +1439,15 @@ function statusLabel(file: GitFileChange, staged: boolean) {
             <p v-if="diffLoading" class="workbench-empty" role="status">正在读取差异…</p>
             <template v-else-if="diff"
               ><p v-if="diff.truncated" class="workbench-hint">差异过大，仅显示部分内容。</p>
-              <GitDiffContent v-if="diff.text" :lines="parsedDiff.lines" />
+              <GitDiffContent
+                v-if="diff.text"
+                :lines="parsedDiff.lines"
+                :mode="selectedFile ? (selectedFile.staged ? 'unstage' : 'stage') : null"
+                :disabled="lock"
+                @stage-hunk="stageHunk"
+                @unstage-hunk="unstageHunk"
+                @discard-hunk="discardHunk"
+              />
               <p v-else class="workbench-empty">没有文本差异，可能是二进制文件或文件权限变化。</p></template
             >
             <div v-else class="workbench-empty diff-placeholder">
@@ -1418,69 +1713,168 @@ function statusLabel(file: GitFileChange, staged: boolean) {
             </div>
           </section>
         </div>
-        <div v-else class="stash-view">
-          <form class="inline-form" @submit.prevent="stash">
-            <input
-              ref="stashInput"
-              v-model="stashMessage"
-              aria-label="Stash 说明"
-              placeholder="例如：切换分支前保存工作（可选）"
-              :disabled="lock"
-            /><button
-              type="submit"
-              class="primary-button"
-              :disabled="lock || !repository.files.length || !!conflicts.length"
-            >
-              保存到 Stash
-            </button>
-          </form>
-          <p class="workbench-hint">
-            保存已跟踪文件的修改及未跟踪的新文件。恢复后请检查工作区与暂存区；发生冲突时会保留 Stash。
-          </p>
-          <p v-if="!repository.stashes.length" class="workbench-empty">暂无 Stash。可先保存手头工作，再切换分支。</p>
-          <div
-            v-for="item in repository.stashes"
-            :key="item.reference"
-            class="stash-row"
-            @contextmenu="stashMenu($event, item)"
-            @keydown="stashMenu($event, item)"
-          >
-            <div>
-              <code>{{ item.reference }}</code
-              ><strong :title="item.message">{{ item.message }}</strong>
-            </div>
-            <div class="button-row">
-              <button
-                type="button"
-                :disabled="lock || !!conflicts.length"
-                :title="conflicts.length ? '请先解决工作区冲突' : '恢复到工作区，并保留此 Stash 记录'"
-                @click="act({ operation: 'applyStash', reference: item.reference })"
-              >
-                应用并保留</button
-              ><button
-                type="button"
-                :disabled="lock || !!conflicts.length"
-                :title="conflicts.length ? '请先解决工作区冲突' : '恢复成功后移除此记录；发生冲突时保留'"
-                @click="act({ operation: 'popStash', reference: item.reference })"
-              >
-                恢复并移除</button
-              ><button
-                type="button"
+        <div
+          v-else
+          ref="splitRoot"
+          class="workbench-split stashes-split stash-view"
+          :class="{ 'show-diff': compactDiff, resizing }"
+          :style="{ '--git-sidebar-width': `${splitRatio}%` }"
+        >
+          <div class="stashes-list-pane">
+            <form class="inline-form stash-form" @submit.prevent="stash">
+              <input
+                ref="stashInput"
+                v-model="stashMessage"
+                aria-label="Stash 说明"
+                placeholder="例如：切换分支前保存工作（可选）"
                 :disabled="lock"
-                class="danger-text"
-                title="删除此 Stash 记录，需要确认"
-                @click="
-                  ask(
-                    '删除 Stash？',
-                    `${item.reference}：${item.message}\n删除后将无法从列表恢复这些修改，请确认已不再需要。`,
-                    { operation: 'dropStash', reference: item.reference },
-                  )
-                "
+              /><button
+                type="submit"
+                class="primary-button"
+                :disabled="lock || !repository.files.length || !!conflicts.length"
               >
-                删除
+                保存到 Stash
               </button>
+            </form>
+            <p class="workbench-hint">
+              保存已跟踪文件的修改及未跟踪的新文件。恢复后请检查工作区与暂存区；发生冲突时会保留 Stash。
+            </p>
+            <p v-if="!repository.stashes.length" class="workbench-empty">暂无 Stash。可先保存手头工作，再切换分支。</p>
+            <div
+              v-for="item in repository.stashes"
+              :key="item.reference"
+              class="stash-row"
+              :class="{ selected: selectedStash?.reference === item.reference }"
+              role="button"
+              tabindex="0"
+              :aria-pressed="selectedStash?.reference === item.reference"
+              :aria-label="`查看 Stash 差异 ${item.reference} ${item.message}`"
+              @click="selectStash(item)"
+              @keydown.enter="selectStash(item)"
+              @keydown.space.prevent="selectStash(item)"
+              @contextmenu="stashMenu($event, item)"
+            >
+              <div>
+                <code>{{ item.reference }}</code
+                ><strong :title="item.message">{{ item.message }}</strong>
+              </div>
+              <div class="button-row" @click.stop>
+                <button
+                  type="button"
+                  :disabled="lock || !!conflicts.length"
+                  :title="conflicts.length ? '请先解决工作区冲突' : '恢复到工作区，并保留此 Stash 记录'"
+                  @click="act({ operation: 'applyStash', reference: item.reference })"
+                >
+                  应用并保留</button
+                ><button
+                  type="button"
+                  :disabled="lock || !!conflicts.length"
+                  :title="conflicts.length ? '请先解决工作区冲突' : '恢复成功后移除此记录；发生冲突时保留'"
+                  @click="act({ operation: 'popStash', reference: item.reference })"
+                >
+                  恢复并移除</button
+                ><button
+                  type="button"
+                  :disabled="lock"
+                  class="danger-text"
+                  title="删除此 Stash 记录，需要确认"
+                  @click="
+                    ask(
+                      '删除 Stash？',
+                      `${item.reference}：${item.message}\n删除后将无法从列表恢复这些修改，请确认已不再需要。`,
+                      { operation: 'dropStash', reference: item.reference },
+                    )
+                  "
+                >
+                  删除
+                </button>
+              </div>
             </div>
           </div>
+          <div
+            class="git-splitter"
+            role="separator"
+            aria-label="调整 Stash 列表与差异宽度"
+            aria-orientation="vertical"
+            tabindex="0"
+            :aria-valuenow="Math.round(splitRatio)"
+            :aria-valuemin="24"
+            :aria-valuemax="60"
+            @pointerdown="resizeStart"
+            @pointermove="resizeMove"
+            @pointerup="resizeEnd"
+            @pointercancel="resizeEnd"
+            @lostpointercapture="resizeEnd"
+            @keydown="resizeKey"
+          />
+          <section class="diff-pane" aria-label="Stash 差异">
+            <template v-if="selectedStash">
+              <div class="diff-heading">
+                <button
+                  ref="compactBack"
+                  type="button"
+                  class="compact-back"
+                  aria-label="返回 Stash 列表"
+                  @click="returnToStashes"
+                >
+                  ← Stash
+                </button>
+                <h4 :title="diffTitle">{{ diffTitle }}</h4>
+                <span
+                  v-if="diff && !diffLoading"
+                  class="diff-stats"
+                  :aria-label="`新增 ${parsedDiff.additions} 行，删除 ${parsedDiff.deletions} 行`"
+                  ><span>+{{ parsedDiff.additions }}</span
+                  ><span>−{{ parsedDiff.deletions }}</span></span
+                >
+              </div>
+              <div class="stash-details">
+                <code>{{ selectedStash.reference }}</code>
+                <p>{{ selectedStash.message }}</p>
+                <div class="button-row">
+                  <button
+                    type="button"
+                    :disabled="lock || !!conflicts.length"
+                    :title="conflicts.length ? '请先解决工作区冲突' : '恢复到工作区，并保留此 Stash 记录'"
+                    @click="act({ operation: 'applyStash', reference: selectedStash.reference })"
+                  >
+                    应用此 Stash</button
+                  ><button
+                    type="button"
+                    :disabled="lock || !!conflicts.length"
+                    :title="conflicts.length ? '请先解决工作区冲突' : '恢复成功后移除此记录；发生冲突时保留'"
+                    @click="act({ operation: 'popStash', reference: selectedStash.reference })"
+                  >
+                    恢复并移除此 Stash</button
+                  ><button
+                    type="button"
+                    :disabled="lock"
+                    class="danger-text"
+                    title="删除此 Stash 记录，需要确认"
+                    @click="
+                      ask(
+                        '删除 Stash？',
+                        `${selectedStash.reference}：${selectedStash.message}\n删除后将无法从列表恢复这些修改，请确认已不再需要。`,
+                        { operation: 'dropStash', reference: selectedStash.reference },
+                      )
+                    "
+                  >
+                    删除此 Stash
+                  </button>
+                </div>
+              </div></template
+            >
+            <p v-if="diffLoading" class="workbench-empty" role="status">正在读取 Stash 差异…</p>
+            <template v-else-if="diff">
+              <p v-if="diff.truncated" class="workbench-hint">差异过大，仅显示部分内容。</p>
+              <GitDiffContent v-if="diff.text" :lines="parsedDiff.lines" :disabled="lock" />
+              <p v-else class="workbench-empty">此 Stash 没有可显示的文本差异。</p></template
+            >
+            <div v-else-if="!selectedStash" class="workbench-empty diff-placeholder">
+              <PhStack :size="34" weight="light" aria-hidden="true" /><strong>选择 Stash 查看差异</strong
+              ><span>点击左侧 Stash 记录，预览保存的改动并进行应用或删除。</span>
+            </div>
+          </section>
         </div>
         <p v-if="busy" class="workbench-progress" role="status">正在执行 Git 操作，请稍候…</p>
       </template>
@@ -1554,12 +1948,35 @@ function statusLabel(file: GitFileChange, staged: boolean) {
   align-items: center;
   justify-content: space-between;
   gap: 8px;
+  height: var(--git-control-height);
+  min-height: var(--git-control-height);
+  flex-shrink: 0;
+}
+.commit-heading-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+.generate-action {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+.single-line-toggle {
+  font-size: var(--text-caption);
+  padding: 1px 6px;
+  line-height: 1.4;
+  height: var(--git-control-height);
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 .generate-commit-message {
   width: var(--git-control-height);
   height: var(--git-control-height);
   padding: 0;
   color: var(--skin-accent);
+  flex-shrink: 0;
 }
 .git-workbench {
   --git-control-height: 26px;
@@ -1596,18 +2013,83 @@ function statusLabel(file: GitFileChange, staged: boolean) {
   align-items: center;
   gap: 7px;
   min-height: 36px;
-  padding: 4px 10px;
+  padding: 4px 8px;
   color: var(--skin-text-muted);
   font-size: var(--text-small);
+}
+.repository-sidebar-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
 }
 .repository-sidebar-heading strong {
   font-weight: 500;
 }
-.repository-sidebar-heading button {
+.repository-sidebar-actions {
   margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.repository-sidebar-actions button {
   padding: 4px;
   border: 0;
   background: transparent;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.repository-sidebar-actions button.batch-fetch-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: calc(11 * var(--font-unit));
+  padding: 2px 6px;
+  border-radius: 4px;
+  color: var(--skin-text-muted);
+  border: 1px solid transparent;
+  cursor: pointer;
+  background: transparent;
+  line-height: 1;
+}
+.repository-sidebar-actions button.batch-fetch-btn:hover:not(:disabled) {
+  color: var(--skin-accent);
+  background: var(--skin-accent-soft);
+  border-color: var(--skin-accent-border);
+}
+.spin-icon {
+  animation: spin 1s linear infinite;
+}
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+.repo-badges {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+.repo-badge {
+  font-size: var(--text-caption);
+  font-variant-numeric: tabular-nums;
+  padding: 1px 5px;
+  border-radius: 4px;
+  line-height: 1.2;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.repo-badge.behind {
+  background: var(--skin-warning-soft);
+  color: var(--skin-warning);
+}
+.repo-badge.ahead {
+  background: var(--skin-accent-soft);
+  color: var(--skin-accent);
 }
 .repository-list {
   flex: 1;
@@ -2033,10 +2515,6 @@ h4 > span {
   background: var(--skin-danger-soft);
   color: var(--skin-danger);
 }
-.workbench-notice {
-  background: var(--skin-subtle);
-  color: var(--skin-success);
-}
 .workbench-confirm {
   margin: 0;
   border: 1px solid var(--skin-warning-border);
@@ -2329,10 +2807,10 @@ h4 {
   height: 23px;
   min-height: 23px;
   padding: 0;
-  font-size: 18px;
+  font-size: var(--text-headline);
 }
 .discard-action {
-  font-size: 16px;
+  font-size: var(--text-title);
   color: var(--skin-danger);
 }
 @media (hover: hover) and (pointer: fine) {
@@ -2347,20 +2825,38 @@ h4 {
 .commit-form {
   grid-area: commit;
   min-width: 0;
-  display: grid;
+  display: flex;
+  flex-direction: column;
   gap: 8px;
   border-top: 1px solid var(--skin-border);
   padding: 8px 10px;
   background: var(--skin-canvas);
+  box-sizing: border-box;
 }
 .commit-fields {
-  display: grid;
+  display: flex;
+  flex-direction: column;
   gap: 8px;
 }
 .commit-fields textarea {
+  height: 72px;
   min-height: 60px;
+  max-height: 160px;
   resize: vertical;
   background: var(--skin-surface);
+  scrollbar-gutter: stable;
+  line-height: 1.5;
+  box-sizing: border-box;
+}
+.commit-hint {
+  height: 20px;
+  min-height: 20px;
+  line-height: 20px;
+  margin: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex-shrink: 0;
 }
 .commit-disclosure {
   flex: 1;
@@ -2383,6 +2879,12 @@ h4 {
   color: var(--skin-warning);
   font-size: var(--text-caption);
 }
+.commit-fields .button-row {
+  display: flex;
+  gap: 8px;
+  min-height: 28px;
+  flex-shrink: 0;
+}
 .commit-fields .button-row > .commit-primary {
   flex: 0 0 auto;
   min-width: 70px;
@@ -2397,6 +2899,32 @@ h4 {
 .commit-form label {
   font-weight: 500;
   font-size: var(--text-small);
+}
+.commit-options-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: var(--text-small);
+  min-height: 24px;
+  flex-shrink: 0;
+}
+.commit-amend-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  user-select: none;
+  font-weight: normal;
+  color: var(--skin-text);
+}
+.commit-amend-label input[type='checkbox'] {
+  margin: 0;
+  cursor: pointer;
+}
+.undo-commit-btn {
+  font-size: var(--text-caption);
+  padding: 2px 6px;
 }
 .workbench-hint {
   font-size: var(--text-small);
@@ -2466,6 +2994,40 @@ h4 {
 .history-split > .diff-pane {
   grid-area: diff;
   min-height: 0;
+}
+.stashes-split {
+  grid-template-columns: minmax(250px, var(--git-sidebar-width, 32%)) 6px minmax(0, 1fr);
+  grid-template-areas: 'stashes gutter diff';
+}
+.stashes-split > .stashes-list-pane {
+  grid-area: stashes;
+  min-height: 0;
+  border-right: 0;
+  overflow: auto;
+  padding: 12px 14px;
+}
+.stashes-split > .diff-pane {
+  grid-area: diff;
+  min-height: 0;
+}
+.stash-details {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 14px;
+  background: var(--skin-subtle);
+  border-bottom: 1px solid var(--skin-border);
+}
+.stash-details code {
+  font-size: var(--text-small);
+  color: var(--skin-text-muted);
+}
+.stash-details p {
+  margin: 0;
+  font-size: var(--text-small);
+  font-weight: 500;
+  color: var(--skin-text);
+  line-height: 1.5;
 }
 .history-empty {
   flex-direction: column;
@@ -2639,9 +3201,16 @@ button.danger-text:hover:not(:disabled) {
   border-radius: 0;
   background: transparent;
 }
+.stash-row {
+  cursor: pointer;
+}
 .branch-row:hover,
 .stash-row:hover {
   background: var(--skin-subtle);
+}
+.stash-row.selected {
+  background: var(--skin-accent-soft);
+  box-shadow: inset 3px 0 var(--skin-accent);
 }
 .branch-row > div:first-child,
 .stash-row > div:first-child {
@@ -2754,6 +3323,26 @@ button.danger-text:hover:not(:disabled) {
     display: none;
   }
   .history-split.show-diff > .diff-pane {
+    display: flex;
+  }
+  .stashes-split {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas: 'stashes';
+    overflow: hidden;
+  }
+  .stashes-split > .stashes-list-pane {
+    max-height: none;
+  }
+  .stashes-split > .diff-pane {
+    display: none;
+    grid-area: stashes;
+    min-height: 0;
+  }
+  .stashes-split.show-diff > .stashes-list-pane {
+    display: none;
+  }
+  .stashes-split.show-diff > .diff-pane {
     display: flex;
   }
   .changes-view {

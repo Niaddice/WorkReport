@@ -217,6 +217,67 @@ describe('Git settings form', () => {
     wrapper.unmount()
   })
 
+  it('switches commit prompt when clicking preset pills', async () => {
+    const wrapper = mount(GitSettings, {
+      props: {
+        modelValue: cloneGitSettings(),
+        busy: false,
+        workspacePath: '/tmp/workspace',
+        'onUpdate:modelValue': (value) => {
+          void wrapper.setProps({ modelValue: value })
+        },
+      },
+    })
+    const pills = wrapper.findAll('.prompt-preset-pill')
+    expect(pills.length).toBeGreaterThanOrEqual(4)
+    const gitmojiPill = pills.find((p) => p.text().includes('Gitmoji'))
+    expect(gitmojiPill).toBeDefined()
+    await gitmojiPill!.trigger('click')
+    expect(wrapper.props('modelValue').commitPrompt).toContain('Gitmoji')
+    expect(gitmojiPill!.classes()).toContain('is-active')
+    wrapper.unmount()
+  })
+
+  it('offers a custom prompt option that focuses the editor and stays active for edited prompts', async () => {
+    const wrapper = mount(GitSettings, {
+      attachTo: document.body,
+      props: {
+        modelValue: cloneGitSettings(),
+        busy: false,
+        workspacePath: '/tmp/workspace',
+        'onUpdate:modelValue': (value) => {
+          void wrapper.setProps({ modelValue: value })
+        },
+      },
+    })
+    const custom = () => wrapper.get('.prompt-custom-pill')
+    expect(custom().classes()).not.toContain('is-active')
+    await custom().trigger('click')
+    expect(custom().classes()).toContain('is-active')
+    expect(
+      wrapper.findAll('.prompt-preset-pill:not(.prompt-custom-pill)').some((p) => p.classes().includes('is-active')),
+    ).toBe(false)
+    expect(document.activeElement).toBe(wrapper.get('textarea').element)
+    expect(wrapper.props('modelValue').commitPrompt).toBe('')
+    expect(wrapper.get<HTMLTextAreaElement>('textarea').element.value).toBe('')
+    await wrapper.get('textarea').setValue('只输出一行中文提交说明')
+    expect(custom().classes()).toContain('is-active')
+    await wrapper
+      .findAll('.prompt-preset-pill')
+      .find((p) => p.text().includes('Gitmoji'))!
+      .trigger('click')
+    expect(custom().classes()).not.toContain('is-active')
+    await wrapper.get('textarea').setValue('另一个自定义提示词')
+    expect(custom().classes()).toContain('is-active')
+    await wrapper
+      .findAll('.prompt-preset-pill')
+      .find((p) => p.text().includes('Angular'))!
+      .trigger('click')
+    await custom().trigger('click')
+    expect(wrapper.props('modelValue').commitPrompt).toBe('另一个自定义提示词')
+    wrapper.unmount()
+  })
+
   it('keeps changes in the parent draft and validates incomplete repositories before saving', async () => {
     const wrapper = mount(GitSettings, {
       props: {

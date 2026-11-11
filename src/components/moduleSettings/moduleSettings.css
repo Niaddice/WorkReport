@@ -1,0 +1,766 @@
+/* 模块设置采用分组卡片布局；所有颜色跟随当前皮肤。 */
+.module-settings-dialog {
+  --control-height: 30px;
+  display: grid;
+  grid-template-columns: 210px minmax(0, 1fr);
+  grid-template-rows: 100%;
+  align-items: stretch;
+  width: min(1040px, 94vw);
+  height: min(720px, 86vh);
+  max-height: 88vh;
+  min-height: 480px;
+}
+.module-settings-sidebar {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  max-height: 100%;
+  overflow: hidden;
+  border-right: 1px solid var(--skin-border);
+  background: var(--skin-surface-raised, var(--skin-surface));
+}
+.module-settings-sidebar-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 42px;
+  padding: 0 14px;
+  border-bottom: 1px solid var(--skin-border);
+  background: var(--skin-surface);
+  color: var(--skin-text-secondary);
+}
+.module-settings-sidebar-icon {
+  display: grid;
+  place-items: center;
+  color: var(--skin-accent);
+}
+.module-settings-sidebar-title-wrap {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  gap: 1px;
+}
+.module-settings-sidebar-title {
+  font-size: var(--text-subtitle);
+  font-weight: 600;
+  color: var(--skin-text);
+  letter-spacing: 0.02em;
+}
+.module-settings-sidebar-badge {
+  font-size: var(--text-caption);
+  color: var(--skin-text-muted);
+  line-height: 1.2;
+}
+.module-settings-nav {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.module-settings-nav-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.module-settings-nav-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 38px;
+  padding: 6px 8px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--skin-text-secondary);
+  text-align: left;
+  cursor: pointer;
+  transition:
+    background-color var(--motion-fast) ease,
+    border-color var(--motion-fast) ease,
+    color var(--motion-fast) ease;
+}
+.module-settings-nav-item:hover {
+  background: var(--skin-hover);
+  color: var(--skin-text);
+}
+.module-settings-nav-item.is-active,
+.module-settings-nav-item[aria-current='page'] {
+  border-color: var(--skin-accent-border);
+  background: var(--skin-accent-soft);
+  color: var(--skin-accent);
+}
+.module-settings-nav-icon {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  background: var(--skin-subtle);
+  color: var(--skin-text-muted);
+  flex: 0 0 auto;
+}
+.module-settings-nav-item.is-active .module-settings-nav-icon,
+.module-settings-nav-item[aria-current='page'] .module-settings-nav-icon {
+  background: var(--skin-accent-container);
+  color: var(--skin-accent);
+}
+.module-settings-nav-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+.module-settings-nav-copy strong {
+  font-size: var(--text-body);
+  font-weight: 500;
+  color: inherit;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.module-settings-nav-copy small {
+  font-size: var(--text-caption);
+  color: var(--skin-text-muted);
+  line-height: 1.3;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.module-settings-nav-item.is-active .module-settings-nav-copy small,
+.module-settings-nav-item[aria-current='page'] .module-settings-nav-copy small {
+  color: var(--skin-accent);
+}
+.module-settings-dirty-dot {
+  flex: 0 0 6px;
+  width: 6px;
+  height: 6px;
+  margin-left: auto;
+  border-radius: 50%;
+  background: var(--skin-warning);
+}
+.module-settings-subnav {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 2px 0 6px 20px;
+  padding-left: 8px;
+  border-left: 1.5px solid var(--skin-border);
+}
+.module-settings-subnav-item {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  min-height: 24px;
+  padding: 3px 6px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--skin-text-muted);
+  font-size: var(--text-small);
+  text-align: left;
+  cursor: pointer;
+  transition:
+    background-color var(--motion-fast) ease,
+    color var(--motion-fast) ease;
+}
+.module-settings-subnav-item:hover {
+  background: var(--skin-hover);
+  color: var(--skin-text);
+}
+.module-settings-sidebar-footer {
+  flex: 0 0 auto;
+  padding: 8px;
+  border-top: 1px solid var(--skin-border);
+  background: var(--skin-surface);
+}
+.module-settings-global-link {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: 100%;
+  min-height: 30px;
+  padding: 4px 8px;
+  border: 1px solid var(--skin-border);
+  border-radius: 6px;
+  background: var(--skin-canvas);
+  color: var(--skin-text-secondary);
+  font-size: var(--text-small);
+  cursor: pointer;
+  transition:
+    background-color var(--motion-fast) ease,
+    border-color var(--motion-fast) ease,
+    color var(--motion-fast) ease;
+}
+.module-settings-global-link:hover {
+  border-color: var(--skin-accent-border);
+  background: var(--skin-accent-soft);
+  color: var(--skin-accent);
+}
+.module-settings-main {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  max-height: 100%;
+  overflow: hidden;
+  background: var(--skin-canvas);
+}
+:root .app-shell .module-settings-heading {
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px 16px;
+  background: var(--skin-surface);
+}
+.module-settings-icon {
+  display: grid;
+  place-items: center;
+  flex: 0 0 30px;
+  height: 30px;
+  border: 1px solid var(--skin-accent-border);
+  border-radius: 9px;
+  color: var(--skin-accent);
+  background: var(--skin-accent-soft);
+}
+.module-settings-heading-copy {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+.app-shell .module-settings-heading h2 {
+  color: var(--skin-text);
+  font-size: var(--text-subtitle);
+  font-weight: 600;
+  line-height: 1.4;
+}
+.module-settings-heading .module-settings-description {
+  font-size: var(--text-small);
+  line-height: 1.5;
+}
+.module-settings-heading .module-settings-close {
+  flex: 0 0 28px;
+  margin-top: -2px;
+}
+.module-settings-body {
+  position: relative;
+  container: module-settings / inline-size;
+  display: block;
+  padding: 16px 24px 28px;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+.module-settings-stack,
+.module-settings-body > .git-settings {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+.module-settings-body .module-settings-section {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  min-width: 0;
+  padding: 30px 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  scroll-margin-top: 14px;
+  box-shadow: none;
+}
+.module-settings-body .module-settings-section:first-child {
+  padding-top: 6px;
+}
+.module-settings-body .module-settings-section:last-child {
+  padding-bottom: 24px;
+}
+.module-settings-body .module-settings-section + .module-settings-section {
+  border-top: 1px solid var(--skin-border);
+}
+.module-settings-section > .settings-section-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-width: 0;
+  padding: 0;
+  margin: 0;
+  border-bottom: 0;
+}
+.settings-section-title-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.setting-field-header {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+.module-settings-section .settings-section-heading h3 {
+  color: var(--skin-text);
+  font-size: var(--text-subtitle);
+  font-weight: 600;
+  line-height: 1.4;
+  margin: 0;
+  letter-spacing: 0.01em;
+}
+.module-settings-section .settings-section-heading p {
+  margin: 4px 0 0;
+  font-size: var(--text-small);
+  line-height: 1.55;
+  color: var(--skin-text-muted);
+}
+.module-settings-section-content {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  min-width: 0;
+  width: 100%;
+}
+.module-settings-body :is(.field-hint, .settings-muted, .git-hint, .settings-error) {
+  margin: 0;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+.module-settings-body :is(.database-field, .excel-path-field, .generation-preference, .git-field) {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  margin: 0;
+}
+.module-settings-body
+  :is(
+    .excel-path-field label,
+    .excel-path-field > label,
+    .database-field label,
+    .database-field-label,
+    .generation-preference > label,
+    .git-field > span:first-child,
+    .git-prompt-heading > label,
+    .excel-prompt-heading > label
+  ) {
+  color: var(--skin-text-body);
+  font-size: var(--text-body);
+  font-weight: 500;
+  line-height: 1.5;
+}
+.module-settings-body .generation-preference > p {
+  margin: 0;
+  color: var(--skin-text-muted);
+  font-size: var(--text-small);
+  line-height: 1.55;
+}
+.module-settings-body :is(.generation-preference > textarea, .git-field textarea, .excel-settings-fields textarea) {
+  min-height: 88px;
+  height: 96px;
+  padding: 7px 9px;
+  font-size: var(--text-body);
+  line-height: 1.6;
+  resize: vertical;
+}
+.module-settings-body input:not([type='range']):not([type='checkbox']):not([type='radio']),
+.module-settings-body .app-select-trigger {
+  height: var(--control-height);
+  padding-block: 4px;
+  font-size: var(--text-body);
+}
+.module-settings-body .preference-count {
+  justify-self: end;
+  color: var(--skin-text-muted);
+  font-size: var(--text-caption);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.5;
+}
+.module-settings-field-footer {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+.module-settings-body .text-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  flex-shrink: 0;
+  min-height: 26px;
+  padding: 3px 6px;
+  border-radius: var(--desktop-control-radius);
+  font-size: var(--text-small);
+  line-height: 1.5;
+}
+.module-settings-body .text-action:hover:not(:disabled) {
+  background: var(--skin-accent-soft);
+}
+.module-settings-body :is(.excel-path-control, .git-path-input) {
+  gap: 6px;
+}
+.module-settings-body :is(.excel-path-control, .git-path-input) > .text-action {
+  min-height: var(--control-height);
+  padding-inline: 10px;
+  border: 1px solid var(--skin-border);
+  background: var(--skin-surface);
+}
+.module-settings-body .database-mode-options {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+.module-settings-body .database-mode-options > label {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--skin-border);
+  border-radius: 8px;
+  background: var(--skin-surface);
+  cursor: pointer;
+  transition:
+    background-color var(--motion-fast) ease,
+    border-color var(--motion-fast) ease;
+}
+.module-settings-body .database-mode-options > label:hover:not(:has(input:disabled)) {
+  border-color: var(--control-border-hover);
+  background: var(--skin-hover);
+}
+.module-settings-body .database-mode-options > label.selected {
+  border-color: var(--skin-accent-border);
+  background: var(--skin-accent-soft);
+}
+.module-settings-body .database-mode-options strong {
+  font-size: var(--text-body);
+}
+.module-settings-body .database-mode-copy > span {
+  font-size: var(--text-small);
+  line-height: 1.55;
+}
+.module-settings-body .directory-settings.is-compact {
+  position: relative;
+  gap: 0;
+}
+.module-settings-body .directory-settings.is-compact .directory-settings-card {
+  position: relative;
+  gap: 10px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+.directory-settings.is-compact .directory-settings-card-heading {
+  position: absolute;
+  top: -6px;
+  right: -4px;
+}
+.directory-settings.is-compact .directory-settings-card > .excel-path-field:first-of-type > label {
+  min-height: 22px;
+  padding-right: 76px;
+}
+.module-settings-body .directory-settings-preview {
+  gap: 7px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--skin-border);
+  background: var(--skin-surface);
+}
+.module-settings-body .directory-settings-preview svg {
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+.module-settings-body .directory-settings-preview strong {
+  font-size: var(--text-small);
+  font-weight: 500;
+}
+.module-settings-body .directory-settings-preview span {
+  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', monospace;
+  font-size: var(--text-caption);
+  line-height: 1.55;
+}
+.module-settings-body .filename-placeholder-options {
+  gap: 4px;
+}
+.module-settings-body .filename-placeholder-options button {
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-family: 'SFMono-Regular', Consolas, monospace;
+}
+.module-settings-ai-status {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px 8px;
+  min-width: 0;
+  padding: 6px 10px;
+  border: 1px solid var(--skin-border);
+  border-radius: 6px;
+  background: var(--skin-surface);
+  color: var(--skin-text-muted);
+  font-size: var(--text-small);
+}
+.module-settings-ai-status > span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.module-settings-ai-status.is-ready > span {
+  color: var(--skin-text-body);
+}
+.module-settings-body .holiday-sync-controls {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 6px 8px;
+}
+.module-settings-body .holiday-sync-controls > label {
+  grid-column: 1 / -1;
+  margin: 0;
+  font-weight: 500;
+}
+.module-settings-body .holiday-sync-controls > .app-select {
+  width: 100%;
+}
+.module-settings-body .holiday-sync-button {
+  min-height: var(--control-height);
+  min-width: 128px;
+}
+.module-settings-body .holiday-sync-status {
+  padding: 8px 10px;
+  margin-top: 10px;
+  gap: 8px;
+  border-radius: 6px;
+}
+.module-settings-body .settings-details-list {
+  margin-top: 12px;
+}
+.module-settings-body .settings-details-list > div {
+  grid-template-columns: 82px minmax(0, 1fr);
+  gap: 8px;
+  padding-block: 8px;
+  font-size: var(--text-small);
+}
+.module-settings-body .history-limit {
+  gap: 10px;
+  padding-block: 4px;
+}
+.module-settings-dialog .history-limit input[type='range'] {
+  min-width: 0;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+.module-settings-dialog .history-limit input[type='range']:focus-visible {
+  outline: 2px solid var(--control-focus);
+  outline-offset: 4px;
+}
+.module-settings-body .history-limit output {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  min-width: 60px;
+  height: 24px;
+  padding: 0 8px;
+  border: 1px solid var(--skin-accent-border);
+  border-radius: 12px;
+  background: var(--skin-accent-soft);
+  color: var(--skin-accent);
+  text-align: center;
+  font-size: var(--text-small);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  box-sizing: border-box;
+}
+.module-settings-body .excel-enable-row {
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--skin-border);
+  border-radius: 7px;
+  background: var(--skin-surface);
+}
+.module-settings-body .excel-enable-copy h3 {
+  font-size: var(--text-body);
+}
+.module-settings-body .excel-enable-copy p {
+  font-size: var(--text-small);
+  line-height: 1.55;
+}
+.module-settings-body .excel-settings > .field-hint {
+  margin-top: 8px;
+}
+.module-settings-body .excel-settings-fields {
+  gap: 10px;
+  padding-top: 12px;
+}
+.module-settings-body :is(.excel-prompt-heading, .git-prompt-heading, .git-repositories-heading, .saved-git-heading) {
+  flex-wrap: wrap;
+  gap: 4px 8px;
+}
+.module-settings-body .git-repository-form {
+  border-radius: 7px;
+  background: var(--skin-surface);
+}
+.module-settings-body .git-repository-form + .git-repository-form {
+  margin-top: 12px;
+}
+.module-settings-body .git-repository-form > summary {
+  padding: 8px 10px;
+}
+.module-settings-body .git-repository-body {
+  gap: 8px;
+  padding: 0 10px 10px;
+}
+.module-settings-body .git-repository-form summary small {
+  font-family: 'SFMono-Regular', Consolas, monospace;
+  font-size: var(--text-caption);
+}
+.module-settings-body .git-advanced {
+  padding: 0;
+  border: 0;
+}
+.module-settings-body .github-authentication {
+  gap: 8px;
+  padding: 10px;
+  border-radius: 7px;
+  background: var(--skin-surface);
+}
+.module-settings-body .github-authentication-heading {
+  font-size: var(--text-body);
+}
+.module-settings-body .github-authentication-actions {
+  flex-wrap: wrap;
+}
+.module-settings-body .saved-git-credentials {
+  gap: 8px;
+  padding-top: 14px;
+}
+.module-settings-body .saved-git-credentials h4 {
+  font-size: var(--text-body);
+}
+.app-shell .module-settings-footer {
+  flex-direction: row;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  padding: 8px 16px;
+  background: var(--skin-surface);
+}
+.module-settings-footer .module-settings-status {
+  flex: 1 1 180px;
+}
+.module-settings-status p {
+  font-size: var(--text-small);
+  line-height: 1.6;
+}
+.module-settings-status.has-changes p {
+  color: var(--skin-accent);
+}
+.module-settings-status.has-error p {
+  color: var(--skin-danger);
+}
+.module-settings-footer .module-settings-confirm {
+  flex: 1 1 100%;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+.module-settings-confirm span {
+  flex: 1 1 180px;
+  line-height: 1.6;
+}
+.module-settings-actions > button {
+  min-width: 60px;
+}
+.module-settings-footer .module-settings-actions {
+  justify-content: flex-end;
+  margin-left: auto;
+}
+.module-settings-actions .module-settings-save {
+  min-width: 84px;
+  min-height: 30px;
+}
+.module-settings-dialog :is(button, summary):focus-visible {
+  outline: 2px solid var(--control-focus);
+  outline-offset: 2px;
+}
+@container module-settings (max-width: 600px) {
+  .module-settings-body {
+    padding: 12px 16px;
+  }
+  .module-settings-body .module-settings-section {
+    padding: 20px 0;
+    gap: 14px;
+  }
+}
+@container module-settings (max-width: 400px) {
+  .module-settings-body .database-mode-options {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .module-settings-body :is(.excel-path-control, .git-path-input) {
+    flex-wrap: wrap;
+  }
+  .module-settings-body :is(.excel-path-control, .git-path-input) input {
+    flex-basis: 100%;
+  }
+  .module-settings-body .holiday-sync-controls {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .module-settings-body .holiday-sync-button {
+    justify-self: start;
+  }
+}
+@media (max-width: 680px) {
+  .module-settings-dialog {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+    width: 100%;
+    height: 94vh;
+    max-height: 94vh;
+    border-radius: 8px;
+  }
+  .module-settings-sidebar {
+    height: auto;
+    border-right: 0;
+    border-bottom: 1px solid var(--skin-border);
+  }
+  .module-settings-sidebar-header {
+    display: none;
+  }
+  .module-settings-nav {
+    flex-direction: row;
+    overflow-x: auto;
+    padding: 6px 8px;
+    gap: 6px;
+  }
+  .module-settings-nav-item {
+    min-height: 32px;
+    padding: 4px 8px;
+  }
+  .module-settings-nav-copy small,
+  .module-settings-subnav,
+  .module-settings-sidebar-footer {
+    display: none;
+  }
+}
+@media (max-width: 560px) {
+  :root .app-shell .module-settings-heading {
+    padding: 10px 12px;
+  }
+  .module-settings-body {
+    padding-inline: 14px;
+  }
+  .app-shell .module-settings-footer {
+    align-items: stretch;
+    padding: 8px 12px;
+  }
+}

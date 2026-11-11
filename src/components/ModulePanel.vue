@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, type Component } from 'vue'
-import { PhCornersIn, PhCornersOut, PhQuestion, PhX } from '@phosphor-icons/vue'
+import { PhCornersIn, PhCornersOut, PhGearSix, PhQuestion, PhX } from '@phosphor-icons/vue'
 import ModuleHelpPopover from './ModuleHelpPopover.vue'
 import type { ModuleId } from '../modules/types'
 
@@ -16,15 +16,18 @@ const props = withDefaults(
     active?: boolean
     /** 当前是否以浮层最大化显示。 */
     maximized?: boolean
+    /** 模块是否有自己的设置面板；存在时标题栏显示设置按钮。 */
+    hasSettings?: boolean
     /** 使用说明，标题栏的帮助按钮据此展示。 */
     help?: readonly string[]
   }>(),
-  { active: false, maximized: false, help: () => [] },
+  { active: false, maximized: false, hasSettings: false, help: () => [] },
 )
 const emit = defineEmits<{
   activate: []
   'drag-start': [event: PointerEvent]
   remove: []
+  settings: []
   'toggle-maximize': []
 }>()
 
@@ -75,6 +78,16 @@ function openHelp() {
         <slot name="subtitle" />
       </div>
       <div class="module-panel-actions">
+        <button
+          v-if="hasSettings"
+          type="button"
+          class="module-panel-action module-settings-button"
+          :aria-label="`打开「${title}」设置`"
+          title="模块设置"
+          @click="emit('settings')"
+        >
+          <PhGearSix :size="15" aria-hidden="true" />
+        </button>
         <button
           v-if="help.length"
           ref="helpButton"

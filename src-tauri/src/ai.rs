@@ -750,21 +750,23 @@ fn clean_result(text: &str) -> Result<String, String> {
     }
     Ok(text.to_string())
 }
-async fn http_completion(
+async fn http_completion_with_stream<'a>(
     provider: &Provider,
     system: &str,
     content: &str,
+    on_chunk: Option<&'a (dyn Fn(&str) + Send + Sync)>,
 ) -> Result<String, String> {
     let url = endpoint(&provider.base_url)?;
     let client = http_client(&url, Duration::from_secs(120))?;
+    let stream_mode = on_chunk.is_some();
     let mut request = client.post(url).json(&json!({
-        "model": provider.model.trim(), "stream": false,
+        "model": provider.model.trim(), "stream": stream_mode,
         "messages": [{"role":"system","content":system}, {"role":"user","content":content}]
     }));
     if !provider.api_key.trim().is_empty() {
         request = request.bearer_auth(provider.api_key.trim());
     }
-    let response = request.send().await.map_err(|error| {
+    let mut response = request.send().await.map_err(|error| {
         if error.is_timeout() {
             "AI 请求超时，请重试"
         } else {
@@ -778,6 +780,44 @@ async fn http_completion(
             "AI 接口返回 HTTP {}，请检查 API Key、模型 ID、额度与接口地址",
             status.as_u16()
         ));
+    }
+    if let Some(cb) = on_chunk {
+        let mut full_text = String::new();
+        let mut line_buffer = String::new();
+        'stream_loop: while let Some(chunk) = response.chunk().await.map_err(|e| format!("读取 AI 流式数据失败：{e}"))? {
+            let chunk_str = String::from_utf8_lossy(&chunk);
+            line_buffer.push_str(&chunk_str);
+            while let Some(pos) = line_buffer.find('\n') {
+                let line = line_buffer[..pos].trim().to_string();
+                line_buffer = line_buffer[pos + 1..].to_string();
+                if let Some(data) = line.strip_prefix("data:") {
+                    let data = data.trim();
+                    if data == "[DONE]" {
+                        break 'stream_loop;
+                    }
+                    if let Ok(value) = serde_json::from_str::<Value>(data) {
+                        let text_chunk = value["choices"][0]["delta"]["content"]
+                            .as_str()
+                            .or_else(|| value["choices"][0]["text"].as_str());
+                        if let Some(delta) = text_chunk {
+                            if !delta.is_empty() {
+                                cb(delta);
+                                full_text.push_str(delta);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if !full_text.trim().is_empty() {
+            return clean_result(&full_text);
+        }
+        if let Ok(value) = serde_json::from_str::<Value>(&line_buffer) {
+            if let Some(content) = text_content(&value["choices"][0]["message"]["content"]) {
+                cb(&content);
+                return clean_result(&content);
+            }
+        }
     }
     let value: Value = response
         .json()
@@ -788,21 +828,37 @@ async fn http_completion(
             .ok_or("AI 接口没有返回正文，请确认支持 Chat Completions 协议")?,
     )
 }
-async fn anthropic_completion(provider: &Provider, system: &str, content: &str) -> Result<String, String> {
+
+async fn http_completion(
+    provider: &Provider,
+    system: &str,
+    content: &str,
+) -> Result<String, String> {
+    http_completion_with_stream(provider, system, content, None).await
+}
+
+async fn anthropic_completion_with_stream<'a>(
+    provider: &Provider,
+    system: &str,
+    content: &str,
+    on_chunk: Option<&'a (dyn Fn(&str) + Send + Sync)>,
+) -> Result<String, String> {
     let url = anthropic_endpoint(&provider.base_url)?;
     let client = http_client(&url, Duration::from_secs(120))?;
+    let stream_mode = on_chunk.is_some();
     let mut request = client
         .post(url)
         .header("anthropic-version", "2023-06-01")
         .json(&json!({
             "model": provider.model.trim(), "max_tokens": 8192,
+            "stream": stream_mode,
             "system": system,
             "messages": [{"role":"user","content":content}]
         }));
     if !provider.api_key.trim().is_empty() {
         request = request.header("x-api-key", provider.api_key.trim());
     }
-    let response = request.send().await.map_err(|error| {
+    let mut response = request.send().await.map_err(|error| {
         if error.is_timeout() {
             "AI 请求超时，请重试"
         } else {
@@ -816,6 +872,55 @@ async fn anthropic_completion(provider: &Provider, system: &str, content: &str) 
             "AI 接口返回 HTTP {}，请检查 API Key、模型 ID、额度与接口地址",
             status.as_u16()
         ));
+    }
+    if let Some(cb) = on_chunk {
+        let mut full_text = String::new();
+        let mut line_buffer = String::new();
+        'stream_loop: while let Some(chunk) = response.chunk().await.map_err(|e| format!("读取 AI 流式数据失败：{e}"))? {
+            let chunk_str = String::from_utf8_lossy(&chunk);
+            line_buffer.push_str(&chunk_str);
+            while let Some(pos) = line_buffer.find('\n') {
+                let line = line_buffer[..pos].trim().to_string();
+                line_buffer = line_buffer[pos + 1..].to_string();
+                if let Some(data) = line.strip_prefix("data:") {
+                    let data = data.trim();
+                    if data == "[DONE]" {
+                        break 'stream_loop;
+                    }
+                    if let Ok(value) = serde_json::from_str::<Value>(data) {
+                        if value["type"] == "content_block_delta" {
+                            if let Some(delta) = value["delta"]["text"].as_str() {
+                                if !delta.is_empty() {
+                                    cb(delta);
+                                    full_text.push_str(delta);
+                                }
+                            }
+                        } else if value["type"] == "message_stop" {
+                            break 'stream_loop;
+                        }
+                    }
+                }
+            }
+        }
+        if !full_text.trim().is_empty() {
+            return clean_result(&full_text);
+        }
+        if let Ok(value) = serde_json::from_str::<Value>(&line_buffer) {
+            let text = value["content"]
+                .as_array()
+                .map(|parts| {
+                    parts
+                        .iter()
+                        .filter_map(|part| part["text"].as_str())
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                })
+                .unwrap_or_default();
+            if !text.trim().is_empty() {
+                cb(&text);
+                return clean_result(&text);
+            }
+        }
     }
     let value: Value = response
         .json()
@@ -833,13 +938,29 @@ async fn anthropic_completion(provider: &Provider, system: &str, content: &str) 
         .ok_or("AI 接口没有返回正文，请确认支持 Anthropic Messages 协议")?;
     clean_result(&text)
 }
+
+async fn anthropic_completion(provider: &Provider, system: &str, content: &str) -> Result<String, String> {
+    anthropic_completion_with_stream(provider, system, content, None).await
+}
+
+async fn polish_http_with_stream<'a>(
+    provider: &Provider,
+    content: &str,
+    format: &str,
+    preference: &str,
+    on_chunk: Option<&'a (dyn Fn(&str) + Send + Sync)>,
+) -> Result<String, String> {
+    http_completion_with_stream(provider, &instructions(format, preference), content, on_chunk).await
+}
+
+#[allow(dead_code)]
 async fn polish_http(
     provider: &Provider,
     content: &str,
     format: &str,
     preference: &str,
 ) -> Result<String, String> {
-    http_completion(provider, &instructions(format, preference), content).await
+    polish_http_with_stream(provider, content, format, preference, None).await
 }
 async fn cli_completion(provider: &Provider, prompt: &str, action: &str) -> Result<String, String> {
     let temp = tempfile::tempdir().map_err(|_| "无法创建 AI 临时目录")?;
@@ -1011,19 +1132,29 @@ async fn summarize_cli(provider: &Provider, content: &str, prompt: &str) -> Resu
     );
     cli_completion(provider, &request, "总结").await
 }
+async fn summarize_http_with_stream<'a>(
+    provider: &Provider,
+    content: &str,
+    prompt: &str,
+    on_chunk: Option<&'a (dyn Fn(&str) + Send + Sync)>,
+) -> Result<String, String> {
+    http_completion_with_stream(provider, &summary_instructions(prompt), content, on_chunk).await
+}
+#[allow(dead_code)]
 async fn summarize_http(
     provider: &Provider,
     content: &str,
     prompt: &str,
 ) -> Result<String, String> {
-    http_completion(provider, &summary_instructions(prompt), content).await
+    summarize_http_with_stream(provider, content, prompt, None).await
 }
-pub async fn polish(
+pub async fn polish_with_stream<'a>(
     provider: &Provider,
     content: &str,
     format: &str,
     preference: &str,
     cancel: CancellationToken,
+    on_chunk: Option<&'a (dyn Fn(&str) + Send + Sync)>,
 ) -> Result<String, String> {
     validate_preference(preference)?;
     if content.trim().is_empty() {
@@ -1036,20 +1167,35 @@ pub async fn polish(
         _ = cancel.cancelled() => Err("已取消 AI 润色".into()),
         result = timeout(Duration::from_secs(180), async {
             match provider.kind {
-                ProviderKind::Http => polish_http(provider, content, format, preference).await,
+                ProviderKind::Http => polish_http_with_stream(provider, content, format, preference, on_chunk).await,
                 ProviderKind::Anthropic => {
-                    anthropic_completion(provider, &instructions(format, preference), content).await
+                    anthropic_completion_with_stream(provider, &instructions(format, preference), content, on_chunk).await
                 }
-                _ => polish_cli(provider, content, format, preference).await,
+                _ => {
+                    let text = polish_cli(provider, content, format, preference).await?;
+                    if let Some(cb) = on_chunk { cb(&text); }
+                    Ok(text)
+                }
             }
         }) => result.map_err(|_| "AI 调用超时，请重试".to_string())?,
     }
 }
-pub async fn summarize(
+#[allow(dead_code)]
+pub async fn polish(
+    provider: &Provider,
+    content: &str,
+    format: &str,
+    preference: &str,
+    cancel: CancellationToken,
+) -> Result<String, String> {
+    polish_with_stream(provider, content, format, preference, cancel, None).await
+}
+pub async fn summarize_with_stream<'a>(
     provider: &Provider,
     content: &str,
     prompt: &str,
     cancel: CancellationToken,
+    on_chunk: Option<&'a (dyn Fn(&str) + Send + Sync)>,
 ) -> Result<String, String> {
     validate_summary_prompt(prompt)?;
     if content.trim().is_empty() {
@@ -1062,14 +1208,27 @@ pub async fn summarize(
         _ = cancel.cancelled() => Err("已取消 AI 总结".into()),
         result = timeout(Duration::from_secs(180), async {
             match provider.kind {
-                ProviderKind::Http => summarize_http(provider, content, prompt).await,
+                ProviderKind::Http => summarize_http_with_stream(provider, content, prompt, on_chunk).await,
                 ProviderKind::Anthropic => {
-                    anthropic_completion(provider, &summary_instructions(prompt), content).await
+                    anthropic_completion_with_stream(provider, &summary_instructions(prompt), content, on_chunk).await
                 }
-                _ => summarize_cli(provider, content, prompt).await,
+                _ => {
+                    let text = summarize_cli(provider, content, prompt).await?;
+                    if let Some(cb) = on_chunk { cb(&text); }
+                    Ok(text)
+                }
             }
         }) => result.map_err(|_| "AI 总结超时，请重试".to_string())?,
     }
+}
+#[allow(dead_code)]
+pub async fn summarize(
+    provider: &Provider,
+    content: &str,
+    prompt: &str,
+    cancel: CancellationToken,
+) -> Result<String, String> {
+    summarize_with_stream(provider, content, prompt, cancel, None).await
 }
 pub async fn fill_excel(
     provider: &Provider,
@@ -1104,11 +1263,12 @@ pub async fn fill_excel(
         }) => result.map_err(|_| "Excel AI 填表超时，请重试".to_string())?,
     }
 }
-pub async fn git_commit_message(
+pub async fn git_commit_message_with_stream<'a>(
     provider: &Provider,
     content: &str,
     prompt: &str,
     cancel: CancellationToken,
+    on_chunk: Option<&'a (dyn Fn(&str) + Send + Sync)>,
 ) -> Result<String, String> {
     if content.trim().is_empty() || content.len() > 200_000 {
         return Err("暂存区内容为空或超过 200 KB，请分批暂存后再生成提交说明".into());
@@ -1123,9 +1283,13 @@ pub async fn git_commit_message(
         _ = cancel.cancelled() => return Err("已取消生成 Git 提交说明".into()),
         result = timeout(Duration::from_secs(180), async {
             match provider.kind {
-                ProviderKind::Http => http_completion(provider, &system, content).await,
-                ProviderKind::Anthropic => anthropic_completion(provider, &system, content).await,
-                _ => cli_completion(provider, &format!("{system}\n\n<staged_changes>\n{content}\n</staged_changes>"), "Git 提交说明").await,
+                ProviderKind::Http => http_completion_with_stream(provider, &system, content, on_chunk).await,
+                ProviderKind::Anthropic => anthropic_completion_with_stream(provider, &system, content, on_chunk).await,
+                _ => {
+                    let text = cli_completion(provider, &format!("{system}\n\n<staged_changes>\n{content}\n</staged_changes>"), "Git 提交说明").await?;
+                    if let Some(cb) = on_chunk { cb(&text); }
+                    Ok(text)
+                }
             }
         }) => result.map_err(|_| "AI 提交说明生成超时，请重试".to_string())??,
     };
@@ -1137,6 +1301,73 @@ pub async fn git_commit_message(
         return Err("AI 返回的提交说明为空或超过 20 KB，请修改提示词后重试".into());
     }
     Ok(text.into())
+}
+#[allow(dead_code)]
+pub async fn git_commit_message(
+    provider: &Provider,
+    content: &str,
+    prompt: &str,
+    cancel: CancellationToken,
+) -> Result<String, String> {
+    git_commit_message_with_stream(provider, content, prompt, cancel, None).await
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TestProviderResult {
+    pub success: bool,
+    pub latency_ms: u64,
+    pub reply: String,
+    pub error: Option<String>,
+}
+
+pub async fn test_provider(provider: &Provider) -> Result<TestProviderResult, String> {
+    if provider.name.trim().is_empty() {
+        return Err("提供商名称不能为空".into());
+    }
+    match provider.kind {
+        ProviderKind::Http | ProviderKind::Anthropic => {
+            if provider.base_url.trim().is_empty() {
+                return Err("接口地址（Base URL）不能为空".into());
+            }
+        }
+        _ => {}
+    }
+
+    let start = std::time::Instant::now();
+    let prompt = "请仅回复一个英文单词：pong";
+    let system = "你是一个健康检查连通性测试助手。请仅回复一个英文单词：pong";
+
+    let result = timeout(Duration::from_secs(15), async {
+        match provider.kind {
+            ProviderKind::Http => http_completion_with_stream(provider, system, prompt, None).await,
+            ProviderKind::Anthropic => anthropic_completion_with_stream(provider, system, prompt, None).await,
+            _ => cli_completion(provider, &format!("{system}\n\n{prompt}"), "连通性测试").await,
+        }
+    })
+    .await;
+
+    let latency_ms = start.elapsed().as_millis() as u64;
+    match result {
+        Ok(Ok(reply)) => Ok(TestProviderResult {
+            success: true,
+            latency_ms,
+            reply: reply.trim().to_string(),
+            error: None,
+        }),
+        Ok(Err(err)) => Ok(TestProviderResult {
+            success: false,
+            latency_ms,
+            reply: String::new(),
+            error: Some(err),
+        }),
+        Err(_) => Ok(TestProviderResult {
+            success: false,
+            latency_ms,
+            reply: String::new(),
+            error: Some("请求超时（超过 15 秒），请检查网络连接或接口地址".into()),
+        }),
+    }
 }
 
 #[cfg(test)]

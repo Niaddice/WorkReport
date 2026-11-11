@@ -59,7 +59,7 @@
   border-radius: 5px;
   background: var(--skin-accent-fill);
   color: var(--skin-on-accent);
-  font-size: 12px;
+  font-size: var(--text-small);
   font-weight: 700;
 }
 .app-toolbar .titlebar-app-name {
@@ -436,6 +436,41 @@
   font-size: var(--text-subtitle);
 }
 
+/* 模块自己的设置弹窗沿用工具窗口外观，只承载当前模块的设置。 */
+:root .app-shell .module-settings-dialog {
+  border-radius: 10px;
+  background: var(--desktop-tool);
+}
+.app-shell .module-settings-sidebar {
+  background: var(--desktop-tool);
+}
+.app-shell .module-settings-sidebar-header {
+  min-height: 36px;
+  background: var(--desktop-frame);
+}
+.app-shell .module-settings-sidebar-footer {
+  background: var(--desktop-tool);
+}
+.app-shell .module-settings-main {
+  background: var(--skin-surface);
+}
+:root .app-shell .module-settings-heading {
+  min-height: 36px;
+  padding: 4px 8px 4px 14px;
+  background: var(--desktop-frame);
+}
+.app-shell .module-settings-heading h2 {
+  font-size: var(--text-body);
+}
+.app-shell .module-settings-footer {
+  background: var(--desktop-tool);
+}
+.app-shell .module-settings-body :is(input:not([type='radio']):not([type='checkbox']):not([type='range']), textarea),
+.app-shell .module-settings-body .app-select-trigger {
+  border-radius: var(--desktop-control-radius);
+  box-shadow: none;
+}
+
 /* 偏好设置使用 IDE 式侧栏与连续表单，保留现有分类导航及保存行为。 */
 :root .app-shell .settings-dialog {
   border-radius: 10px;
@@ -540,38 +575,42 @@
 }
 .app-shell .settings-content-heading p {
   margin-top: 4px;
-  font-size: var(--text-small);
+  font-size: var(--text-body);
+  line-height: 1.6;
 }
 .app-shell .settings-section {
-  padding: 0 0 18px;
+  padding: 0 0 28px;
   border: 0;
   border-radius: 0;
   background: transparent;
   box-shadow: none;
 }
 .app-shell .settings-section + .settings-section {
-  padding-top: 18px;
+  padding-top: 28px;
   border-top: 1px solid var(--skin-border);
 }
 .app-shell .settings-section-heading {
-  gap: 12px;
-  margin-bottom: 14px;
+  gap: 14px;
+  margin-bottom: 20px;
 }
 .app-shell .settings-section-heading :is(h2, h3) {
   font-size: var(--text-subtitle);
+  font-weight: 600;
 }
 .app-shell .appearance-setting-row {
   display: grid;
   grid-template-columns: minmax(200px, 1fr) minmax(180px, 280px);
-  gap: 12px 20px;
+  align-items: center;
+  gap: 16px 24px;
   max-width: 840px;
-  min-height: 86px;
-  padding-block: 12px;
+  min-height: 56px;
+  padding-block: 18px;
   border-bottom: 1px solid var(--skin-border);
 }
 .app-shell .appearance-setting-copy :is(h3, h4) {
   margin-bottom: 4px;
   font-size: var(--text-body);
+  font-weight: 500;
 }
 .app-shell .appearance-setting-copy p {
   font-size: var(--text-small);
@@ -582,23 +621,49 @@
 }
 .app-shell .appearance-rail-actions {
   justify-self: start;
-  border: 0;
-  border-radius: 6px;
+  border: 1px solid var(--skin-border);
+  border-radius: 8px;
   background: var(--desktop-tool);
+  padding: 2px;
+  gap: 2px;
   box-shadow: none;
 }
 .app-shell .appearance-rail-option {
-  border-radius: 5px;
+  border-radius: 6px;
+  font-size: var(--text-small);
+}
+.app-shell .appearance-rail-option.is-active {
+  background: var(--skin-surface);
+  color: var(--skin-accent);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
 }
 .app-shell .appearance-preview {
   max-width: 840px;
-  margin-top: 16px;
-  padding: 14px;
-  border-radius: 6px;
+  margin-top: 24px;
+  padding: 16px 18px;
+  border-radius: 8px;
   background: var(--desktop-tool);
 }
 .app-shell .appearance-preview > span {
   margin-bottom: 8px;
+}
+.app-shell .workspace-backup-card {
+  margin-bottom: 20px;
+}
+.app-shell .workspace-storage-subnote {
+  margin: 0 0 22px;
+}
+.app-shell .provider-list {
+  gap: 16px;
+}
+.app-shell .custom-ai-add {
+  margin-bottom: 20px;
+}
+.app-shell .settings-details-list {
+  margin-top: 20px;
+}
+.app-shell .settings-details-list > div {
+  padding-block: 10px;
 }
 :root .app-shell .settings-savebar {
   background: var(--desktop-tool);
@@ -618,10 +683,20 @@
   border-radius: var(--desktop-control-radius);
   min-height: 28px;
 }
-.app-shell .settings-page :is(input:not([type='radio']):not([type='checkbox']), textarea),
+.app-shell .settings-save-kbd {
+  height: 16px;
+  padding: 0 4px;
+  font-size: var(--text-micro);
+  border-radius: 3px;
+}
+.app-shell .setting-secret-input-wrap input {
+  padding-right: 60px;
+}
+.app-shell .settings-page :is(input:not([type='radio']):not([type='checkbox']):not([type='range']), textarea),
 :root .app-select-trigger {
   border-radius: var(--desktop-control-radius);
   box-shadow: none;
+  font-size: var(--text-body);
 }
 .app-shell .settings-page .app-select-trigger {
   border-radius: var(--desktop-control-radius);

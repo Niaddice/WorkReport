@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { isTauri } from '@tauri-apps/api/core'
-import { PhArrowsLeftRight, PhDatabase, PhPlugsConnected } from '@phosphor-icons/vue'
+import { PhArrowsLeftRight, PhDatabase, PhEye, PhEyeSlash, PhPlugsConnected } from '@phosphor-icons/vue'
+import SettingHint from './SettingHint.vue'
 import {
   cloneDatabaseSettings,
   databaseApi,
@@ -50,6 +51,7 @@ const tlsOptions = [
   { value: 'verifyFull', label: 'TLS 并校验证书与主机' },
   { value: 'disabled', label: '不使用 TLS' },
 ]
+const showPassword = ref(false)
 const pendingAction = ref<DatabaseTransferAction | null>(null)
 const conflictPolicy = ref<DatabaseConflictPolicy>('abort')
 const confirmOverwrite = ref(false)
@@ -232,10 +234,10 @@ defineExpose({ validate })
   <div class="database-settings">
     <div class="database-enable-row">
       <div class="database-enable-copy">
-        <h3 id="database-enabled-label">启用数据库存储</h3>
-        <p id="database-enabled-description">
-          为日报增加数据库备份，默认在当前工作空间创建 SQLite，并同时保留日报文件。
-        </p>
+        <div class="setting-field-header">
+          <h3 id="database-enabled-label">启用数据库存储</h3>
+          <SettingHint text="为日报增加数据库备份，默认在当前工作空间创建 SQLite，并同时保留日报文件。" />
+        </div>
       </div>
       <button
         type="button"
@@ -243,7 +245,6 @@ defineExpose({ validate })
         role="switch"
         :aria-checked="draft.enabled"
         aria-labelledby="database-enabled-label"
-        aria-describedby="database-enabled-description"
         :disabled="formBusy || !workspacePath"
         @click="update({ enabled: !draft.enabled })"
       >
@@ -279,7 +280,12 @@ defineExpose({ validate })
 
             <Transition name="settings-panel" mode="out-in">
               <div v-if="draft.engine === 'sqlite'" key="sqlite" class="database-field">
-                <label for="database-sqlite-path">SQLite 文件</label>
+                <div class="setting-field-header">
+                  <label for="database-sqlite-path">SQLite 文件</label>
+                  <SettingHint
+                    text="填写工作空间内的相对路径，支持 .sqlite、.sqlite3 或 .db；留空使用 workreport.sqlite。保存设置后自动创建数据库。"
+                  />
+                </div>
                 <input
                   id="database-sqlite-path"
                   :value="draft.sqlitePath"
@@ -287,13 +293,8 @@ defineExpose({ validate })
                   type="text"
                   placeholder="workreport.sqlite"
                   spellcheck="false"
-                  aria-describedby="database-sqlite-hint"
                   @input="update({ sqlitePath: ($event.target as HTMLInputElement).value })"
                 />
-                <p id="database-sqlite-hint" class="field-hint">
-                  填写工作空间内的相对路径，支持 .sqlite、.sqlite3 或 .db；留空使用
-                  workreport.sqlite。保存设置后自动创建数据库。
-                </p>
                 <div class="database-location">
                   <PhDatabase :size="17" aria-hidden="true" /><span>{{ sqliteLocation }}</span>
                 </div>
@@ -313,8 +314,11 @@ defineExpose({ validate })
                   />
                 </div>
                 <div class="database-field">
-                  <label for="database-port">端口</label
-                  ><input
+                  <div class="setting-field-header">
+                    <label for="database-port">端口</label>
+                    <SettingHint :text="`0 使用默认端口 ${defaultPort}。`" />
+                  </div>
+                  <input
                     id="database-port"
                     :value="draft.port"
                     :disabled="formBusy"
@@ -323,10 +327,8 @@ defineExpose({ validate })
                     max="65535"
                     step="1"
                     :placeholder="String(defaultPort)"
-                    aria-describedby="database-port-hint"
                     @input="update({ port: Number(($event.target as HTMLInputElement).value) })"
                   />
-                  <p id="database-port-hint" class="field-hint">0 使用默认端口 {{ defaultPort }}。</p>
                 </div>
                 <div class="database-field">
                   <label for="database-name">数据库名称</label
@@ -354,21 +356,41 @@ defineExpose({ validate })
                   />
                 </div>
                 <div class="database-field">
-                  <label for="database-password">密码</label
-                  ><input
-                    id="database-password"
-                    :value="draft.password"
-                    :disabled="formBusy"
-                    type="password"
-                    placeholder="按数据库要求填写，可留空"
-                    spellcheck="false"
-                    autocomplete="new-password"
-                    @input="update({ password: ($event.target as HTMLInputElement).value })"
-                  />
+                  <label for="database-password">密码</label>
+                  <div class="setting-secret-input-wrap">
+                    <input
+                      id="database-password"
+                      :value="draft.password"
+                      :disabled="formBusy"
+                      :type="showPassword ? 'text' : 'password'"
+                      placeholder="按数据库要求填写，可留空"
+                      spellcheck="false"
+                      autocomplete="new-password"
+                      @input="update({ password: ($event.target as HTMLInputElement).value })"
+                    />
+                    <div class="setting-secret-actions">
+                      <button
+                        type="button"
+                        class="secret-action-btn"
+                        :title="showPassword ? '隐藏密码' : '显示密码'"
+                        :aria-label="showPassword ? '隐藏密码' : '显示密码'"
+                        :disabled="formBusy"
+                        @click="showPassword = !showPassword"
+                      >
+                        <PhEyeSlash v-if="showPassword" :size="14" aria-hidden="true" />
+                        <PhEye v-else :size="14" aria-hidden="true" />
+                      </button>
+                    </div>
+                  </div>
                 </div>
                 <div class="database-field">
-                  <label for="database-tls-mode">TLS 连接</label
-                  ><AppSelect
+                  <div class="setting-field-header">
+                    <label for="database-tls-mode">TLS 连接</label>
+                    <SettingHint
+                      text="请先在服务器创建数据库，并为当前用户授予建表、读取和写入权限。密码随设置保存在本机工作空间配置中。"
+                    />
+                  </div>
+                  <AppSelect
                     id="database-tls-mode"
                     :model-value="draft.tlsMode"
                     :options="tlsOptions"
@@ -376,14 +398,16 @@ defineExpose({ validate })
                     @update:model-value="update({ tlsMode: $event as DatabaseSettings['tlsMode'] })"
                   />
                 </div>
-                <p class="field-hint database-remote-hint">
-                  请先在服务器创建数据库，并为当前用户授予建表、读取和写入权限。密码随设置保存在本机工作空间配置中。
-                </p>
               </div>
             </Transition>
 
             <div class="database-field">
-              <span id="database-mode-label" class="database-field-label">日报存储方式</span>
+              <div class="setting-field-header">
+                <span id="database-mode-label" class="database-field-label">日报存储方式</span>
+                <SettingHint
+                  text="已有日报可在下方复制或迁移。数据范围为日报正文与格式，不包括工作空间配置、Excel 模板和导出文件。"
+                />
+              </div>
               <div class="database-mode-options" role="radiogroup" aria-labelledby="database-mode-label">
                 <label :class="{ selected: draft.mode === 'dual' }" class="database-mode-label"
                   ><input
@@ -410,9 +434,6 @@ defineExpose({ validate })
                   ></label
                 >
               </div>
-              <p class="field-hint">
-                已有日报可在下方复制或迁移。数据范围为日报正文与格式，不包括工作空间配置、Excel 模板和导出文件。
-              </p>
             </div>
 
             <div class="database-connection-actions database-actions">
@@ -420,17 +441,21 @@ defineExpose({ validate })
                 <PhPlugsConnected :size="17" aria-hidden="true" /><Transition name="button-label" mode="out-in"
                   ><span :key="String(testing)">{{ testing ? '正在测试…' : '测试连接' }}</span></Transition
                 ></button
-              ><span class="field-hint">{{
-                draft.engine === 'sqlite'
-                  ? '仅测试连接；SQLite 文件不存在时会创建，不保存设置。'
-                  : '使用当前输入测试，不保存设置。'
-              }}</span>
+              ><SettingHint
+                :text="
+                  draft.engine === 'sqlite'
+                    ? '仅测试连接；SQLite 文件不存在时会创建，不保存设置。'
+                    : '使用当前输入测试，不保存设置。'
+                "
+              />
             </div>
 
             <section class="database-transfer-section database-transfer" aria-labelledby="database-transfer-title">
               <header>
-                <h3 id="database-transfer-title"><PhArrowsLeftRight :size="18" aria-hidden="true" />复制与迁移</h3>
-                <p>复制日报数据；迁移会在核对成功后切换后续存储方式，保留源数据。</p>
+                <div class="setting-field-header">
+                  <h3 id="database-transfer-title"><PhArrowsLeftRight :size="18" aria-hidden="true" />复制与迁移</h3>
+                  <SettingHint text="复制日报数据；迁移会在核对成功后切换后续存储方式，保留源数据。" />
+                </div>
               </header>
               <div class="database-fields-grid">
                 <div class="database-transfer-direction database-field">

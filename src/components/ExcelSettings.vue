@@ -2,7 +2,8 @@
 import { computed, ref, watch } from 'vue'
 import { isTauri } from '@tauri-apps/api/core'
 import { open } from '@tauri-apps/plugin-dialog'
-import { PhFileXls, PhSparkle } from '@phosphor-icons/vue'
+import { PhFileXls, PhQuestion, PhSparkle } from '@phosphor-icons/vue'
+import SettingHint from './SettingHint.vue'
 import { cloneExcelSettings, RECOMMENDED_EXCEL_PROMPT, type ExcelSettings } from '../lib/useExcel'
 
 const props = defineProps<{
@@ -113,10 +114,12 @@ defineExpose({ validate })
   <div class="excel-settings">
     <div class="excel-enable-row">
       <div class="excel-enable-copy">
-        <h3 id="excel-enable-label">启用 Excel 输出</h3>
-        <p id="excel-enable-description">
-          在 Excel报告模块点击 Xls 图标，在窗口内核对或临时修改提示词，确认后调用默认 AI 整理日报并填充模板。
-        </p>
+        <div class="setting-field-header">
+          <h3 id="excel-enable-label">启用 Excel 输出</h3>
+          <SettingHint
+            text="在 Excel 报告模块点击 Xls 图标，核对或临时修改提示词，确认后调用默认 AI 整理日报并填充模板。"
+          />
+        </div>
       </div>
       <button
         type="button"
@@ -124,7 +127,6 @@ defineExpose({ validate })
         role="switch"
         :aria-checked="draft.enabled"
         aria-labelledby="excel-enable-label"
-        aria-describedby="excel-enable-description"
         :disabled="formBusy || (!draft.enabled && (!aiReady || !workspacePath))"
         @click="toggle"
       >
@@ -152,7 +154,12 @@ defineExpose({ validate })
         <div class="settings-reveal-inner">
           <div class="excel-settings-fields">
             <div class="excel-path-field">
-              <label for="excel-template">Excel 模板</label>
+              <div class="setting-field-header">
+                <label for="excel-template">Excel 模板</label>
+                <SettingHint
+                  text="生成新文件，默认沿用模板样式，按提示词调整指定区域。需要填写的公式单元格会直接替换为 AI 结果，原模板保持不变。"
+                />
+              </div>
               <div class="excel-path-control">
                 <input
                   id="excel-template"
@@ -171,14 +178,24 @@ defineExpose({ validate })
                   <PhFileXls :size="17" aria-hidden="true" />选择模板
                 </button>
               </div>
-              <p class="field-hint">
-                生成新文件，默认沿用模板样式，按提示词调整指定区域。需要填写的公式单元格会直接替换为 AI
-                结果，原模板保持不变。
-              </p>
             </div>
             <div class="generation-preference excel-prompt-field">
               <div class="excel-prompt-heading">
-                <label for="excel-output-prompt">Excel 输出提示词</label>
+                <label
+                  for="excel-output-prompt"
+                  title="说明日报整理方式和填写位置，也可要求黑色细边框、自动换行及按内容增高行高。仅对指定区域应用格式。推荐设置会替换当前提示词，保存后生效。支持单日或任意日期范围。"
+                >
+                  Excel 输出提示词
+                  <span
+                    class="setting-hint-trigger"
+                    role="img"
+                    data-tooltip="说明日报整理方式和填写位置，也可要求黑色细边框、自动换行及按内容增高行高。仅对指定区域应用格式。推荐设置会替换当前提示词，保存后生效。支持单日或任意日期范围。"
+                    title="说明日报整理方式和填写位置，也可要求黑色细边框、自动换行及按内容增高行高。仅对指定区域应用格式。推荐设置会替换当前提示词，保存后生效。支持单日或任意日期范围。"
+                    aria-label="提示：说明日报整理方式和填写位置，也可要求黑色细边框、自动换行及按内容增高行高。仅对指定区域应用格式。推荐设置会替换当前提示词，保存后生效。支持单日或任意日期范围。"
+                  >
+                    <PhQuestion :size="12" aria-hidden="true" />
+                  </span>
+                </label>
                 <button
                   type="button"
                   class="text-action"
@@ -188,24 +205,18 @@ defineExpose({ validate })
                   <PhSparkle :size="16" aria-hidden="true" />使用推荐设置
                 </button>
               </div>
-              <p id="excel-output-prompt-hint">
-                说明日报整理方式和填写位置，也可要求黑色细边框、自动换行及按内容增高行高。仅对指定区域应用格式。
-                推荐设置会替换当前提示词，点击“保存设置”后生效。
-              </p>
               <textarea
                 id="excel-output-prompt"
                 :value="draft.prompt"
                 :disabled="formBusy || !workspacePath"
                 maxlength="6000"
                 rows="5"
-                aria-describedby="excel-output-prompt-hint"
                 placeholder="使用推荐设置填入按项目分类、日期和工时的模板规则，也可输入自定义提示词。"
                 spellcheck="false"
                 @input="update({ prompt: ($event.target as HTMLTextAreaElement).value })"
               ></textarea
               ><span class="preference-count">{{ draft.prompt.length }} / 6000</span>
             </div>
-            <p class="field-hint excel-range-note">支持单日或任意日期范围，可跨周、跨月或跨年。</p>
           </div>
         </div>
       </div>

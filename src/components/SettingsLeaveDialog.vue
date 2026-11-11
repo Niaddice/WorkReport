@@ -4,7 +4,7 @@ import { PhGearSix } from '@phosphor-icons/vue'
 import { createDialogMotion } from '../lib/dialogMotion'
 
 const props = defineProps<{
-  action: 'home' | 'workspace' | 'close' | null
+  action: 'home' | 'workspace' | 'close' | 'module' | 'global' | null
   busy: boolean
   saving: boolean
   error: string
@@ -12,9 +12,16 @@ const props = defineProps<{
 const emit = defineEmits<{ cancel: []; discard: []; save: [] }>()
 const dialog = ref<HTMLDialogElement>()
 const motion = createDialogMotion(() => dialog.value)
-const target = computed(() =>
-  props.action === 'close' ? '关闭窗口' : props.action === 'workspace' ? '切换工作空间' : '返回首页',
-)
+const TARGETS = {
+  close: '关闭窗口',
+  workspace: '切换工作空间',
+  module: '关闭设置',
+  global: '前往全局偏好设置',
+  home: '返回首页',
+} as const
+const target = computed(() => TARGETS[props.action ?? 'home'])
+/** 模块设置弹窗内的实例与全局设置页的实例分属不同作用域。 */
+const scope = computed(() => (props.action === 'module' || props.action === 'global' ? 'module' : 'page'))
 function open() {
   motion.open()
 }
@@ -34,7 +41,8 @@ onBeforeUnmount(() => motion.dispose())
     tabindex="-1"
     role="alertdialog"
     aria-modal="true"
-    class="confirmation-dialog settings-leave-dialog"
+    class="confirmation-dialog"
+    :class="scope === 'module' ? 'module-settings-leave-dialog' : 'settings-leave-dialog'"
     aria-labelledby="settings-leave-title"
     aria-describedby="settings-leave-description"
     @cancel.prevent="!busy && !saving && emit('cancel')"

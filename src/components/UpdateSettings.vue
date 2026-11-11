@@ -4,6 +4,7 @@ import dayjs from 'dayjs'
 import { PhArrowClockwise, PhDownloadSimple } from '@phosphor-icons/vue'
 import { UPDATE_CHANNEL_OPTIONS, type AppUpdater } from '../lib/useUpdater'
 import AppSelect from './AppSelect.vue'
+import SettingHint from './SettingHint.vue'
 import UpdateDownloadFallback from './UpdateDownloadFallback.vue'
 
 const props = defineProps<{ updater: AppUpdater }>()
@@ -40,7 +41,16 @@ const statusText = computed(() => {
       </button>
     </div>
     <div class="update-channel-control">
-      <label for="update-channel">更新渠道</label>
+      <div class="setting-field-header">
+        <label for="update-channel">更新渠道</label>
+        <SettingHint
+          :text="
+            updater.channel.value === 'dev'
+              ? '接收 dev 分支发布的开发版，包含较新的功能和修复。'
+              : '接收 main 分支发布的正式版。'
+          "
+        />
+      </div>
       <AppSelect
         id="update-channel"
         :model-value="updater.channel.value"
@@ -48,13 +58,6 @@ const statusText = computed(() => {
         :disabled="updater.checking.value || updater.busy.value || updater.status.value === 'installed'"
         @update:model-value="updater.setChannel"
       />
-      <p>
-        {{
-          updater.channel.value === 'dev'
-            ? '接收 dev 分支发布的开发版，包含较新的功能和修复。'
-            : '接收 main 分支发布的正式版。'
-        }}
-      </p>
     </div>
     <button v-if="updater.release.value" type="button" class="text-action" @click="updater.open()">
       <PhDownloadSimple :size="16" aria-hidden="true" />查看更新说明

@@ -3,11 +3,17 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { DOMWrapper, flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 
 const { invoke, desktop } = vi.hoisted(() => ({ invoke: vi.fn(), desktop: { value: true } }))
-vi.mock('@tauri-apps/api/core', () => ({ invoke, isTauri: () => desktop.value }))
+vi.mock('@tauri-apps/api/core', () => {
+  class MockChannel {
+    onmessage: (chunk: unknown) => void = () => {}
+  }
+  return { invoke, isTauri: () => desktop.value, Channel: MockChannel }
+})
 
 import { useGitWorkbench, type GitHistoryCommit, type GitRepositoryState } from '../src/lib/useGitWorkbench'
 import GitWorkbench from '../src/components/GitWorkbench.vue'
 import type { GitRepository } from '../src/lib/useGit'
+import { clearMessages, messages } from '../src/lib/messages'
 
 const repositories: GitRepository[] = [
   { id: 'one', name: '项目一', path: '/tmp/project-one', author: '', branch: '' },
@@ -93,6 +99,7 @@ async function mountReady(repository = state()) {
 beforeEach(() => {
   invoke.mockReset()
   desktop.value = true
+  clearMessages()
 })
 
 describe('multi-repository workbench', () => {
@@ -314,8 +321,33 @@ describe('AI commit messages', () => {
         workspacePath: '/tmp/workspace',
         repositoryId: 'one',
         requestId: expect.any(String),
+        onChunk: expect.any(Object),
       })
       expect(button(wrapper, '提交').attributes('disabled')).toBeUndefined()
+    } finally {
+      wrapper.unmount()
+    }
+  })
+
+  it('streams commit message chunks incrementally into the textarea and displays the final result', async () => {
+    const wrapper = await mountReady()
+    invoke.mockImplementation(async (command, args) => {
+      if (command === 'generate_git_commit_message') {
+        const onChunk = (args as { onChunk?: { onmessage?: (chunk: string) => void } }).onChunk
+        if (onChunk?.onmessage) {
+          onChunk.onmessage('feat: ')
+          onChunk.onmessage('流式生成')
+          onChunk.onmessage('完成')
+        }
+        return 'feat: 流式生成完成'
+      }
+      return state()
+    })
+    try {
+      await wrapper.get('[aria-label="AI 生成提交说明"]').trigger('click')
+      await flushPromises()
+      expect(wrapper.get<HTMLTextAreaElement>('[aria-label="提交说明"]').element.value).toBe('feat: 流式生成完成')
+      expect(messages.value.at(-1)?.text).toContain('AI 提交说明已生成')
     } finally {
       wrapper.unmount()
     }
@@ -335,7 +367,7 @@ describe('AI commit messages', () => {
       pending.resolve('AI 返回的旧说明')
       await flushPromises()
       expect(wrapper.get<HTMLTextAreaElement>('[aria-label="提交说明"]').element.value).toBe('手动修改后的提交说明')
-      expect(wrapper.text()).toContain('已保留你的修改')
+      expect(messages.value.at(-1)?.text).toContain('已保留你的修改')
     } finally {
       wrapper.unmount()
     }
@@ -838,6 +870,63 @@ describe('Git workbench controls', () => {
     wrapper.unmount()
   })
 
+  it('allows staging and unstaging individual hunks in file diff', async () => {
+    const diffWithHunk = {
+      text: [
+        'diff --git a/partially staged.txt b/partially staged.txt',
+        '--- a/partially staged.txt',
+        '+++ b/partially staged.txt',
+        '@@ -1,3 +1,3 @@',
+        ' line 1',
+        '-line 2',
+        '+line 2 modified',
+        ' line 3',
+      ].join('\n'),
+      truncated: false,
+    }
+    const wrapper = await mountReady()
+    invoke.mockImplementation(async (command: string) => {
+      if (command === 'read_git_repository') return state()
+      if (command === 'read_git_diff') return diffWithHunk
+      if (command === 'git_repository_action') return '操作完成'
+      return undefined
+    })
+
+    // Click unstaged file to show unstaged diff
+    await wrapper.get('[aria-label="查看工作区差异 partially staged.txt"]').trigger('click')
+    await flushPromises()
+
+    // The hunk action button should say "暂存此块"
+    const hunkBtn = wrapper.get('.hunk-action-btn')
+    expect(hunkBtn.text()).toBe('暂存此块')
+    await hunkBtn.trigger('click')
+    await flushPromises()
+
+    expect(actionCalls()[0]![1]).toMatchObject({
+      request: {
+        operation: 'stageHunk',
+        patch: expect.stringContaining('+line 2 modified'),
+      },
+    })
+
+    // Now click staged file to show staged diff
+    await wrapper.get('[aria-label="查看暂存差异 partially staged.txt"]').trigger('click')
+    await flushPromises()
+
+    const unstageHunkBtn = wrapper.get('.hunk-action-btn')
+    expect(unstageHunkBtn.text()).toBe('取消暂存')
+    await unstageHunkBtn.trigger('click')
+    await flushPromises()
+
+    expect(actionCalls()[1]![1]).toMatchObject({
+      request: {
+        operation: 'unstageHunk',
+        patch: expect.stringContaining('+line 2 modified'),
+      },
+    })
+    wrapper.unmount()
+  })
+
   it('shows staged and unstaged versions separately and commits only the staged content', async () => {
     const wrapper = await mountReady()
     expect(wrapper.text()).toContain('partially staged.txt')
@@ -973,7 +1062,7 @@ describe('Git workbench controls', () => {
       })
       expect(wrapper.find('[aria-label="Git 远程认证"]').exists()).toBe(false)
       expect(wrapper.text()).not.toContain('fetch-test-token')
-      expect(wrapper.text()).toContain('获取完成')
+      expect(messages.value.at(-1)?.text).toContain('获取完成')
     } finally {
       wrapper.unmount()
     }
@@ -1029,7 +1118,7 @@ describe('Git workbench controls', () => {
       save: true,
     })
     expect(wrapper.text()).not.toContain('saved-test-token')
-    expect(wrapper.text()).toContain('已加密保存到本机')
+    expect(messages.value.at(-1)?.text).toContain('已加密保存到本机')
     wrapper.unmount()
   })
 
@@ -1188,7 +1277,7 @@ describe('GitHub browser authorization retries', () => {
       expect(actionCalls().map(([, args]) => args.request.operation)).toEqual([operation, operation])
       expect(actionCalls().at(-1)![1].request.credentials).toBeUndefined()
       expect(wrapper.find('[aria-label="Git 远程认证"]').exists()).toBe(false)
-      expect(wrapper.text()).toContain('GitHub 操作完成')
+      expect(messages.value.at(-1)?.text).toContain('GitHub 操作完成')
     } finally {
       wrapper.unmount()
       vi.useRealTimers()
@@ -1312,6 +1401,160 @@ describe('Git workbench layout', () => {
       await button(wrapper, '清空选择').trigger('click')
       expect(wrapper.find('.commit-selection-bar').exists()).toBe(false)
       expect(actionCalls()).toHaveLength(0)
+    } finally {
+      wrapper.unmount()
+    }
+  })
+
+  it('supports amend commit and undo last commit', async () => {
+    const wrapper = await mountReady()
+    try {
+      const amendCheckbox = wrapper.get<HTMLInputElement>('.commit-amend-label input')
+      expect(amendCheckbox.element.checked).toBe(false)
+      await amendCheckbox.setValue(true)
+      expect(wrapper.get<HTMLButtonElement>('.commit-primary').text()).toContain('Amend 提交')
+
+      await wrapper.get('[aria-label="提交说明"]').setValue('feat: amended feature message')
+      await wrapper.get('.commit-primary').trigger('click')
+      await flushPromises()
+
+      const amendCall = actionCalls().find((call) => call[1]?.request?.operation === 'commitAmend')
+      expect(amendCall).toBeDefined()
+      expect(amendCall?.[1]?.request?.message).toBe('feat: amended feature message')
+
+      // Test undo commit button
+      const undoBtn = wrapper.get('.undo-commit-btn')
+      await undoBtn.trigger('click')
+      await flushPromises()
+      expect(wrapper.find('[role="alertdialog"]').exists()).toBe(true)
+
+      // Confirm undo
+      await button(wrapper, '确认操作').trigger('click')
+      await flushPromises()
+      const undoCall = actionCalls().find((call) => call[1]?.request?.operation === 'undoCommit')
+      expect(undoCall).toBeDefined()
+    } finally {
+      wrapper.unmount()
+    }
+  })
+
+  it('allows discarding individual hunks in unstaged diff with confirmation', async () => {
+    const diffWithHunk = {
+      text: [
+        'diff --git a/partially staged.txt b/partially staged.txt',
+        '--- a/partially staged.txt',
+        '+++ b/partially staged.txt',
+        '@@ -1,3 +1,3 @@',
+        ' line 1',
+        '-line 2',
+        '+line 2 modified',
+        ' line 3',
+      ].join('\n'),
+      truncated: false,
+    }
+    const wrapper = await mountReady()
+    try {
+      invoke.mockImplementation(async (command: string) => {
+        if (command === 'read_git_repository') return state()
+        if (command === 'read_git_diff') return diffWithHunk
+        if (command === 'git_repository_action') return '操作完成'
+        return undefined
+      })
+
+      // Click unstaged file to show unstaged diff
+      await wrapper.get('[aria-label="查看工作区差异 partially staged.txt"]').trigger('click')
+      await flushPromises()
+
+      const discardHunkBtn = wrapper.get('.hunk-action-btn.danger')
+      expect(discardHunkBtn.text()).toBe('丢弃此块')
+      await discardHunkBtn.trigger('click')
+      await flushPromises()
+
+      // Should open confirmation dialog
+      expect(wrapper.find('[role="alertdialog"]').text()).toContain('丢弃此代码块？')
+
+      // Confirm discard
+      await button(wrapper, '确认操作').trigger('click')
+      await flushPromises()
+
+      expect(actionCalls()[0]![1]).toMatchObject({
+        request: {
+          operation: 'discardHunk',
+          patch: expect.stringContaining('+line 2 modified'),
+        },
+      })
+    } finally {
+      wrapper.unmount()
+    }
+  })
+
+  it('previews stash diff on selection with stats and supports responsive navigation', async () => {
+    const stashDiff = {
+      text: [
+        'diff --git a/file.txt b/file.txt',
+        '--- a/file.txt',
+        '+++ b/file.txt',
+        '@@ -1,2 +1,3 @@',
+        ' line 1',
+        '+line 1.5 in stash',
+        ' line 2',
+      ].join('\n'),
+      truncated: false,
+    }
+    const wrapper = await mountReady()
+    try {
+      invoke.mockImplementation(async (command: string, args: { commit?: string }) => {
+        if (command === 'read_git_repository') return state()
+        if (command === 'read_git_diff')
+          return args?.commit === 'stash@{0}' ? stashDiff : { text: '', truncated: false }
+        if (command === 'git_repository_action') return '操作完成'
+        return undefined
+      })
+
+      await button(wrapper, 'Stash').trigger('click')
+      await flushPromises()
+
+      expect(wrapper.find('.diff-placeholder').text()).toContain('选择 Stash 查看差异')
+
+      const stashRow = wrapper.get('.stash-row')
+      await stashRow.trigger('click')
+      await flushPromises()
+
+      const diffCalls = invoke.mock.calls.filter(([cmd]) => cmd === 'read_git_diff')
+      expect(diffCalls.some((call) => call[1]?.commit === 'stash@{0}')).toBe(true)
+
+      expect(wrapper.find('.diff-pane h4').text()).toContain('stash@{0}')
+      expect(wrapper.find('.diff-stats').text()).toContain('+1')
+      expect(wrapper.find('.diff-content').text()).toContain('line 1.5 in stash')
+
+      const backBtn = wrapper.get('.compact-back')
+      expect(backBtn.attributes('aria-label')).toBe('返回 Stash 列表')
+      await backBtn.trigger('click')
+      await flushPromises()
+      expect(wrapper.find('.stashes-split').classes()).not.toContain('show-diff')
+    } finally {
+      wrapper.unmount()
+    }
+  })
+
+  it('displays ahead and behind badges and executes batch fetch across repositories', async () => {
+    const wrapper = await mountReady()
+    try {
+      expect(wrapper.find('.repo-badge.ahead').text()).toBe('↑1')
+      expect(wrapper.find('.repo-badge.behind').text()).toBe('↓2')
+
+      const batchFetchBtn = wrapper.get('.batch-fetch-btn')
+      expect(batchFetchBtn.text()).toContain('全部 Fetch')
+
+      await batchFetchBtn.trigger('click')
+      await flushPromises()
+
+      const fetchCalls = actionCalls().filter((call) => call[1]?.request?.operation === 'fetch')
+      expect(fetchCalls.length).toBeGreaterThanOrEqual(2)
+      expect(fetchCalls.some((call) => call[1]?.repositoryId === 'one')).toBe(true)
+      expect(fetchCalls.some((call) => call[1]?.repositoryId === 'two')).toBe(true)
+
+      expect(messages.value.at(-1)?.text).toContain('已完成全部 2 个仓库的远端更新同步')
     } finally {
       wrapper.unmount()
     }

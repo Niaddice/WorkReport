@@ -1,28 +1,34 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from 'vue'
 import {
-  PhChatText,
-  PhFolderOpen,
-  PhHardDrives,
-  PhSparkle,
-  PhMonitor,
-  PhMinus,
-  PhPlus,
-  PhFileXls,
-  PhFileText,
-  PhFloppyDisk,
-  PhDatabase,
-  PhCalendarCheck,
-  PhGitBranch,
+  PhArchive,
   PhArrowCircleDown,
+  PhDatabase,
+  PhFloppyDisk,
+  PhFolderOpen,
   PhGlobe,
+  PhHardDrives,
+  PhMinus,
+  PhMonitor,
+  PhPlus,
+  PhSparkle,
+  PhCircleNotch,
+  PhCheck,
+  PhCopy,
+  PhEye,
+  PhEyeSlash,
+  PhX,
 } from '@phosphor-icons/vue'
-import { aiApi, type AiProvider, type DetectedCli } from '../lib/ai'
-import type { Workspace } from '../lib/workspace'
+import { isMacPlatform } from '../lib/shortcuts'
+import { aiApi, aiSettingsReady, type AiProvider, type DetectedCli, type TestProviderResult } from '../lib/ai'
+import { api, type Entry, type Workspace } from '../lib/workspace'
 import { useSettingsDraft, type WorkspaceSettings } from '../lib/settingsDraft'
 import { pushMessage } from '../lib/messages'
 import ModelPicker from './ModelPicker.vue'
 import CliModelPicker from './CliModelPicker.vue'
+import BackupRestoreDialog from './BackupRestoreDialog.vue'
+import SettingHint from './SettingHint.vue'
+import type { RestoreResult } from '../lib/backupMigration'
 import { APPEARANCE_SCALES, DEFAULT_APPEARANCE_SCALE } from '../lib/useAppearance'
 import {
   DEFAULT_RAIL_HOLD_MS,
@@ -31,24 +37,13 @@ import {
   RAIL_HOLD_STEP_MS,
   normalizeRailHoldMs,
 } from '../lib/railHoldSettings'
-import ExcelSettings from './ExcelSettings.vue'
-import SummaryOutputSettings from './SummaryOutputSettings.vue'
-import DirectorySettings from './DirectorySettings.vue'
-import { cloneFileSettings } from '../lib/fileSettings'
 import DatabaseSettings from './DatabaseSettings.vue'
 import AppSelect from './AppSelect.vue'
-import {
-  clampHistoryLimit,
-  MAX_HISTORY_LIMIT_BYTES,
-  MIN_HISTORY_LIMIT_BYTES,
-  type DatabaseTransferResult,
-} from '../lib/database'
-import HolidaySettings from './HolidaySettings.vue'
-import type { HolidayState } from '../lib/holidays'
-import GitSettings from './GitSettings.vue'
+import type { DatabaseTransferResult } from '../lib/database'
 import UpdateSettings from './UpdateSettings.vue'
 import ProxySettings from './ProxySettings.vue'
 import type { AppUpdater } from '../lib/useUpdater'
+import type { GlobalSettingsSection } from '../lib/settingsSections'
 
 const props = defineProps<{
   workspace: Workspace | null
@@ -60,11 +55,6 @@ const props = defineProps<{
   beforeDatabaseTransfer: () => Promise<boolean>
   error: string
   save: (settings: WorkspaceSettings) => Promise<boolean>
-  holidays: HolidayState
-  holidayLoading: boolean
-  holidaySyncing: boolean
-  holidayError: string
-  currentYear: number
   updater?: AppUpdater
 }>()
 const emit = defineEmits<{
@@ -72,7 +62,6 @@ const emit = defineEmits<{
   workspace: []
   databaseBusy: [value: boolean]
   databaseTransferred: [result: DatabaseTransferResult]
-  syncHolidays: [year: number]
 }>()
 const {
   draft,
@@ -98,6 +87,29 @@ const busy = computed(
     (proxyForm.value?.loading ?? false) ||
     (proxyForm.value?.saving ?? false),
 )
+const isMac = isMacPlatform()
+const visibleKeyProviderIds = ref<Record<string, boolean>>({})
+function toggleKeyVisibility(providerId: string) {
+  visibleKeyProviderIds.value[providerId] = !visibleKeyProviderIds.value[providerId]
+}
+const copiedKeyProviderId = ref<string | null>(null)
+let copyTimer: ReturnType<typeof setTimeout> | null = null
+
+async function copyApiKey(apiKey: string, providerId: string) {
+  if (!apiKey) return
+  try {
+    await navigator.clipboard.writeText(apiKey)
+    copiedKeyProviderId.value = providerId
+    if (copyTimer) clearTimeout(copyTimer)
+    copyTimer = setTimeout(() => {
+      copiedKeyProviderId.value = null
+    }, 1500)
+    pushMessage({ tone: 'success', text: '已复制 API Key 到剪贴板' })
+  } catch {
+    pushMessage({ tone: 'error', text: '复制失败，请手动选择复制' })
+  }
+}
+
 const railHoldOptions = [
   { key: 'railHoldDelayMs', label: '长按等待时间', description: '按住已打开模块的功能按钮，等待此时长后显示进度圈。' },
   {
@@ -112,43 +124,14 @@ function onRailHoldInput(event: Event, key: (typeof railHoldOptions)[number]['ke
   draft.value.appearance[key] = normalizeRailHoldMs(milliseconds)
 }
 const databaseForm = ref<InstanceType<typeof DatabaseSettings>>()
-const excelForm = ref<InstanceType<typeof ExcelSettings>>()
-const summaryForm = ref<InstanceType<typeof SummaryOutputSettings>>()
-const directoryForm = ref<InstanceType<typeof DirectorySettings>>()
-const filesDraft = computed({
-  get: () => cloneFileSettings(draft.value.files, draft.value.summary.outputDirectory),
-  set: (value) => {
-    draft.value.files = value
-  },
-})
-const gitForm = ref<InstanceType<typeof GitSettings>>()
 const validationError = ref('')
-const historyLimitGb = computed(() => Math.round(draft.value.database.historyLimitBytes / (1024 * 1024 * 1024)))
-const historyLimitMinGb = MIN_HISTORY_LIMIT_BYTES / (1024 * 1024 * 1024)
-const historyLimitMaxGb = MAX_HISTORY_LIMIT_BYTES / (1024 * 1024 * 1024)
-function onHistoryLimitInput(event: Event) {
-  const value = Number((event.target as HTMLInputElement).value)
-  draft.value.database.historyLimitBytes = clampHistoryLimit(
-    Number.isFinite(value) ? value * 1024 * 1024 * 1024 : Number.NaN,
-  )
-}
 const saveError = computed(() => validationError.value || props.error || draftError.value || proxyForm.value?.error)
-const aiReady = computed(() => {
-  const provider = draft.value.ai.providers.find((item) => item.id === draft.value.ai.defaultProviderId)
-  if (!provider || !provider.name.trim()) return false
-  if (provider.kind !== 'http' && provider.kind !== 'anthropic') return provider.executable.trim().startsWith('/')
-  try {
-    const url = new URL(provider.baseUrl)
-    return !!provider.model.trim() && ['http:', 'https:'].includes(url.protocol) && !!url.hostname
-  } catch {
-    return false
-  }
-})
+const aiReady = computed(() => aiSettingsReady(draft.value.ai))
 function validateAi(): boolean {
   const ai = draft.value.ai
   if (ai.generationPreference.length > 2000 || ai.summaryPrompt.length > 2000) {
     validationError.value = 'AI 提示词不能超过 2000 字。'
-    navigate('prompts')
+    navigate('ai')
     return false
   }
   for (const provider of ai.providers) {
@@ -205,23 +188,6 @@ async function performSave(): Promise<boolean> {
     return false
   }
   if (!validateAi()) return false
-  if (gitForm.value && !gitForm.value.validate()) {
-    validationError.value = '请检查 Git 配置。'
-    await navigate('git')
-    gitForm.value?.focusInvalid()
-    return false
-  }
-  if (directoryForm.value && !directoryForm.value.validate()) {
-    validationError.value = '请检查保存目录和文件名规则。'
-    await navigate('directories')
-    directoryForm.value?.focusInvalid()
-    return false
-  }
-  if (excelForm.value && !excelForm.value.validate()) {
-    validationError.value = '请检查 Excel 输出配置。'
-    navigate('excel')
-    return false
-  }
   const savedOk = await saveDraft()
   return savedOk ? saveProxy() : false
 }
@@ -250,92 +216,82 @@ const presetOptions = [
   { value: 'deepseek', label: 'DeepSeek' },
   { value: 'gemini', label: 'Gemini' },
   { value: 'anthropic', label: 'Anthropic' },
+  { value: 'ollama', label: 'Ollama (本地)' },
+  { value: 'lmstudio', label: 'LM Studio (本地)' },
   { value: 'cursor', label: 'Cursor CLI' },
   { value: 'grok', label: 'Grok Build CLI' },
   { value: 'custom', label: '自定义 OpenAI 兼容' },
 ]
 const pageRoot = ref<HTMLElement>()
 const contentHeading = ref<HTMLElement>()
-type SettingsSection =
-  | 'workspace'
-  | 'directories'
-  | 'appearance'
-  | 'holidays'
-  | 'ai'
-  | 'prompts'
-  | 'summary'
-  | 'excel'
-  | 'database'
-  | 'git'
-  | 'updates'
-  | 'proxy'
 const navigation = [
   {
     label: '基础设置',
     items: [
       { id: 'workspace', title: '工作空间', description: '日报与配置的保存位置', icon: PhFolderOpen },
-      { id: 'directories', title: '目录设置', description: '保存目录与日期文件名规则', icon: PhFolderOpen },
       { id: 'appearance', title: '外观与字体', description: '字号、功能栏与长按关闭', icon: PhMonitor },
-      { id: 'holidays', title: '放假信息', description: '手动同步放假与调休安排', icon: PhCalendarCheck },
-      { id: 'database', title: '数据存储', description: '数据库备份、复制与迁移', icon: PhDatabase },
-      { id: 'git', title: 'Git 配置', description: '项目仓库与 AI 提交说明', icon: PhGitBranch },
+      { id: 'database', title: '数据存储', description: '工作空间备份迁移、数据库存储', icon: PhDatabase },
       { id: 'proxy', title: '网络代理', description: '本机连接方式与代理服务器', icon: PhGlobe },
       { id: 'updates', title: '应用更新', description: '查看版本与检查更新', icon: PhArrowCircleDown },
     ],
   },
   {
     label: 'AI 助手',
-    items: [
-      { id: 'ai', title: '模型配置', description: '管理模型与默认 AI', icon: PhSparkle },
-      { id: 'prompts', title: '生成提示词', description: '设置润色与总结规则', icon: PhChatText },
-    ],
-  },
-  {
-    label: '文件输出',
-    items: [
-      { id: 'summary', title: '总结文件', description: 'Markdown 与 TXT 导出目录', icon: PhFileText },
-      { id: 'excel', title: 'Excel报告', description: '模板与填充规则', icon: PhFileXls },
-    ],
+    items: [{ id: 'ai', title: '模型配置', description: '管理模型与默认 AI', icon: PhSparkle }],
   },
 ] satisfies {
   label: string
-  items: { id: SettingsSection; title: string; description: string; icon: typeof PhFolderOpen }[]
+  items: { id: GlobalSettingsSection; title: string; description: string; icon: typeof PhFolderOpen }[]
 }[]
-const activeSection = ref<SettingsSection>('workspace')
+const activeSection = ref<GlobalSettingsSection>('workspace')
+const backupDialogVisible = ref(false)
+const workspaceEntries = ref<Entry[]>([])
+
+async function openBackupDialog() {
+  try {
+    workspaceEntries.value = await api.list()
+  } catch {
+    workspaceEntries.value = []
+  }
+  backupDialogVisible.value = true
+}
+
+function onBackupRestored(result: RestoreResult) {
+  emit('databaseTransferred', {
+    copied: result.totalRestored,
+    skipped: result.skippedCount,
+    mode: 'database',
+    enabled: true,
+    settings: draft.value.database,
+    message: `成功恢复 ${result.totalRestored} 篇日报`,
+  })
+}
+
+async function getSettingsForBackup() {
+  return props.bundle
+}
 const activeGroup = computed(() =>
   navigation.find((group) => group.items.some((item) => item.id === activeSection.value))!,
 )
 const activeItem = computed(() => activeGroup.value.items.find((item) => item.id === activeSection.value)!)
-const sectionChanges = computed<Record<SettingsSection, boolean>>(() => {
+const sectionChanges = computed<Record<GlobalSettingsSection, boolean>>(() => {
   const current = draft.value
   const stored = props.bundle
   const differs = (left: unknown, right: unknown) => JSON.stringify(left) !== JSON.stringify(right)
   return {
     workspace: false,
-    directories: differs(
-      cloneFileSettings(current.files, current.summary.outputDirectory),
-      cloneFileSettings(stored.files, stored.summary.outputDirectory),
-    ),
-    holidays: false,
     updates: false,
     proxy: !(proxyForm.value?.unchanged ?? true),
     database: differs(current.database, stored.database),
-    git: differs(current.git, stored.git),
     appearance: differs(current.appearance, stored.appearance),
     ai: differs(
       [current.ai.providers, current.ai.defaultProviderId],
       [stored.ai.providers, stored.ai.defaultProviderId],
     ),
-    prompts: differs(
-      [current.ai.generationPreference, current.ai.summaryPrompt],
-      [stored.ai.generationPreference, stored.ai.summaryPrompt],
-    ),
-    summary: differs(current.summary, stored.summary),
-    excel: differs(current.excel, stored.excel),
   }
 })
 const changedSections = computed(() => Object.values(sectionChanges.value).filter(Boolean).length)
-async function navigate(section: SettingsSection, targetId?: string) {
+async function navigate(section: GlobalSettingsSection, targetId?: string) {
   activeSection.value = section
   await nextTick()
   const scroller = pageRoot.value?.querySelector<HTMLElement>(`#settings-panel-${section}`)
@@ -416,28 +372,41 @@ function addCustom() {
     })
     return
   }
-  const anthropic = preset.value === 'anthropic'
+  const isAnthropic = preset.value === 'anthropic'
+  const isOllama = preset.value === 'ollama'
+  const isLmStudio = preset.value === 'lmstudio'
+  const name =
+    preset.value === 'deepseek'
+      ? 'DeepSeek'
+      : preset.value === 'gemini'
+        ? 'Gemini'
+        : isAnthropic
+          ? 'Anthropic'
+          : isOllama
+            ? 'Ollama'
+            : isLmStudio
+              ? 'LM Studio'
+              : '自定义 AI'
+  const baseUrl =
+    preset.value === 'deepseek'
+      ? 'https://api.deepseek.com/v1'
+      : preset.value === 'gemini'
+        ? 'https://generativelanguage.googleapis.com/v1beta/openai'
+        : isAnthropic
+          ? 'https://api.anthropic.com/v1'
+          : isOllama
+            ? 'http://localhost:11434/v1'
+            : isLmStudio
+              ? 'http://localhost:1234/v1'
+              : ''
+  const model = preset.value === 'deepseek' ? 'deepseek-chat' : isOllama ? 'qwen2.5:latest' : ''
   const provider: AiProvider = {
     id: crypto.randomUUID(),
-    name:
-      preset.value === 'deepseek'
-        ? 'DeepSeek'
-        : preset.value === 'gemini'
-          ? 'Gemini'
-          : anthropic
-            ? 'Anthropic'
-            : '自定义 AI',
-    kind: anthropic ? 'anthropic' : 'http',
+    name,
+    kind: isAnthropic ? 'anthropic' : 'http',
     executable: '',
-    model: preset.value === 'deepseek' ? 'deepseek-chat' : '',
-    baseUrl:
-      preset.value === 'deepseek'
-        ? 'https://api.deepseek.com/v1'
-        : preset.value === 'gemini'
-          ? 'https://generativelanguage.googleapis.com/v1beta/openai'
-          : anthropic
-            ? 'https://api.anthropic.com/v1'
-            : '',
+    model,
+    baseUrl,
     apiKey: '',
   }
   draft.value.ai.providers.push(provider)
@@ -447,6 +416,33 @@ function remove(id: string) {
   draft.value.ai.providers = draft.value.ai.providers.filter((provider) => provider.id !== id)
   if (draft.value.ai.defaultProviderId === id) draft.value.ai.defaultProviderId = null
   if (editingId.value === id) editingId.value = ''
+}
+const testingProviderId = ref<string | null>(null)
+const testResults = ref<Record<string, TestProviderResult>>({})
+
+async function testConnection(provider: AiProvider) {
+  if (testingProviderId.value) return
+  testingProviderId.value = provider.id
+  try {
+    const result = await aiApi.testProvider(provider)
+    testResults.value[provider.id] = result
+    if (result.success) {
+      pushMessage({ tone: 'success', text: `${provider.name || 'AI'} 连接测试成功 (${result.latencyMs}ms)` })
+    } else {
+      pushMessage({ tone: 'error', text: `${provider.name || 'AI'} 连接失败: ${result.error || '未知错误'}` })
+    }
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err)
+    testResults.value[provider.id] = {
+      success: false,
+      latencyMs: 0,
+      reply: '',
+      error: msg,
+    }
+    pushMessage({ tone: 'error', text: `${provider.name || 'AI'} 测试失败: ${msg}` })
+  } finally {
+    testingProviderId.value = null
+  }
 }
 </script>
 
@@ -500,54 +496,6 @@ function remove(id: string) {
         <div class="settings-panels">
           <Transition name="settings-panel">
             <section
-              v-show="activeSection === 'directories'"
-              id="settings-panel-directories"
-              tabindex="0"
-              class="settings-section settings-panel"
-              :inert="activeSection !== 'directories'"
-              aria-labelledby="directory-settings-title"
-            >
-              <div class="settings-section-heading">
-                <div>
-                  <h3 id="directory-settings-title">功能文件保存规则</h3>
-                  <p>分别设置日报、Excel 报告和总结的保存目录及文件名称，所有目录都位于当前工作空间内。</p>
-                </div>
-              </div>
-              <DirectorySettings
-                ref="directoryForm"
-                v-model="filesDraft"
-                :busy="busy"
-                :workspace-path="workspace?.path ?? ''"
-                :journal-format="draft.database.defaultFormat"
-              />
-            </section>
-          </Transition>
-          <Transition name="settings-panel">
-            <section
-              v-show="activeSection === 'proxy'"
-              id="settings-panel-proxy"
-              tabindex="0"
-              class="settings-section settings-panel"
-              :inert="activeSection !== 'proxy'"
-              aria-label="网络代理"
-            >
-              <ProxySettings ref="proxyForm" :busy="busy" />
-            </section>
-          </Transition>
-          <Transition name="settings-panel">
-            <section
-              v-show="activeSection === 'updates'"
-              id="settings-panel-updates"
-              tabindex="0"
-              class="settings-section settings-panel"
-              :inert="activeSection !== 'updates'"
-              aria-label="应用更新"
-            >
-              <UpdateSettings v-if="updater" :updater="updater" />
-            </section>
-          </Transition>
-          <Transition name="settings-panel">
-            <section
               v-show="activeSection === 'workspace'"
               id="settings-panel-workspace"
               tabindex="0"
@@ -596,8 +544,10 @@ function remove(id: string) {
               </div>
               <div class="appearance-setting-row">
                 <div class="appearance-setting-copy">
-                  <h4 id="appearance-scale-label">界面缩放</h4>
-                  <p id="appearance-scale-description">仅调整字体大小，保存后应用到整个 App。</p>
+                  <div class="setting-field-header">
+                    <h4 id="appearance-scale-label">界面缩放</h4>
+                    <SettingHint text="仅调整字体大小，保存后应用到整个 App。" />
+                  </div>
                   <span class="appearance-scale-range">80%–120% · 每次 10%</span>
                 </div>
                 <div class="appearance-scale-actions">
@@ -605,7 +555,6 @@ function remove(id: string) {
                     class="appearance-stepper"
                     role="group"
                     aria-labelledby="appearance-scale-label"
-                    aria-describedby="appearance-scale-description"
                     @keydown="onScaleKeydown"
                   >
                     <button
@@ -644,15 +593,12 @@ function remove(id: string) {
               </div>
               <div class="appearance-setting-row">
                 <div class="appearance-setting-copy">
-                  <h4 id="appearance-rail-label">功能栏位置</h4>
-                  <p id="appearance-rail-description">模块侧边栏停靠在窗口左侧或右侧，默认在右侧。</p>
+                  <div class="setting-field-header">
+                    <h4 id="appearance-rail-label">功能栏位置</h4>
+                    <SettingHint text="模块侧边栏停靠在窗口左侧或右侧，默认在右侧。" />
+                  </div>
                 </div>
-                <div
-                  class="appearance-rail-actions"
-                  role="group"
-                  aria-labelledby="appearance-rail-label"
-                  aria-describedby="appearance-rail-description"
-                >
+                <div class="appearance-rail-actions" role="group" aria-labelledby="appearance-rail-label">
                   <button
                     v-for="option in RAIL_OPTIONS"
                     :key="option.id"
@@ -669,8 +615,10 @@ function remove(id: string) {
               </div>
               <div v-for="option in railHoldOptions" :key="option.key" class="appearance-setting-row">
                 <div class="appearance-setting-copy">
-                  <h4 :id="`${option.key}-label`">{{ option.label }}</h4>
-                  <p :id="`${option.key}-description`">{{ option.description }}</p>
+                  <div class="setting-field-header">
+                    <h4 :id="`${option.key}-label`">{{ option.label }}</h4>
+                    <SettingHint :text="option.description" />
+                  </div>
                   <span class="appearance-scale-range">0.5–10 秒 · 每次 0.1 秒 · 默认 2 秒</span>
                 </div>
                 <div class="history-limit rail-hold-slider">
@@ -682,7 +630,6 @@ function remove(id: string) {
                     :step="RAIL_HOLD_STEP_MS / 1000"
                     :value="(draft.appearance[option.key] ?? DEFAULT_RAIL_HOLD_MS) / 1000"
                     :aria-labelledby="`${option.key}-label`"
-                    :aria-describedby="`${option.key}-description`"
                     :aria-valuetext="`${(draft.appearance[option.key] ?? DEFAULT_RAIL_HOLD_MS) / 1000} 秒`"
                     :disabled="busy"
                     @input="onRailHoldInput($event, option.key)"
@@ -704,31 +651,6 @@ function remove(id: string) {
           </Transition>
           <Transition name="settings-panel">
             <section
-              v-show="activeSection === 'holidays'"
-              id="settings-panel-holidays"
-              tabindex="0"
-              class="settings-section settings-panel"
-              :inert="activeSection !== 'holidays'"
-              aria-labelledby="holiday-settings-title"
-            >
-              <div class="settings-section-heading">
-                <div>
-                  <h3 id="holiday-settings-title">放假与调休安排</h3>
-                  <p>按需同步，让日历显示最新的年度安排。</p>
-                </div>
-              </div>
-              <HolidaySettings
-                :state="holidays"
-                :current-year="currentYear"
-                :loading="holidayLoading"
-                :syncing="holidaySyncing"
-                :error="holidayError"
-                @sync="emit('syncHolidays', $event)"
-              />
-            </section>
-          </Transition>
-          <Transition name="settings-panel">
-            <section
               v-show="activeSection === 'database'"
               id="settings-panel-database"
               tabindex="0"
@@ -738,58 +660,36 @@ function remove(id: string) {
             >
               <div class="settings-section-heading">
                 <div>
-                  <h3 id="database-settings-title">日报存储</h3>
-                  <p>设置新日报的默认格式，并按需选择文件、数据库或双存储。</p>
+                  <h3 id="database-settings-title">数据存储与备份迁移</h3>
+                  <p>管理工作空间完整备份、跨设备一键迁移与多引擎数据库存储。</p>
                 </div>
               </div>
-              <div class="database-field database-default-format">
-                <span id="default-format-label" class="database-field-label">新日报默认格式</span>
-                <div class="database-mode-options" role="radiogroup" aria-labelledby="default-format-label">
-                  <label :class="{ selected: draft.database.defaultFormat === 'md' }" class="database-mode-label"
-                    ><input
-                      type="radio"
-                      name="default-entry-format"
-                      value="md"
-                      :checked="draft.database.defaultFormat === 'md'"
-                      :disabled="busy"
-                      @change="draft.database.defaultFormat = 'md'"
-                    /><span class="database-mode-copy"
-                      ><strong>Markdown（.md）</strong><span>支持标题、列表与加粗，适合结构化日报。</span></span
-                    ></label
-                  ><label :class="{ selected: draft.database.defaultFormat === 'txt' }" class="database-mode-label"
-                    ><input
-                      type="radio"
-                      name="default-entry-format"
-                      value="txt"
-                      :checked="draft.database.defaultFormat === 'txt'"
-                      :disabled="busy"
-                      @change="draft.database.defaultFormat = 'txt'"
-                    /><span class="database-mode-copy"
-                      ><strong>纯文本（.txt）</strong><span>只保留纯文本，适合直接粘贴或打印。</span></span
-                    ></label
-                  >
+              <div class="workspace-backup-card">
+                <div class="backup-card-main">
+                  <div class="backup-card-icon" aria-hidden="true">
+                    <PhArchive :size="22" />
+                  </div>
+                  <div class="backup-card-info">
+                    <div class="setting-field-header">
+                      <h4>工作空间全量备份与跨设备迁移</h4>
+                      <SettingHint
+                        text="一键打包导出包含所有历史日报与模板/偏好设置的独立备份包 (.json)，或导入备份快速还原工作空间。"
+                      />
+                    </div>
+                  </div>
                 </div>
-                <p class="field-hint">只影响之后新建的日报；已有日报保持原格式，可在编辑区单独切换。</p>
+                <div class="backup-card-actions">
+                  <button type="button" class="backup-action-button" :disabled="busy" @click="openBackupDialog">
+                    <PhArchive :size="15" aria-hidden="true" />
+                    <span>备份与恢复…</span>
+                  </button>
+                </div>
               </div>
-              <div class="database-field">
-                <label class="database-field-label" for="history-limit">历史版本存储上限</label>
-                <div class="history-limit">
-                  <input
-                    id="history-limit"
-                    type="range"
-                    :min="historyLimitMinGb"
-                    :max="historyLimitMaxGb"
-                    step="1"
-                    :value="historyLimitGb"
-                    :disabled="busy"
-                    :aria-valuetext="`${historyLimitGb} GB`"
-                    @input="onHistoryLimitInput"
-                  /><output for="history-limit">{{ historyLimitGb }} GB</output>
-                </div>
-                <p class="field-hint">
-                  默认 1 GB，滑块每格 1 GB（最大 10 GB）。历史版本超过该容量时，从最旧的一天开始整天清理；单日最多保留
-                  100 个版本。
-                </p>
+              <div class="workspace-storage-subnote">
+                <SettingHint
+                  text="新日报默认格式在「编辑」模块设置中调整；历史版本存储上限在「历史记录」模块设置中调整。"
+                />
+                <span>新日报格式与版本上限在对应模块设置中独立配置</span>
               </div>
               <DatabaseSettings
                 ref="databaseForm"
@@ -805,20 +705,26 @@ function remove(id: string) {
           </Transition>
           <Transition name="settings-panel">
             <section
-              v-show="activeSection === 'git'"
-              id="settings-panel-git"
+              v-show="activeSection === 'proxy'"
+              id="settings-panel-proxy"
               tabindex="0"
               class="settings-section settings-panel"
-              :inert="activeSection !== 'git'"
-              aria-labelledby="git-settings-title"
+              :inert="activeSection !== 'proxy'"
+              aria-label="网络代理"
             >
-              <div class="settings-section-heading">
-                <div>
-                  <h3 id="git-settings-title" class="sr-only">项目仓库与提交说明</h3>
-                  <p>关联项目仓库，管理提交与日报；修改后点击底部保存设置。</p>
-                </div>
-              </div>
-              <GitSettings ref="gitForm" v-model="draft.git" :busy="busy" :workspace-path="workspace?.path ?? ''" />
+              <ProxySettings ref="proxyForm" :busy="busy" />
+            </section>
+          </Transition>
+          <Transition name="settings-panel">
+            <section
+              v-show="activeSection === 'updates'"
+              id="settings-panel-updates"
+              tabindex="0"
+              class="settings-section settings-panel"
+              :inert="activeSection !== 'updates'"
+              aria-label="应用更新"
+            >
+              <UpdateSettings v-if="updater" :updater="updater" />
             </section>
           </Transition>
           <Transition name="settings-panel">
@@ -890,11 +796,15 @@ function remove(id: string) {
                   添加
                 </button>
               </div>
-              <Transition name="status-fade"
-                ><p v-if="!draft.ai.providers.length" class="settings-empty">
-                  尚未配置 AI。检测本机 CLI，或添加一个模型接口。
-                </p></Transition
-              >
+              <Transition name="status-fade">
+                <div v-if="!draft.ai.providers.length" class="settings-empty-card">
+                  <div class="settings-empty-icon">
+                    <PhSparkle :size="24" aria-hidden="true" />
+                  </div>
+                  <p class="settings-empty-title">尚未配置 AI</p>
+                  <p class="settings-empty-desc">检测本机 CLI，或从上方选择预设添加模型接口。</p>
+                </div>
+              </Transition>
               <TransitionGroup name="provider-list" tag="div" class="provider-list">
                 <article
                   v-for="provider in draft.ai.providers"
@@ -971,16 +881,52 @@ function remove(id: string) {
                                     ? 'https://api.anthropic.com/v1'
                                     : 'https://example.com/v1'
                                 "
-                                spellcheck="false" /></label
-                            ><label
-                              >API Key<input
-                                v-model="provider.apiKey"
-                                :disabled="busy"
-                                type="password"
-                                placeholder="填写 API Key，本地服务可留空"
-                                autocomplete="off"
-                                spellcheck="false" /></label
-                            ><ModelPicker
+                                spellcheck="false"
+                              />
+                            </label>
+                            <label class="setting-secret-field">
+                              <span class="setting-field-title">API Key</span>
+                              <div class="setting-secret-input-wrap">
+                                <input
+                                  v-model="provider.apiKey"
+                                  :disabled="busy"
+                                  :type="visibleKeyProviderIds[provider.id] ? 'text' : 'password'"
+                                  placeholder="填写 API Key，本地服务可留空"
+                                  autocomplete="off"
+                                  spellcheck="false"
+                                />
+                                <div class="setting-secret-actions">
+                                  <button
+                                    v-if="provider.apiKey"
+                                    type="button"
+                                    class="secret-action-btn"
+                                    :title="copiedKeyProviderId === provider.id ? '已复制' : '复制 API Key'"
+                                    :aria-label="copiedKeyProviderId === provider.id ? '已复制' : '复制 API Key'"
+                                    :disabled="busy"
+                                    @click="copyApiKey(provider.apiKey, provider.id)"
+                                  >
+                                    <PhCheck v-if="copiedKeyProviderId === provider.id" :size="14" aria-hidden="true" />
+                                    <PhCopy v-else :size="14" aria-hidden="true" />
+                                  </button>
+                                  <button
+                                    type="button"
+                                    class="secret-action-btn"
+                                    :title="visibleKeyProviderIds[provider.id] ? '隐藏 API Key' : '显示 API Key'"
+                                    :aria-label="visibleKeyProviderIds[provider.id] ? '隐藏 API Key' : '显示 API Key'"
+                                    :disabled="busy"
+                                    @click="toggleKeyVisibility(provider.id)"
+                                  >
+                                    <PhEyeSlash
+                                      v-if="visibleKeyProviderIds[provider.id]"
+                                      :size="14"
+                                      aria-hidden="true"
+                                    />
+                                    <PhEye v-else :size="14" aria-hidden="true" />
+                                  </button>
+                                </div>
+                              </div>
+                            </label>
+                            <ModelPicker
                               v-model="provider.model"
                               :base-url="provider.baseUrl"
                               :api-key="provider.apiKey"
@@ -1013,6 +959,38 @@ function remove(id: string) {
                               每次调用都要启动子进程，通常比模型接口慢，请预留等待时间。
                             </p></template
                           >
+                          <div class="provider-test-bar">
+                            <button
+                              type="button"
+                              class="text-action test-provider-btn"
+                              :disabled="busy || testingProviderId === provider.id"
+                              @click="testConnection(provider)"
+                            >
+                              <PhCircleNotch
+                                v-if="testingProviderId === provider.id"
+                                class="spin"
+                                :size="14"
+                                aria-hidden="true"
+                              />
+                              <span>{{ testingProviderId === provider.id ? '正在测试…' : '测试连接' }}</span>
+                            </button>
+                            <span
+                              v-if="testResults[provider.id]"
+                              class="provider-test-result"
+                              :class="{
+                                'is-success': testResults[provider.id]?.success,
+                                'is-error': !testResults[provider.id]?.success,
+                              }"
+                            >
+                              <PhCheck v-if="testResults[provider.id]?.success" :size="14" aria-hidden="true" />
+                              <PhX v-else :size="14" aria-hidden="true" />
+                              <span>{{
+                                testResults[provider.id]?.success
+                                  ? `连接成功 (${testResults[provider.id]?.latencyMs}ms)`
+                                  : testResults[provider.id]?.error || '连接失败'
+                              }}</span>
+                            </span>
+                          </div>
                         </div>
                       </div>
                     </div>
@@ -1037,117 +1015,14 @@ function remove(id: string) {
               </p>
               <div class="ai-settings-footer">
                 <span
-                  >AI 润色与 AI 总结会向默认 AI 发送相关日报；Excel 输出经确认后，会发送所选日报、模板信息和 Excel
-                  输出提示词；Git 提交说明生成会发送已暂存的文件差异和提交说明提示词。</span
+                  >默认 AI 就绪：{{
+                    aiReady ? '是' : '否'
+                  }}。日报润色提示词在「编辑」模块设置中调整，框选总结提示词在「总结」模块设置中调整。</span
                 >
               </div>
               <Transition name="status-fade"
                 ><p v-if="localError" class="settings-error" role="alert">{{ localError }}</p></Transition
               >
-            </section>
-          </Transition>
-          <Transition name="settings-panel">
-            <section
-              v-show="activeSection === 'prompts'"
-              id="settings-panel-prompts"
-              tabindex="0"
-              class="settings-section settings-panel"
-              :inert="activeSection !== 'prompts'"
-              aria-labelledby="ai-prompts-title"
-            >
-              <div class="settings-section-heading">
-                <div>
-                  <h3 id="ai-prompts-title">生成规则</h3>
-                  <p>留空时使用默认规则，对所有 AI 模型生效。</p>
-                </div>
-              </div>
-              <div class="generation-preference">
-                <label for="polish-prompt">日报润色提示词</label>
-                <p id="polish-prompt-hint">追加在固定的事实、安全和格式规则之后；留空时使用默认润色规则。</p>
-                <textarea
-                  id="polish-prompt"
-                  v-model="draft.ai.generationPreference"
-                  :disabled="busy"
-                  maxlength="2000"
-                  rows="4"
-                  aria-describedby="polish-prompt-hint"
-                  placeholder="例如：简洁客观，突出已完成事项和下一步计划，保留原有条目结构。"
-                  spellcheck="false"
-                ></textarea
-                ><span class="preference-count">{{ draft.ai.generationPreference.length }} / 2000</span>
-              </div>
-              <div class="generation-preference">
-                <label for="summary-prompt">框选总结提示词</label>
-                <p id="summary-prompt-hint">用于对选中日期内的日报生成总结；留空时使用默认总结规则。</p>
-                <textarea
-                  id="summary-prompt"
-                  v-model="draft.ai.summaryPrompt"
-                  :disabled="busy"
-                  maxlength="2000"
-                  rows="4"
-                  aria-describedby="summary-prompt-hint"
-                  placeholder="例如：按项目归类，提炼成果、风险和下一步计划，控制在 500 字内。"
-                  spellcheck="false"
-                ></textarea
-                ><span class="preference-count">{{ draft.ai.summaryPrompt.length }} / 2000</span>
-              </div>
-              <p class="field-hint prompt-note">
-                提示词会追加在固定的安全与格式规则之后，对所有 AI 生效。日报内容始终作为待处理数据，不会被当作指令。
-              </p>
-              <p class="field-hint">提示词只在本机 AI 请求时使用，不会写入日报。</p>
-            </section>
-          </Transition>
-          <Transition name="settings-panel">
-            <section
-              v-show="activeSection === 'summary'"
-              id="settings-panel-summary"
-              tabindex="0"
-              class="settings-section settings-panel"
-              :inert="activeSection !== 'summary'"
-              aria-labelledby="summary-output-settings-title"
-            >
-              <div class="settings-section-heading">
-                <div>
-                  <h3 id="summary-output-settings-title">导出位置</h3>
-                  <p>Markdown 和 TXT 格式共用一个输出目录。</p>
-                </div>
-              </div>
-              <SummaryOutputSettings
-                ref="summaryForm"
-                v-model="draft.summary"
-                :workspace-path="workspace?.path ?? ''"
-                :busy="busy"
-                :directory="filesDraft.summary.directory"
-                :filename-template="filesDraft.summary.filenameTemplate"
-                @configure-directories="navigate('directories')"
-              />
-            </section>
-          </Transition>
-          <Transition name="settings-panel">
-            <section
-              v-show="activeSection === 'excel'"
-              id="settings-panel-excel"
-              tabindex="0"
-              class="settings-section settings-panel"
-              :inert="activeSection !== 'excel'"
-              aria-labelledby="excel-settings-title"
-            >
-              <div class="settings-section-heading">
-                <div>
-                  <h3 id="excel-settings-title">模板填充</h3>
-                  <p>使用默认 AI，将所选日报整理为 Excel报告。</p>
-                </div>
-              </div>
-              <ExcelSettings
-                ref="excelForm"
-                v-model="draft.excel"
-                :busy="busy"
-                :ai-ready="aiReady"
-                :workspace-path="workspace?.path ?? ''"
-                :output-directory="filesDraft.excel.directory"
-                @configure-ai="navigate('ai')"
-                @configure-directories="navigate('directories')"
-              />
             </section>
           </Transition>
         </div>
@@ -1166,7 +1041,10 @@ function remove(id: string) {
           <p v-else-if="databaseBusy">正在处理数据库操作…</p>
           <p v-else-if="busy">正在保存全部设置…</p>
           <p v-else-if="!unchanged">{{ changedSections }} 个设置分类待保存</p>
-          <p v-else>{{ saved ? '设置已保存' : '所有修改已保存' }}</p>
+          <p v-else class="settings-save-saved">
+            <PhCheck v-if="saved" :size="15" class="saved-check-icon" aria-hidden="true" />
+            {{ saved ? '设置已保存' : '所有修改已保存' }}
+          </p>
           <span>{{ unchanged ? '修改设置后，在这里统一保存。' : '切换分类会保留修改，点击保存后统一生效。' }}</span>
         </div>
         <button
@@ -1178,8 +1056,22 @@ function remove(id: string) {
           <PhFloppyDisk :size="18" aria-hidden="true" /><Transition name="button-label" mode="out-in"
             ><span :key="String(busy)">{{ busy ? '正在保存…' : '保存设置' }}</span></Transition
           >
+          <kbd v-if="!busy" class="settings-save-kbd" aria-hidden="true">{{ isMac ? '⌘S' : 'Ctrl+S' }}</kbd>
         </button>
       </div>
     </footer>
+    <BackupRestoreDialog
+      :visible="backupDialogVisible"
+      :workspace-name="workspace?.name ?? '工作空间'"
+      :workspace-path="workspace?.path"
+      :entries="workspaceEntries"
+      :read-entry="api.read"
+      :create-entry="api.create"
+      :save-entry="api.save"
+      :get-settings="getSettingsForBackup"
+      :save-settings="props.save"
+      @close="backupDialogVisible = false"
+      @restored="onBackupRestored"
+    />
   </div>
 </template>

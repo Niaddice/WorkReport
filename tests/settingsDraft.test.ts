@@ -1,7 +1,13 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { effectScope, nextTick, ref, type EffectScope } from 'vue'
 import { DEFAULT_DATABASE_SETTINGS, cloneDatabaseSettings } from '../src/lib/database'
-import { cloneWorkspaceSettings, useSettingsDraft, type WorkspaceSettings } from '../src/lib/settingsDraft'
+import {
+  cloneEditorSettings,
+  cloneWorkspaceSettings,
+  DEFAULT_EDITOR_SETTINGS,
+  useSettingsDraft,
+  type WorkspaceSettings,
+} from '../src/lib/settingsDraft'
 import { cloneGitSettings } from '../src/lib/useGit'
 import { cloneFileSettings } from '../src/lib/fileSettings'
 
@@ -33,6 +39,7 @@ function initialSettings(): WorkspaceSettings {
     },
     excel: { enabled: false, templatePath: '', prompt: '' },
     summary: { outputDirectory: 'summary' },
+    editor: cloneEditorSettings(DEFAULT_EDITOR_SETTINGS),
     files: cloneFileSettings(),
   }
 }

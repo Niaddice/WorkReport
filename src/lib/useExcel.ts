@@ -339,7 +339,7 @@ export function useExcel() {
       }
       if (!current()) return false
       if (!settings.value.enabled) {
-        exportError.value = '请先在设置中启用 Excel 输出。'
+        exportError.value = '请先在 Excel 设置中启用输出。'
         return false
       }
       previewPrompt.value = prompt ?? settings.value.prompt

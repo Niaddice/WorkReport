@@ -11,6 +11,18 @@ export interface ModulePlacement {
   id: ModuleId
 }
 
+/** 模块自己的设置面板：标题栏的设置入口据此显示，打开后只编辑该模块的设置。 */
+export interface ModuleSettingsDefinition {
+  /** 弹窗标题，例如「日历设置」。 */
+  title: string
+  /** 弹窗标题下方的说明。 */
+  description: string
+  /** 设置内容组件；通过 useModuleSettingsContext() 读取草稿与动作。 */
+  component: Component
+  /** 是否有需要保存的草稿；为 false 时（例如放假信息同步）弹窗只提供关闭。 */
+  savable?: boolean
+}
+
 /** 模块目录条目：界面、拖放与模块目录弹窗都从这里读取元数据。 */
 export interface ModuleDefinition {
   id: ModuleType
@@ -20,6 +32,8 @@ export interface ModuleDefinition {
   component: Component
   /** 可选：渲染在模块标题栏（标题之后）的动态扩展内容。 */
   titleExtra?: Component
+  /** 可选：模块自己的设置面板；存在时标题栏显示设置按钮。 */
+  settings?: ModuleSettingsDefinition
   /** 模块使用说明，点击标题栏帮助按钮时展示。 */
   help: readonly string[]
   /** 新工作空间的默认布局是否启用。 */

@@ -7,6 +7,7 @@ import { isTauri } from '@tauri-apps/api/core'
 import { PhArrowClockwise, PhCheck, PhCircleNotch, PhCopy, PhFolderOpen, PhSparkle, PhX } from '@phosphor-icons/vue'
 import { createDialogMotion } from '../lib/dialogMotion'
 import { api, type FileFormat } from '../lib/workspace'
+import { SUMMARY_PRESETS, matchSummaryPreset } from '../lib/summaryPresets'
 
 const props = defineProps<{
   visible: boolean
@@ -36,6 +37,8 @@ const dialog = ref<HTMLDialogElement>()
 const motion = createDialogMotion(() => dialog.value)
 const copied = ref(false)
 const step = computed(() => (props.configuring ? 0 : props.generating ? 1 : 2))
+const currentPreset = computed(() => matchSummaryPreset(props.prompt))
+const currentPresetId = computed(() => currentPreset.value?.id ?? 'custom')
 const promptError = computed(() =>
   !props.prompt.trim() ? '请填写本次总结提示词。' : props.prompt.length > 2000 ? '提示词不能超过 2000 字。' : '',
 )
@@ -91,6 +94,7 @@ async function copy() {
       aria-labelledby="summary-generation-title"
       aria-describedby="summary-generation-description"
       @cancel.prevent="!exporting && emit('close')"
+      @click.self="!exporting && emit('close')"
     >
       <header class="ai-dialog-heading">
         <div>
@@ -145,6 +149,29 @@ async function copy() {
           <div class="summary-generation-editor-heading">
             <label for="summary-session-prompt">本次总结提示词</label><span>仅本次有效</span>
           </div>
+          <div class="summary-presets-bar" role="group" aria-label="场景预设快选">
+            <span class="summary-presets-label">场景快选：</span>
+            <div class="summary-presets-list">
+              <button
+                v-for="preset in SUMMARY_PRESETS"
+                :key="preset.id"
+                type="button"
+                class="summary-preset-pill"
+                :class="{ active: currentPresetId === preset.id }"
+                :title="preset.description"
+                @click="emit('update:prompt', preset.prompt)"
+              >
+                {{ preset.label }}
+              </button>
+              <span
+                v-if="currentPresetId === 'custom'"
+                class="summary-preset-pill active custom-pill"
+                title="已基于预设调整或使用自定义提示词"
+              >
+                自定义
+              </span>
+            </div>
+          </div>
           <textarea
             id="summary-session-prompt"
             :value="prompt"
@@ -155,7 +182,9 @@ async function copy() {
             @input="emit('update:prompt', ($event.target as HTMLTextAreaElement).value)"
           />
           <div class="summary-generation-editor-hint">
-            <p id="summary-session-prompt-hint">修改仅用于本次生成，不会同步到设置；关闭后恢复设置中的提示词。</p>
+            <p id="summary-session-prompt-hint">
+              修改仅用于本次生成，不会同步到模块设置；关闭后恢复总结设置中的提示词。
+            </p>
             <span>{{ prompt.length }} / 2000</span>
           </div>
           <p v-if="blockedReason" class="settings-error" role="alert">

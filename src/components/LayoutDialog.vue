@@ -40,7 +40,13 @@ onBeforeUnmount(() => motion.dispose())
 </script>
 
 <template>
-  <dialog ref="dialog" class="layout-dialog" aria-labelledby="layout-dialog-title" @cancel.prevent="emit('close')">
+  <dialog
+    ref="dialog"
+    class="layout-dialog"
+    aria-labelledby="layout-dialog-title"
+    @cancel.prevent="emit('close')"
+    @click.self="emit('close')"
+  >
     <header class="layout-dialog-heading">
       <div>
         <PhSquaresFour :size="22" aria-hidden="true" />
