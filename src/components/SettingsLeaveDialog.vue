@@ -20,6 +20,8 @@ const TARGETS = {
   home: '返回首页',
 } as const
 const target = computed(() => TARGETS[props.action ?? 'home'])
+/** 模块设置弹窗内的实例与全局设置页的实例分属不同作用域。 */
+const scope = computed(() => (props.action === 'module' || props.action === 'global' ? 'module' : 'page'))
 function open() {
   motion.open()
 }
@@ -39,7 +41,8 @@ onBeforeUnmount(() => motion.dispose())
     tabindex="-1"
     role="alertdialog"
     aria-modal="true"
-    class="confirmation-dialog settings-leave-dialog"
+    class="confirmation-dialog"
+    :class="scope === 'module' ? 'module-settings-leave-dialog' : 'settings-leave-dialog'"
     aria-labelledby="settings-leave-title"
     aria-describedby="settings-leave-description"
     @cancel.prevent="!busy && !saving && emit('cancel')"

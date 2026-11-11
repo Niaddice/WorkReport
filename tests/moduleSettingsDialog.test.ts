@@ -135,6 +135,10 @@ async function openSettingsPage(wrapper: VueWrapper) {
   await flushPromises()
 }
 
+function leaveDialog(wrapper: VueWrapper) {
+  return wrapper.get<HTMLDialogElement>('.module-settings-leave-dialog').element
+}
+
 function saveCalls() {
   return invoke.mock.calls.filter(([command]) => command === 'save_workspace_settings')
 }
@@ -243,13 +247,15 @@ describe('module settings motion and dismissal', () => {
       await scene.finish()
       await wrapper.get('#polish-prompt').setValue('临时修改')
       await wrapper.get('.module-settings-backdrop').trigger('click')
-      expect(wrapper.find('.module-settings-confirm').exists()).toBe(false)
+      expect(leaveDialog(wrapper).open).toBe(false)
       await wrapper
         .get(target === 'top' ? '.module-settings-close' : '.module-settings-actions .text-action')
         .trigger('click')
-      await wrapper.get('.module-settings-backdrop').trigger('click')
-      expect(wrapper.get('.module-settings-confirm').text()).toContain('关闭后将丢失这些修改')
-      await wrapper.get('.module-settings-confirm .settings-save-button').trigger('click')
+      await flushPromises()
+      expect(leaveDialog(wrapper).open).toBe(true)
+      expect(leaveDialog(wrapper).textContent).toContain('保存后再关闭设置')
+      expect(wrapper.find('.module-settings-confirm').exists()).toBe(false)
+      await wrapper.findAll('.module-settings-leave-dialog md-text-button')[1]!.trigger('click')
       await flushPromises()
       expect(scene.animations[2]!.frames[1]!.transform).toBe(
         target === 'top' ? scene.closeTransform : scene.gearTransform,
@@ -359,27 +365,49 @@ describe('module settings entry in module title bars', () => {
       await wrapper.get('#polish-prompt').setValue('临时修改')
       await wrapper.get('.module-settings-close').trigger('click')
       await flushPromises()
-      expect(wrapper.get('.module-settings-confirm').text()).toContain('关闭后将丢失这些修改')
-      await wrapper
-        .findAll('.module-settings-confirm button')
-        .find((item) => item.text() === '继续编辑')!
-        .trigger('click')
-      await flushPromises()
+      expect(leaveDialog(wrapper).open).toBe(true)
+      expect(leaveDialog(wrapper).textContent).toContain('保存后再关闭设置')
+      // 底部按钮区保持不变，不再切换为确认提示。
       expect(wrapper.find('.module-settings-confirm').exists()).toBe(false)
+      expect(wrapper.find('.module-settings-save').exists()).toBe(true)
+      await wrapper.findAll('.module-settings-leave-dialog md-text-button')[0]!.trigger('click')
+      await flushPromises()
+      expect(leaveDialog(wrapper).open).toBe(false)
+      expect(wrapper.get('.module-settings-dialog').isVisible()).toBe(true)
       expect(wrapper.get<HTMLTextAreaElement>('#polish-prompt').element.value).toBe('临时修改')
 
       await wrapper.get('.module-settings-close').trigger('click')
       await flushPromises()
-      await wrapper
-        .findAll('.module-settings-confirm button')
-        .find((item) => item.text() === '放弃修改')!
-        .trigger('click')
+      expect(leaveDialog(wrapper).open).toBe(true)
+      await wrapper.findAll('.module-settings-leave-dialog md-text-button')[1]!.trigger('click')
       await flushPromises()
+      expect(leaveDialog(wrapper).open).toBe(false)
       expect(wrapper.get('.module-settings-dialog').isVisible()).toBe(false)
       expect(saveCalls()).toHaveLength(0)
 
       await openModuleSettings(wrapper, 'editor')
       expect(wrapper.get<HTMLTextAreaElement>('#polish-prompt').element.value).toBe('')
+    } finally {
+      wrapper.unmount()
+    }
+  })
+
+  it('saves from the confirmation dialog and then closes', async () => {
+    const wrapper = await openDemoWorkspace()
+    try {
+      await openModuleSettings(wrapper, 'editor')
+      await wrapper.get('#polish-prompt').setValue('确认后保存')
+      await wrapper.get('.module-settings-close').trigger('click')
+      await flushPromises()
+      expect(leaveDialog(wrapper).open).toBe(true)
+      expect(saveCalls()).toHaveLength(0)
+      await wrapper.get('.module-settings-leave-dialog md-filled-button').trigger('click')
+      await flushPromises()
+      await flushPromises()
+      expect(saveCalls()).toHaveLength(1)
+      expect(savedSettings().ai.generationPreference).toBe('确认后保存')
+      expect(leaveDialog(wrapper).open).toBe(false)
+      expect(wrapper.get('.module-settings-dialog').isVisible()).toBe(false)
     } finally {
       wrapper.unmount()
     }
