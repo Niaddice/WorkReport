@@ -27,6 +27,7 @@ import type { HolidayState } from '../lib/holidays'
 import type { GlobalSettingsSection } from '../lib/settingsSections'
 import { createSurfaceMotion } from '../lib/surfaceMotion'
 import type { WindowMotionRect } from '../lib/windowMotion'
+import SettingsLeaveDialog from './SettingsLeaveDialog.vue'
 
 const props = defineProps<{
   visible: boolean
@@ -198,6 +199,11 @@ const localError = ref('')
 type CloseTarget = 'settings' | 'close'
 type PendingAction = { kind: 'close'; target: CloseTarget } | { kind: 'global'; section: GlobalSettingsSection }
 const pendingAction = ref<PendingAction | null>(null)
+/** 未保存修改确认弹窗：独立的原生模态，不占用底部按钮区。 */
+const leaveDialog = ref<InstanceType<typeof SettingsLeaveDialog>>()
+const leaving = ref(false)
+const leaveError = ref('')
+const lastLeaveAction = ref<'module' | 'global'>('module')
 let returnFocus: HTMLElement | null = null
 let closeTarget: CloseTarget = 'settings'
 const motion = createSurfaceMotion({
@@ -217,6 +223,8 @@ function afterLeave() {
   if (props.visible) return
   displayedModule.value = null
   pendingAction.value = null
+  leaveError.value = ''
+  void leaveDialog.value?.close()
   localError.value = ''
   const focused = document.activeElement
   if (
@@ -346,47 +354,94 @@ const busy = computed(() => props.busy || saving.value)
 const statusError = computed(() => props.error || localError.value || draftError.value)
 const aiReady = computed(() => aiSettingsReady(draft.value.ai))
 
+function openLeaveConfirm(action: PendingAction) {
+  if (pendingAction.value) return
+  pendingAction.value = action
+  lastLeaveAction.value = action.kind === 'global' ? 'global' : 'module'
+  leaveError.value = ''
+  leaveDialog.value?.open()
+}
 function requestGlobalSettings(section: GlobalSettingsSection) {
-  if (busy.value) return
+  if (busy.value || pendingAction.value) return
   closeTarget = 'settings'
   if (!savable.value || unchanged.value) {
     emit('open-global-settings', section)
     return
   }
-  pendingAction.value = { kind: 'global', section }
+  openLeaveConfirm({ kind: 'global', section })
 }
 function requestClose(target: CloseTarget = 'settings') {
-  if (!props.visible || busy.value) return
+  if (!props.visible || busy.value || pendingAction.value) return
   closeTarget = target
   if (!savable.value || unchanged.value) {
     emit('close')
     return
   }
-  pendingAction.value = { kind: 'close', target }
+  openLeaveConfirm({ kind: 'close', target })
 }
 function cancelPending() {
+  if (leaving.value || saving.value) return
   pendingAction.value = null
+  leaveError.value = ''
+  void leaveDialog.value?.close()
 }
-function confirmDiscard() {
-  const action = pendingAction.value
-  if (!action) return
+function runAction(action: PendingAction) {
   if (action.kind === 'global') emit('open-global-settings', action.section)
   else {
     closeTarget = action.target
     emit('close')
   }
 }
-async function saveSettings() {
-  if (!savable.value || busy.value || unchanged.value) return
+async function confirmDiscard() {
+  const action = pendingAction.value
+  if (!action || leaving.value || saving.value) return
+  pendingAction.value = null
+  leaveError.value = ''
+  await leaveDialog.value?.close()
+  runAction(action)
+}
+/** 校验并保存草稿；校验失败时聚焦到出错的设置项。 */
+async function commitDraft(): Promise<boolean> {
   localError.value = ''
   const valid = content.value?.validate?.() ?? true
   if (!valid) {
     localError.value = '请检查标出的设置项后重试。'
     await nextTick()
     content.value?.focusInvalid?.()
-    return
+    return false
   }
-  if (await saveDraft()) {
+  return saveDraft()
+}
+async function confirmSave() {
+  const action = pendingAction.value
+  if (!action || leaving.value || saving.value) return
+  leaving.value = true
+  leaveError.value = ''
+  try {
+    const valid = content.value?.validate?.() ?? true
+    if (!valid) {
+      // 回到编辑界面，让用户修正标出的设置项。
+      pendingAction.value = null
+      localError.value = '请检查标出的设置项后重试。'
+      await leaveDialog.value?.close()
+      await nextTick()
+      content.value?.focusInvalid?.()
+      return
+    }
+    if (!(await saveDraft())) {
+      leaveError.value = props.error || draftError.value || '设置未保存，请继续编辑并检查标出的内容。'
+      return
+    }
+    pendingAction.value = null
+    await leaveDialog.value?.close()
+    runAction(action)
+  } finally {
+    leaving.value = false
+  }
+}
+async function saveSettings() {
+  if (!savable.value || busy.value || unchanged.value) return
+  if (await commitDraft()) {
     closeTarget = 'settings'
     emit('close')
   }
@@ -416,6 +471,8 @@ watch(
     if (visible) {
       closeTarget = 'settings'
       pendingAction.value = null
+      leaveError.value = ''
+      void leaveDialog.value?.close()
       localError.value = ''
       displayedModule.value = props.module
       if (!definition.value) {
@@ -595,16 +652,7 @@ defineExpose({ requestClose, unchanged, isOpen: () => props.visible, navigateToS
               <p v-else-if="!unchanged">有未保存的修改</p>
               <p v-else>所有修改已保存</p>
             </div>
-            <div v-if="pendingAction" class="module-settings-confirm">
-              <span>{{
-                pendingAction.kind === 'global'
-                  ? '有未保存的修改，前往全局设置将丢失这些修改。'
-                  : '关闭后将丢失这些修改。'
-              }}</span>
-              <button type="button" class="text-action" @click="cancelPending">继续编辑</button>
-              <button type="button" class="settings-save-button" @click="confirmDiscard">放弃修改</button>
-            </div>
-            <div v-else class="module-settings-actions">
+            <div class="module-settings-actions">
               <button v-if="savable || !unchanged" type="button" class="text-action" @click="requestClose()">
                 {{ unchanged ? '关闭' : '取消' }}
               </button>
@@ -626,4 +674,15 @@ defineExpose({ requestClose, unchanged, isOpen: () => props.visible, navigateToS
       </section>
     </div>
   </Transition>
+  <!-- 放在 inert 的设置层之外，保证确认弹窗可交互。 -->
+  <SettingsLeaveDialog
+    ref="leaveDialog"
+    :action="lastLeaveAction"
+    :busy="leaving"
+    :saving="saving"
+    :error="leaveError"
+    @cancel="cancelPending"
+    @discard="confirmDiscard"
+    @save="confirmSave"
+  />
 </template>

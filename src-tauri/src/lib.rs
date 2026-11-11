@@ -5,6 +5,7 @@ mod excel;
 mod git;
 mod git_auth;
 mod git_credentials;
+mod git_install;
 mod github_auth;
 mod git_client;
 mod history;
@@ -1351,6 +1352,8 @@ pub fn run() {
             read_git_history,
             read_git_diff,
             git_repository_action,
+            git_install::detect_git,
+            git_install::install_git,
             github_auth::start_github_login,
             github_auth::read_github_login,
             github_auth::cancel_github_login,

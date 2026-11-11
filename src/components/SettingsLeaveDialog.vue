@@ -4,7 +4,7 @@ import { PhGearSix } from '@phosphor-icons/vue'
 import { createDialogMotion } from '../lib/dialogMotion'
 
 const props = defineProps<{
-  action: 'home' | 'workspace' | 'close' | null
+  action: 'home' | 'workspace' | 'close' | 'module' | 'global' | null
   busy: boolean
   saving: boolean
   error: string
@@ -12,9 +12,14 @@ const props = defineProps<{
 const emit = defineEmits<{ cancel: []; discard: []; save: [] }>()
 const dialog = ref<HTMLDialogElement>()
 const motion = createDialogMotion(() => dialog.value)
-const target = computed(() =>
-  props.action === 'close' ? '关闭窗口' : props.action === 'workspace' ? '切换工作空间' : '返回首页',
-)
+const TARGETS = {
+  close: '关闭窗口',
+  workspace: '切换工作空间',
+  module: '关闭设置',
+  global: '前往全局偏好设置',
+  home: '返回首页',
+} as const
+const target = computed(() => TARGETS[props.action ?? 'home'])
 function open() {
   motion.open()
 }

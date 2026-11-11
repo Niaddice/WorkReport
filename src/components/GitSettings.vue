@@ -6,6 +6,7 @@ import { open } from '@tauri-apps/plugin-dialog'
 import { PhCaretRight, PhFolderOpen, PhGitBranch, PhPlus, PhTrash } from '@phosphor-icons/vue'
 import SavedGitCredentials from './SavedGitCredentials.vue'
 import GithubAuthentication from './GithubAuthentication.vue'
+import GitInstaller from './GitInstaller.vue'
 import {
   cloneGitSettings,
   COMMIT_PROMPT_PRESETS,
@@ -20,10 +21,36 @@ const emit = defineEmits<{ 'update:modelValue': [value: GitSettings] }>()
 const id = useId()
 const root = ref<HTMLElement>()
 const advanced = ref<HTMLDetailsElement>()
+const installer = ref<InstanceType<typeof GitInstaller>>()
 let invalidRepositoryId = ''
 const localError = ref('')
 const picking = ref(false)
-const formBusy = computed(() => props.busy || picking.value)
+const installing = ref(false)
+const customPrompt = ref(false)
+// Last hand-written prompt, restored when switching back to "自定义". Empty when none was configured.
+let savedCustom = ''
+const promptValue = computed(() => props.modelValue.commitPrompt ?? DEFAULT_GIT_COMMIT_PROMPT)
+const isPreset = (value: string) => COMMIT_PROMPT_PRESETS.some((preset) => preset.prompt === value)
+const customActive = computed(() => customPrompt.value || !promptValue.value.trim() || !isPreset(promptValue.value))
+function rememberCustom() {
+  if (customActive.value) savedCustom = promptValue.value
+}
+function choosePreset(prompt: string) {
+  rememberCustom()
+  customPrompt.value = false
+  update({ commitPrompt: prompt })
+}
+async function chooseCustom() {
+  if (!customActive.value) update({ commitPrompt: savedCustom })
+  customPrompt.value = true
+  await nextTick()
+  root.value?.querySelector<HTMLTextAreaElement>('textarea')?.focus()
+}
+function editPrompt(value: string) {
+  update({ commitPrompt: value })
+  if (customPrompt.value || !value.trim() || !isPreset(value)) savedCustom = value
+}
+const formBusy = computed(() => props.busy || picking.value || installing.value)
 
 function update(patch: Partial<GitSettings>) {
   localError.value = ''
@@ -198,7 +225,7 @@ defineExpose({ validate, focusInvalid })
             type="button"
             class="text-action"
             :disabled="formBusy || modelValue.commitPrompt === DEFAULT_GIT_COMMIT_PROMPT"
-            @click.prevent="update({ commitPrompt: DEFAULT_GIT_COMMIT_PROMPT })"
+            @click.prevent="choosePreset(DEFAULT_GIT_COMMIT_PROMPT)"
           >
             恢复默认
           </button>
@@ -209,11 +236,21 @@ defineExpose({ validate, focusInvalid })
             :key="preset.id"
             type="button"
             class="prompt-preset-pill"
-            :class="{ 'is-active': (modelValue.commitPrompt || DEFAULT_GIT_COMMIT_PROMPT) === preset.prompt }"
+            :class="{ 'is-active': !customActive && promptValue === preset.prompt }"
             :disabled="formBusy"
-            @click.prevent="update({ commitPrompt: preset.prompt })"
+            @click.prevent="choosePreset(preset.prompt)"
           >
             {{ preset.label }}
+          </button>
+          <button
+            type="button"
+            class="prompt-preset-pill prompt-custom-pill"
+            :class="{ 'is-active': customActive }"
+            :disabled="formBusy"
+            title="在下方文本框中编写自己的提示词"
+            @click.prevent="chooseCustom"
+          >
+            自定义
           </button>
         </div>
         <textarea
@@ -224,7 +261,7 @@ defineExpose({ validate, focusInvalid })
           rows="5"
           aria-label="Git 提交说明提示词"
           placeholder="留空使用默认提示词"
-          @input="update({ commitPrompt: ($event.target as HTMLTextAreaElement).value })"
+          @input="editPrompt(($event.target as HTMLTextAreaElement).value)"
         />
         <div class="module-settings-field-footer">
           <small>最多 2000 字，留空使用默认提示词。</small
@@ -245,10 +282,17 @@ defineExpose({ validate, focusInvalid })
     <ModuleSettingsSection
       title="高级设置"
       heading-id="git-advanced-heading"
-      description="找不到本机 Git 时，可指定程序的安装路径。"
+      description="本机没有 Git 时可一键安装，也可指定程序的安装路径。"
     >
-      <details ref="advanced" class="git-advanced">
-        <summary>高级设置<span>Git 程序路径</span></summary>
+      <details ref="advanced" class="git-advanced" @toggle="advanced?.open && void installer?.detect()">
+        <summary>高级设置<span>一键安装 Git · Git 程序路径</span></summary>
+        <GitInstaller
+          ref="installer"
+          :executable="modelValue.executable"
+          :disabled="props.busy || picking"
+          @busy="installing = $event"
+          @installed="update({ executable: $event })"
+        />
         <label class="git-field">
           <span>Git 程序</span>
           <input
