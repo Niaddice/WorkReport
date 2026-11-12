@@ -12,6 +12,7 @@ import {
   PhCloudArrowDown,
   PhArrowDown,
   PhArrowUp,
+  PhArrowUUpLeft,
   PhX,
   PhFolder,
   PhGearSix,
@@ -176,6 +177,9 @@ const groups = computed(() => [
 const isAmend = ref(false)
 const canAmend = computed(() => !lock.value && !!repository.value && !repository.value.detached)
 const canUndoCommit = computed(() => !lock.value && !!repository.value && !repository.value.detached)
+const undoPopoverOpen = ref(false)
+const undoPopoverRef = ref<HTMLElement>()
+const undoBtnRef = ref<HTMLElement>()
 
 const canCommit = computed(
   () =>
@@ -355,6 +359,7 @@ watch(
     draftKey = `${props.workspacePath}\0${repositoryId.value}\0${props.repositories.find((repo) => repo.id === repositoryId.value)?.path ?? ''}`
     commitMessage.value = repositoryDrafts.get(draftKey) ?? ''
     isAmend.value = false
+    undoPopoverOpen.value = false
     branchName.value = ''
     stashMessage.value = ''
     query.value = ''
@@ -426,6 +431,7 @@ onMounted(() => {
   sizeObserver.observe(workbenchRoot.value)
 })
 onBeforeUnmount(() => {
+  undoPopoverOpen.value = false
   sizeObserver?.disconnect()
   copyRevision++
   window.removeEventListener('focus', onFocus)
@@ -661,16 +667,73 @@ async function commit(push = false) {
   }
 }
 
+const lastCommitMessage = computed(() => {
+  const msg = history.value?.commits[0]?.message
+  return msg ? msg.split('\n')[0] : ''
+})
+
+function closeUndoPopover(restoreFocus: boolean | Event = true) {
+  undoPopoverOpen.value = false
+  if (restoreFocus === true) undoBtnRef.value?.focus({ preventScroll: true })
+}
+
+function onUndoPopoverOutside(event: Event) {
+  const target = event.target
+  if (target instanceof Node && !undoPopoverRef.value?.contains(target) && !undoBtnRef.value?.contains(target)) {
+    closeUndoPopover(false)
+  }
+}
+
+function onUndoPopoverKeydown(event: KeyboardEvent) {
+  if (event.key === 'Escape') {
+    event.preventDefault()
+    event.stopPropagation()
+    closeUndoPopover()
+  }
+}
+
+watch(undoPopoverOpen, (opened, _, onCleanup) => {
+  if (!opened) return
+  document.addEventListener('pointerdown', onUndoPopoverOutside, true)
+  document.addEventListener('keydown', onUndoPopoverKeydown, true)
+  onCleanup(() => {
+    document.removeEventListener('pointerdown', onUndoPopoverOutside, true)
+    document.removeEventListener('keydown', onUndoPopoverKeydown, true)
+  })
+})
+
+watch(canUndoCommit, (val) => {
+  if (!val && undoPopoverOpen.value) {
+    undoPopoverOpen.value = false
+  }
+})
+
 async function undoLastCommit() {
   if (lock.value) return
+  if (undoPopoverOpen.value) {
+    closeUndoPopover(false)
+    return
+  }
   if (!history.value?.commits.length) {
     await client.loadHistory({ skip: 0, query: '', reference: historyReference.value })
   }
-  const lastMsg = history.value?.commits[0]?.message
-  const detail = lastMsg
-    ? `将最近一次提交（${lastMsg.split('\n')[0]}）重置，所有修改将保留在暂存区中。确定继续吗？`
-    : '将最近一次提交重置（Soft Reset），所有修改将保留在暂存区中。确定继续吗？'
-  await ask('撤回最近一次提交', detail, { operation: 'undoCommit' })
+  undoPopoverOpen.value = true
+  await nextTick()
+  undoPopoverRef.value?.focus()
+}
+
+async function confirmUndo() {
+  if (props.disabled || busy.value || loading.value || lock.value) return
+  const prevMsg = history.value?.commits[0]?.message ?? ''
+  undoPopoverOpen.value = false
+  const ok = await act({ operation: 'undoCommit', paths: [], message: '', reference: '' })
+  if (ok) {
+    if (prevMsg && !commitMessage.value.trim()) {
+      commitMessage.value = prevMsg
+    }
+    commitExpanded.value = true
+    pushMessage({ tone: 'info', text: '已撤销最近一次提交，修改已保留在暂存区。' })
+  }
 }
 
 async function authenticate(value: { username: string; password: string; save?: boolean }) {
@@ -1062,16 +1125,6 @@ function statusLabel(file: GitFileChange, staged: boolean) {
             :disabled="repositorySwitchLocked || !repositories.length"
             aria-label="Git 仓库"
           />
-          <button
-            type="button"
-            class="compact-manage"
-            aria-label="管理 Git 仓库"
-            title="添加或管理 Git 仓库"
-            :disabled="repositorySwitchLocked"
-            @click="emit('configureRepositories')"
-          >
-            <PhGearSix :size="17" aria-hidden="true" />
-          </button>
         </div>
         <div class="repository-identity">
           <PhFolder :size="19" aria-hidden="true" />
@@ -1380,16 +1433,53 @@ function statusLabel(file: GitFileChange, staged: boolean) {
                   <input v-model="isAmend" type="checkbox" :disabled="disabled || busy || loading || !canAmend" />
                   <span>修改上一条提交 (Amend)</span>
                 </label>
-                <button
-                  v-if="canUndoCommit"
-                  type="button"
-                  class="text-action muted-action undo-commit-btn"
-                  :disabled="disabled || busy || loading"
-                  title="撤回最近一次提交（保留更改在暂存区）"
-                  @click="undoLastCommit"
-                >
-                  撤回上次提交
-                </button>
+                <div v-if="canUndoCommit" class="undo-commit-wrapper">
+                  <button
+                    ref="undoBtnRef"
+                    type="button"
+                    class="text-action muted-action undo-commit-btn"
+                    :disabled="disabled || busy || loading"
+                    title="撤回最近一次提交（保留更改在暂存区）"
+                    :aria-expanded="undoPopoverOpen"
+                    @click="undoLastCommit"
+                  >
+                    撤回上次提交
+                  </button>
+                  <Transition name="select-popover">
+                    <div
+                      v-if="undoPopoverOpen"
+                      ref="undoPopoverRef"
+                      class="undo-commit-popover"
+                      role="alertdialog"
+                      :aria-labelledby="`${id}-undo-title`"
+                      :aria-describedby="`${id}-undo-detail`"
+                      tabindex="-1"
+                      @keydown.esc.prevent="closeUndoPopover()"
+                    >
+                      <div class="undo-popover-header">
+                        <PhArrowUUpLeft :size="15" class="undo-popover-icon" aria-hidden="true" />
+                        <strong :id="`${id}-undo-title`" class="undo-popover-title">撤回最近一次提交？</strong>
+                      </div>
+                      <p :id="`${id}-undo-detail`" class="undo-popover-detail">
+                        重置最近一次提交（Soft Reset），所有修改将保留在暂存区中。
+                      </p>
+                      <div v-if="lastCommitMessage" class="undo-popover-commit-msg" :title="lastCommitMessage">
+                        {{ lastCommitMessage }}
+                      </div>
+                      <div class="undo-popover-actions">
+                        <button type="button" class="undo-popover-cancel" @click="closeUndoPopover()">取消</button>
+                        <button
+                          type="button"
+                          class="danger-button undo-popover-confirm"
+                          :disabled="disabled || busy || loading"
+                          @click="confirmUndo"
+                        >
+                          确认操作
+                        </button>
+                      </div>
+                    </div>
+                  </Transition>
+                </div>
               </div>
               <div class="button-row">
                 <button type="submit" class="primary-button commit-primary" :disabled="!canCommit">
@@ -2186,12 +2276,6 @@ function statusLabel(file: GitFileChange, staged: boolean) {
   box-shadow: none;
   font-size: inherit;
 }
-.compact-manage {
-  flex-shrink: 0;
-  width: var(--git-control-height);
-  height: var(--git-control-height);
-  padding: 0;
-}
 .commit-selection-bar {
   display: flex;
   align-items: center;
@@ -2908,6 +2992,8 @@ h4 {
   font-size: var(--text-small);
   min-height: 24px;
   flex-shrink: 0;
+  flex-wrap: wrap;
+  row-gap: 4px;
 }
 .commit-amend-label {
   display: inline-flex;
@@ -2917,14 +3003,109 @@ h4 {
   user-select: none;
   font-weight: normal;
   color: var(--skin-text);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.commit-amend-label span {
+  white-space: nowrap;
 }
 .commit-amend-label input[type='checkbox'] {
   margin: 0;
   cursor: pointer;
 }
+.undo-commit-wrapper {
+  position: relative;
+  display: inline-flex;
+}
 .undo-commit-btn {
   font-size: var(--text-caption);
   padding: 2px 6px;
+}
+.undo-commit-popover {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  right: 0;
+  width: 250px;
+  max-width: min(280px, 90vw);
+  padding: 12px;
+  background: var(--skin-surface);
+  border: 1px solid var(--skin-border);
+  border-radius: var(--radius-md, 8px);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.16);
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: var(--text-small);
+  line-height: 1.4;
+  color: var(--skin-text);
+  text-align: left;
+  outline: none;
+}
+.undo-popover-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--skin-text);
+}
+.undo-popover-icon {
+  color: var(--skin-warning, #e6a23c);
+  flex-shrink: 0;
+}
+.undo-popover-title {
+  font-size: var(--text-small);
+  font-weight: 600;
+  color: var(--skin-text);
+  line-height: 1.3;
+}
+.undo-popover-detail {
+  margin: 0;
+  font-size: var(--text-caption);
+  color: var(--skin-text-muted);
+  line-height: 1.5;
+}
+.undo-popover-commit-msg {
+  padding: 4px 8px;
+  background: var(--skin-canvas);
+  border: 1px solid var(--skin-border);
+  border-radius: var(--radius-sm, 4px);
+  font-size: var(--text-caption);
+  font-family: var(--font-mono, monospace);
+  color: var(--skin-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.undo-popover-actions {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+}
+.undo-popover-actions button {
+  padding: 3px 10px;
+  font-size: var(--text-caption);
+  min-height: 24px;
+  border-radius: var(--radius-sm, 4px);
+}
+.undo-popover-cancel {
+  background: transparent;
+  border: 1px solid var(--skin-border);
+  color: var(--skin-text);
+}
+.undo-popover-cancel:hover {
+  background: var(--skin-canvas);
+}
+.undo-popover-confirm {
+  background: var(--skin-danger-soft);
+  color: var(--skin-danger);
+  border-color: var(--skin-danger-border);
+}
+.undo-popover-confirm:hover:not(:disabled) {
+  background: var(--skin-danger);
+  color: var(--skin-on-accent, #fff);
+  border-color: var(--skin-danger);
 }
 .workbench-hint {
   font-size: var(--text-small);
