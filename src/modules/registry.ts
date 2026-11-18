@@ -136,12 +136,13 @@ export const MODULE_REGISTRY: readonly ModuleDefinition[] = [
     component: ExcelModule,
     settings: {
       title: 'Excel 设置',
-      description: '启用 Excel 输出，配置模板、提示词、保存位置与依赖的默认 AI。',
+      description: '配置内容生成与 Excel 填充两份提示词、模板、保存位置和默认 AI。',
       component: ExcelModuleSettings,
     },
     help: [
       '读取当前选中的单日或日历框选范围，支持跨周、跨月和跨年。',
-      '点「Xls」直接打开生成窗口，核对日期并临时编辑提示词，确认后在同一窗口查看 AI 进度和预览，再确认输出。',
+      '点「Xls」打开两步生成窗口：先整理日报正文，检查或编辑内容后，再确认填充 Excel 并预览输出。',
+      '内容生成提示词负责整理日报，Excel 填充提示词负责单元格位置和样式；填表只使用你确认后的正文。',
       '窗口中的提示词只对本次生成有效，关闭后恢复 Excel 设置中的内容。',
       '已导出列表自动显示与日历选择有日期交集的报告，点击文件即可预览。',
       '首次使用需点标题栏的齿轮按钮，在「Excel 设置」中启用输出并配置模板、提示词、保存位置和默认 AI。',

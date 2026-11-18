@@ -163,6 +163,7 @@ mod tests {
                 enabled: false,
                 template_path: "/templates/weekly.xlsx".into(),
                 prompt: "填写本周工作进展".into(),
+                content_prompt: "先按项目整理成果".into(),
             },
             summary: crate::summary::Settings {
                 output_directory: "总结/每周".into(),
@@ -183,6 +184,7 @@ mod tests {
         assert_eq!(restored.ai.providers[0].executable, "/usr/local/bin/codex");
         assert_eq!(restored.excel.template_path, "/templates/weekly.xlsx");
         assert_eq!(restored.excel.prompt, "填写本周工作进展");
+        assert_eq!(restored.excel.content_prompt, "先按项目整理成果");
         assert_eq!(restored.summary.output_directory, "总结/每周");
         assert_eq!(restored.editor.default_template_id, "standard");
         assert_eq!(restored.editor.custom_template, "自定义模版内容");

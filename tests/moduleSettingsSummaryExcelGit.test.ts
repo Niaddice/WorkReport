@@ -168,6 +168,19 @@ describe('ExcelModuleSettings', () => {
     expect(draft.value.excel.prompt).toBe('按项目汇总工时，填入 A2 单元格')
   })
 
+  it('分别保存内容生成规则与 Excel 填充规则，编辑其中一个不会覆盖另一个', async () => {
+    const { context, draft } = createContext({ excel: excelBundle })
+    const wrapper = mountSettings(ExcelModuleSettings, context)
+
+    await wrapper.get('#excel-content-prompt').setValue('按项目提炼已完成事项，保留具体成果')
+    expect(draft.value.excel.contentPrompt).toBe('按项目提炼已完成事项，保留具体成果')
+    expect(draft.value.excel.prompt).toBe(excelBundle.prompt)
+    await wrapper.get('#excel-output-prompt').setValue('将确认后的正文写入 B5 单元格')
+    expect(draft.value.excel.prompt).toBe('将确认后的正文写入 B5 单元格')
+    expect(draft.value.excel.contentPrompt).toBe('按项目提炼已完成事项，保留具体成果')
+    expect(exposed(wrapper).validate()).toBe(true)
+  })
+
   it('把 Excel 保存目录写回 files 草稿，合法时校验通过', async () => {
     const { context, draft } = createContext({ excel: excelBundle })
     const wrapper = mountSettings(ExcelModuleSettings, context)

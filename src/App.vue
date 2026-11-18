@@ -92,6 +92,7 @@ const {
 const ai = useAi()
 const appearance = useAppearance()
 const excel = useExcel()
+let excelGenerationRevision = 0
 const summaryOutput = useSummaryOutput()
 const holidays = useHolidays()
 const git = useGit()
@@ -99,7 +100,12 @@ const { state: holidayState, loading: holidayLoading, syncing: holidaySyncing, e
 const holidayReady = ref(false)
 const { settings: summaryOutputSettings } = summaryOutput
 const summaryWorkspacePath = ref('')
-const { settings: excelSettings, preparing: excelPreparing, exporting: excelExporting } = excel
+const {
+  settings: excelSettings,
+  preparing: excelPreparing,
+  generatingContent: excelGeneratingContent,
+  exporting: excelExporting,
+} = excel
 const {
   scale: appearanceScale,
   rail: appearanceRail,
@@ -136,7 +142,7 @@ const workspaceSwitchDialog = ref<InstanceType<typeof WorkspaceSwitchDialog>>()
 const pendingWorkspaceSwitch = ref<{ path: string; sourcePath: string; sourceName: string } | null>(null)
 const workspaceSwitchError = ref('')
 const requestingAi = ref(false)
-const excelBusy = computed(() => excelPreparing.value || excelExporting.value)
+const excelBusy = computed(() => excelGeneratingContent.value || excelPreparing.value || excelExporting.value)
 const summarySelectionDates = ref<string[]>([])
 const refreshRevision = ref(0)
 const settingsView = ref<InstanceType<typeof SettingsView>>()
@@ -840,6 +846,7 @@ function showConfirmation() {
 }
 async function selectDate(date: string) {
   if (excelBusy.value || busy.value) return
+  excelGenerationRevision++
   const intent = ++fileOpenRevision
   if (!(await workspaceDocument.flush()) || intent !== fileOpenRevision) return
   workspaceDocument.clear()
@@ -911,6 +918,7 @@ function cancelConfirm() {
   if (!busy.value) void confirmDialog.value?.close()
 }
 function clearRange() {
+  excelGenerationRevision++
   excel.clearSelection()
   rangeRevision++
   rangeDates.value = []
@@ -920,6 +928,7 @@ function clearRange() {
 }
 async function loadRange(dates: string[], duringGitAppend = false) {
   if (excelBusy.value || (journal.appendingGit.value && !duringGitAppend)) return
+  excelGenerationRevision++
   if (!dates.length) {
     clearRange()
     return
@@ -1117,7 +1126,38 @@ function exportSummary(format: FileFormat) {
     summaryMode.value,
   )
 }
-async function prepareExcel(dates: string[], prompt?: string) {
+async function generateExcelContent(dates: string[], prompt?: string) {
+  if (busy.value || excelBusy.value || !workspace.value) return
+  const revision = ++excelGenerationRevision
+  const fileIntent = fileOpenRevision
+  const workspacePath = workspace.value.path
+  summaryWorkspacePath.value = workspacePath
+  summarySelectionDates.value = [...dates].sort()
+  excel.exportError.value = ''
+  if (!excelSettings.value.enabled) {
+    excel.exportError.value = '请先在 Excel 设置中启用输出。'
+    return
+  }
+  const blockedReason = excelBlockedReason.value
+  if (blockedReason) {
+    excel.exportError.value = blockedReason
+    return
+  }
+  const flushed = await journal.flush()
+  if (
+    revision !== excelGenerationRevision ||
+    fileIntent !== fileOpenRevision ||
+    workspace.value?.path !== workspacePath ||
+    excelBusy.value
+  )
+    return
+  if (!flushed) {
+    excel.exportError.value = error.value || '请先保存当前日报，再生成报告内容。'
+    return
+  }
+  await excel.generateContent(workspacePath, [...dates], prompt)
+}
+async function prepareExcel(dates: string[], prompt?: string, content?: string) {
   if (busy.value || excelBusy.value || !workspace.value) return
   const workspacePath = workspace.value.path
   summaryWorkspacePath.value = workspacePath
@@ -1132,7 +1172,7 @@ async function prepareExcel(dates: string[], prompt?: string) {
     excel.exportError.value = blockedReason
     return
   }
-  await excel.prepareSelection(workspacePath, summarySelectionDates.value, prompt)
+  await excel.prepareSelection(workspacePath, summarySelectionDates.value, prompt, content)
 }
 async function confirmExcelPreview() {
   if (excelExporting.value || excelBusy.value || !excel.preview.value) return
@@ -1144,6 +1184,7 @@ async function confirmExcelPreview() {
 }
 function discardExcelPreview() {
   if (excelExporting.value) return
+  excelGenerationRevision++
   void excel.discardPreview()
 }
 async function openExcelOutputDirectory() {
@@ -1271,6 +1312,7 @@ const moduleActions: ModuleActions = {
   directSummary: ai.directSummary,
   closeSummary,
   exportSummary,
+  generateExcelContent,
   prepareExcel,
   confirmExcel: confirmExcelPreview,
   discardExcelPreview,

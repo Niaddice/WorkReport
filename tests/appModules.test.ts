@@ -623,8 +623,13 @@ describe('modular home integration', () => {
     }
   })
 
-  it('sends the temporary Excel prompt through generation without saving it to workspace settings', async () => {
-    const configured = { enabled: true, templatePath: '/templates/report.xlsx', prompt: '设置中的原始规则' }
+  it('confirms generated Excel content before filling and keeps the two temporary prompts out of saved settings', async () => {
+    const configured = {
+      enabled: true,
+      templatePath: '/templates/report.xlsx',
+      contentPrompt: '设置中的内容规则',
+      prompt: '设置中的填充规则',
+    }
     invoke.mockImplementation(async (command: string) => {
       if (command === 'load_excel_settings') return configured
       if (command === 'load_ai_settings')
@@ -644,6 +649,7 @@ describe('modular home integration', () => {
           generationPreference: '',
           summaryPrompt: '',
         }
+      if (command === 'generate_excel_content') return '项目成果：已完成日报中的任务。'
       if (command === 'prepare_excel')
         return {
           id: 'temporary-preview',
@@ -663,20 +669,98 @@ describe('modular home integration', () => {
       await flushPromises()
       await wrapper.get('.excel-generate-button').trigger('click')
       expect(invoke.mock.calls.some(([command]) => command === 'prepare_excel')).toBe(false)
-      await wrapper.get('#excel-session-prompt').setValue('本次只提炼项目成果')
+      await wrapper.get('#excel-session-content-prompt').setValue('本次只提炼项目成果')
       await wrapper.get('.excel-start-generation').trigger('click')
       await flushPromises()
-      expect(invoke).toHaveBeenCalledWith('prepare_excel', {
+      expect(invoke).toHaveBeenCalledWith('generate_excel_content', {
         workspacePath: DEMO_WORKSPACE,
         dates: [dayjs().format('YYYYMMDD')],
         requestId: expect.any(String),
         prompt: '本次只提炼项目成果',
       })
+      expect(invoke.mock.calls.some(([command]) => command === 'prepare_excel')).toBe(false)
+      expect(wrapper.get<HTMLTextAreaElement>('#excel-confirmed-content').element.value).toBe(
+        '项目成果：已完成日报中的任务。',
+      )
+      await wrapper.get('#excel-confirmed-content').setValue('用户已确认：完成客户检索和日报导出。')
+      await wrapper.get('#excel-session-prompt').setValue('将确认正文写入工作表 B5')
+      await wrapper.get('.excel-confirm-content').trigger('click')
+      await flushPromises()
+      expect(invoke).toHaveBeenCalledWith('prepare_excel', {
+        workspacePath: DEMO_WORKSPACE,
+        dates: [dayjs().format('YYYYMMDD')],
+        requestId: expect.any(String),
+        prompt: '将确认正文写入工作表 B5',
+        content: '用户已确认：完成客户检索和日报导出。',
+      })
+      expect(invoke.mock.calls.filter(([command]) => command === 'generate_excel_content')).toHaveLength(1)
+      expect(invoke.mock.calls.some(([command]) => command === 'confirm_excel')).toBe(false)
       expect(invoke.mock.calls.some(([command]) => command === 'save_workspace_settings')).toBe(false)
       await wrapper.get('.excel-preview-dialog [aria-label="关闭 Excel报告"]').trigger('click')
       await flushPromises()
       await wrapper.get('.excel-generate-button').trigger('click')
-      expect(wrapper.get<HTMLTextAreaElement>('#excel-session-prompt').element.value).toBe(configured.prompt)
+      expect(wrapper.get<HTMLTextAreaElement>('#excel-session-content-prompt').element.value).toBe(
+        configured.contentPrompt,
+      )
+    } finally {
+      wrapper.unmount()
+    }
+  })
+
+  it('does not start content generation after closing the Excel dialog while the journal save is still pending', async () => {
+    const date = dayjs().format('YYYYMMDD')
+    const entry = { date, filename: `${date}.txt`, format: 'txt', content: '原始日报', revision: 'v1' }
+    let finishSave!: (value: typeof entry) => void
+    invoke.mockImplementation(async (command: string) => {
+      if (command === 'list_entries') return [entry]
+      if (command === 'read_entry') return entry
+      if (command === 'save_entry')
+        return new Promise<typeof entry>((resolve) => {
+          finishSave = resolve
+        })
+      if (command === 'load_excel_settings')
+        return {
+          enabled: true,
+          templatePath: '/templates/report.xlsx',
+          contentPrompt: '归纳项目成果',
+          prompt: '写入 B5',
+        }
+      if (command === 'load_ai_settings')
+        return {
+          providers: [
+            {
+              id: 'ai',
+              name: '默认 AI',
+              kind: 'http',
+              model: 'example',
+              executable: '',
+              baseUrl: 'https://example.test',
+              apiKey: '',
+            },
+          ],
+          defaultProviderId: 'ai',
+          generationPreference: '',
+          summaryPrompt: '',
+        }
+      if (command === 'generate_excel_content') return '不应生成的内容'
+      return commandResult(command)
+    })
+    const wrapper = await openDemoWorkspace()
+    try {
+      await addModule(wrapper, 'Excel报告')
+      wrapper.getComponent(JournalEditor).vm.$emit('edit', '尚未保存的新日报内容')
+      await wrapper.get('.excel-generate-button').trigger('click')
+      await wrapper.get('.excel-start-generation').trigger('click')
+      await flushPromises()
+      expect(finishSave).toBeTypeOf('function')
+      expect(invoke.mock.calls.some(([command]) => command === 'generate_excel_content')).toBe(false)
+
+      await wrapper.get('.excel-preview-dialog [aria-label="关闭 Excel报告"]').trigger('click')
+      finishSave({ ...entry, content: '尚未保存的新日报内容', revision: 'v2' })
+      await flushPromises()
+      expect(invoke.mock.calls.some(([command]) => command === 'generate_excel_content')).toBe(false)
+      expect(invoke.mock.calls.some(([command]) => command === 'prepare_excel')).toBe(false)
+      expect(wrapper.get('.excel-preview-dialog').attributes('open')).toBeUndefined()
     } finally {
       wrapper.unmount()
     }

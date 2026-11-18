@@ -44,8 +44,10 @@ export interface ModuleActions {
   directSummary(): void
   closeSummary(): void
   exportSummary(format: FileFormat): void
-  /** 按所选单日或日期范围生成 Excel报告预览。 */
-  prepareExcel(dates: string[], prompt?: string): Promise<void>
+  /** 第一步：按所选日报生成可供用户确认和修改的报告正文。 */
+  generateExcelContent(dates: string[], prompt?: string): Promise<void>
+  /** 第二步：把用户确认的正文按填充提示词写入模板预览。 */
+  prepareExcel(dates: string[], prompt?: string, content?: string): Promise<void>
   confirmExcel(): Promise<void>
   discardExcelPreview(): void
   openExcelOutputDirectory(): Promise<void>

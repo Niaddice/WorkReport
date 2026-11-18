@@ -119,6 +119,7 @@ flush() → 若已有保存任务则排队 → 循环直到 draft 与已保存�
 ## AI 与 Excel
 
 - 总结只发送当前所选文本；CLI 在独立临时目录运行，不把工作空间作为工作目录。
+- Excel 分两次 AI 请求：`generate_excel_content` 使用日报和 `excel.contentPrompt` 生成可编辑正文；用户明确确认后，`prepare_excel` 才把确认正文与模板、旧字段 `excel.prompt`（填充规则）交给填表 AI。`useExcel` 将正文绑定到工作空间和日期范围，取消、切换或保存设置会使会话失效，填表失败保留正文；`confirm_excel` 只发布缓存中已预览的工作簿，不再请求 AI。旧配置缺失 `contentPrompt` 时自动补默认内容生成规则。
 - 确认时会重新校验工作空间、模板指纹、Excel 设置与所选日报，任一变化都要求重新生成预览，避免“预览的是 A、写出去的是 B”。
 
 ## 测试策略

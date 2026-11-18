@@ -942,6 +942,76 @@ fn excel_request_snapshot(
     Ok((snapshot, saved_settings))
 }
 
+/// Content-generation overrides never alter either saved prompt.
+fn excel_content_snapshot(
+    workspace: &mut Workspace,
+    mut stored: settings::StoredSettings,
+    dates: &[String],
+    workspace_path: &str,
+    prompt: Option<String>,
+) -> Result<ExcelSnapshot, String> {
+    if let Some(prompt) = prompt {
+        stored.excel.content_prompt = prompt;
+    }
+    excel_snapshot(workspace, stored, dates, workspace_path)
+}
+
+/// Only the reviewed text and date context are exposed to the workbook-filling pass.
+fn excel_confirmed_content(dates: &[String], content: &str) -> Result<String, String> {
+    if content.trim().is_empty() || content.len() > 500_000 {
+        return Err("请确认需要填充的 Excel 内容，正文不能为空或超过 500 KB".into());
+    }
+    let (start, end) = excel::validate_dates(dates)?;
+    let mut selected = dates.to_vec();
+    selected.sort();
+    selected.dedup();
+    let payload = serde_json::to_string(&serde_json::json!({
+        "selectedDates": selected,
+        "start": start,
+        "end": end,
+        "confirmedContent": content,
+    })).map_err(|_| "无法准备已确认的 Excel 内容")?;
+    if payload.len() > 500_000 {
+        return Err("已确认的 Excel 内容超过 500 KB，请精简内容后重试".into());
+    }
+    Ok(payload)
+}
+
+#[tauri::command]
+async fn generate_excel_content(
+    app: tauri::AppHandle,
+    state: State<'_, ai::Runtime>,
+    workspace_state: State<'_, AppState>,
+    dates: Vec<String>,
+    workspace_path: String,
+    request_id: String,
+    prompt: Option<String>,
+) -> Result<String, String> {
+    let token = state.begin(request_id.clone())?;
+    let result = async {
+        let snapshot = run_workspace(workspace_state.0.clone(), move |workspace| {
+            summary::validate_workspace(workspace.root(), &workspace_path)?;
+            let stored = stored_settings_at(&app, workspace.root())?;
+            excel_content_snapshot(workspace, stored, &dates, &workspace_path, prompt)
+        }).await?;
+        if token.is_cancelled() {
+            return Err("已取消 Excel 内容生成".into());
+        }
+        let content = ai::generate_excel_content(
+            &snapshot.provider,
+            &snapshot.content,
+            &snapshot.settings.content_prompt,
+            token.clone(),
+        ).await?;
+        if token.is_cancelled() {
+            return Err("已取消 Excel 内容生成".into());
+        }
+        Ok(content)
+    }.await;
+    state.finish(&request_id);
+    result
+}
+
 #[tauri::command]
 async fn prepare_excel(
     app: tauri::AppHandle,
@@ -952,7 +1022,9 @@ async fn prepare_excel(
     workspace_path: String,
     request_id: String,
     prompt: Option<String>,
+    content: String,
 ) -> Result<excel::ExcelPreview, String> {
+    let confirmed_content = excel_confirmed_content(&dates, &content)?;
     let token = state.begin(request_id.clone())?;
     let result = async {
         let snapshot_path = workspace_path.clone();
@@ -974,7 +1046,7 @@ async fn prepare_excel(
         let response = ai::fill_excel(
             &snapshot.provider,
             &context,
-            &snapshot.content,
+            &confirmed_content,
             &snapshot.settings.prompt,
             token.clone(),
         ).await?;
@@ -1371,6 +1443,7 @@ pub fn run() {
             retry_database_backup,
             database_backup_warning,
             open_excel_output_directory,
+            generate_excel_content,
             prepare_excel,
             confirm_excel,
             discard_excel_preview,
@@ -1521,6 +1594,7 @@ mod excel_integration_tests {
                 enabled: true,
                 template_path: template.to_string_lossy().into_owned(),
                 prompt: "将工作内容填写到日报模板".into(),
+                ..excel::Settings::default()
             },
             ai: ai::Settings {
                 providers: vec![provider],
@@ -1934,6 +2008,41 @@ mod excel_integration_tests {
             assert!(excel_request_snapshot(&mut workspace, stored.clone(), &["20261020".into()], &path, Some(prompt)).is_err());
         }
         assert_eq!(fs::read(settings_path).unwrap(), saved_bytes);
+    }
+
+    #[test]
+    fn content_generation_uses_its_own_request_prompt_without_parsing_the_template() {
+        let root = tempfile::tempdir().unwrap();
+        let mut workspace = Workspace::open(root.path().to_str().unwrap()).unwrap();
+        workspace.create_with_content("20261020", Format::Md, "日报原文").unwrap();
+        // configured_settings deliberately writes a non-workbook template. Step one
+        // must still be usable because only the filling pass parses the workbook.
+        let stored = configured_settings(root.path());
+        let original = stored.excel.clone();
+        let snapshot = excel_content_snapshot(
+            &mut workspace, stored, &["20261020".into()], root.path().to_str().unwrap(),
+            Some("先按项目归类，供用户核对".into()),
+        ).unwrap();
+        assert_eq!(snapshot.settings.content_prompt, "先按项目归类，供用户核对");
+        assert_eq!(snapshot.settings.prompt, original.prompt);
+        assert!(snapshot.content.contains("日报原文"));
+        assert_eq!(original.content_prompt, excel::DEFAULT_CONTENT_PROMPT);
+    }
+
+    #[test]
+    fn workbook_filling_payload_contains_only_reviewed_text_and_date_context() {
+        let dates = vec!["20261021".into(), "20261020".into(), "20261021".into()];
+        let payload: serde_json::Value = serde_json::from_str(
+            &excel_confirmed_content(&dates, "用户修改并确认的成果\n保留这行").unwrap(),
+        ).unwrap();
+        assert_eq!(payload["confirmedContent"], "用户修改并确认的成果\n保留这行");
+        assert_eq!(payload["selectedDates"], serde_json::json!(["20261020", "20261021"]));
+        assert_eq!(payload["start"], "20261020");
+        assert_eq!(payload["end"], "20261021");
+        assert!(payload.get("reports").is_none());
+        assert!(excel_confirmed_content(&dates, " \n ").is_err());
+        assert!(excel_confirmed_content(&dates, &"x".repeat(500_001)).is_err());
+        assert!(excel_confirmed_content(&["not-a-date".into()], "已确认").is_err());
     }
 
     fn preview_fixture(root: &std::path::Path) -> (Workspace, settings::StoredSettings) {

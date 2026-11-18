@@ -17,6 +17,10 @@ const props = defineProps<{
   scopeLabel?: string
   configuring?: boolean
   prompt?: string
+  contentPrompt?: string
+  content?: string
+  reviewingContent?: boolean
+  generatingContent?: boolean
   provider?: string
   templateName?: string
   outputDirectory?: string
@@ -29,17 +33,45 @@ const emit = defineEmits<{
   confirm: []
   regenerate: []
   generate: []
+  fill: []
+  'edit-content': []
   configure: []
   'update:prompt': [value: string]
+  'update:contentPrompt': [value: string]
+  'update:content': [value: string]
 }>()
 const dialog = ref<HTMLDialogElement>()
 const motion = createDialogMotion(() => dialog.value)
 const displayed = shallowRef<ExcelPreview | null>(null)
 const view = ref<'sheet' | 'changes'>('sheet')
 const session = computed(() => props.prompt !== undefined)
-const step = computed(() => (props.configuring ? 0 : props.preparing ? 1 : 2))
+const twoStep = computed(() => props.contentPrompt !== undefined)
+const step = computed(() =>
+  twoStep.value
+    ? props.configuring || props.generatingContent
+      ? 0
+      : 1
+    : props.configuring
+      ? 0
+      : props.preparing
+        ? 1
+        : 2,
+)
+const steps = computed(() => (twoStep.value ? ['生成内容', '填充 Excel'] : ['确认生成', 'AI 处理', '预览导出']))
+const activePrompt = computed(() => (twoStep.value && props.configuring ? props.contentPrompt : props.prompt))
 const promptError = computed(() =>
-  !props.prompt?.trim() ? '请填写本次生成使用的提示词。' : props.prompt.length > 6000 ? '提示词不能超过 6000 字。' : '',
+  (activePrompt.value?.length ?? 0) > 6000
+    ? '提示词不能超过 6000 字。'
+    : (!twoStep.value || !props.configuring) && !activePrompt.value?.trim()
+      ? '请填写 Excel 填充提示词。'
+      : '',
+)
+const contentError = computed(() =>
+  !props.content?.trim()
+    ? '请保留需要填入 Excel 的报告内容。'
+    : new TextEncoder().encode(props.content).length > 500_000
+      ? '报告内容不能超过 500 KB，请精简后再填充。'
+      : '',
 )
 watch(
   () => props.preview,
@@ -50,9 +82,12 @@ watch(
   },
   { immediate: true },
 )
-watch([() => props.preparing, () => props.configuring], ([preparing, configuring]) => {
-  if (preparing || configuring) displayed.value = null
-})
+watch(
+  [() => props.preparing, () => props.configuring, () => props.reviewingContent],
+  ([preparing, configuring, reviewing]) => {
+    if (preparing || configuring || reviewing) displayed.value = null
+  },
+)
 watch(
   [() => props.visible, dialog],
   ([visible]) => {
@@ -124,7 +159,23 @@ function styleText(style: ExcelPreviewStyle): string {
           <PhMicrosoftExcelLogo :size="23" />
           <h2 id="excel-preview-title">{{ session ? 'Excel报告' : 'Excel 填充预览' }}</h2>
         </div>
-        <span>{{ configuring ? '确认生成' : preparing ? 'AI 处理中' : '预览与导出' }}</span>
+        <span>{{
+          twoStep
+            ? configuring
+              ? '生成内容'
+              : generatingContent
+                ? '正在生成内容'
+                : reviewingContent
+                  ? '确认内容与填充规则'
+                  : preparing
+                    ? '正在填充 Excel'
+                    : '预览与导出'
+            : configuring
+              ? '确认生成'
+              : preparing
+                ? 'AI 处理中'
+                : '预览与导出'
+        }}</span>
         <button
           v-if="!inline"
           type="button"
@@ -139,16 +190,22 @@ function styleText(style: ExcelPreviewStyle): string {
       </header>
       <p id="excel-preview-description" class="ai-dialog-description">
         {{
-          preparing
-            ? '正在根据所选日报填充 Excel 模板，完成后自动显示预览。'
-            : configuring
-              ? '核对日期与提示词，确认后使用默认 AI 生成报告。'
-              : '请核对工作表中的内容与格式，点击“确认输出”后保存 Excel 文件。'
+          generatingContent
+            ? '正在整理所选日报。生成后先由你核对内容，再填入 Excel。'
+            : preparing
+              ? '正在将已确认的内容填入 Excel 模板，完成后显示工作表预览。'
+              : configuring
+                ? twoStep
+                  ? '第一步：核对日期和内容生成提示词，先生成可编辑的报告正文。'
+                  : '核对日期与提示词，确认后使用默认 AI 生成报告。'
+                : reviewingContent
+                  ? '第二步：核对或修改报告正文，确认后按填充提示词写入 Excel 模板。'
+                  : '请核对工作表中的内容与格式，点击“确认输出”后保存 Excel 文件。'
         }}
       </p>
       <ol v-if="session" class="excel-workflow-steps" aria-label="Excel报告生成流程">
         <li
-          v-for="(label, index) in ['确认生成', 'AI 处理', '预览导出']"
+          v-for="(label, index) in steps"
           :key="label"
           :class="{ 'is-current': step === index, 'is-complete': step > index }"
           :aria-current="step === index ? 'step' : undefined"
@@ -171,23 +228,38 @@ function styleText(style: ExcelPreviewStyle): string {
         </div>
         <div class="excel-generation-editor">
           <div class="excel-generation-editor-heading">
-            <label for="excel-session-prompt">本次生成提示词</label><span>仅本次有效</span>
+            <label :for="twoStep ? 'excel-session-content-prompt' : 'excel-session-prompt'">{{
+              twoStep ? '内容生成提示词' : '本次生成提示词'
+            }}</label
+            ><span>仅本次有效</span>
           </div>
           <textarea
-            id="excel-session-prompt"
-            :value="prompt"
+            :id="twoStep ? 'excel-session-content-prompt' : 'excel-session-prompt'"
+            :value="activePrompt"
             maxlength="6000"
             spellcheck="false"
             aria-describedby="excel-session-prompt-hint"
-            :aria-invalid="!prompt?.trim() || undefined"
-            placeholder="输入本次报告的整理方式、填写位置和格式要求…"
-            @input="emit('update:prompt', ($event.target as HTMLTextAreaElement).value)"
+            :aria-invalid="!!promptError || undefined"
+            :placeholder="
+              twoStep
+                ? '说明如何归纳日报、组织报告正文；留空使用默认规则…'
+                : '输入本次报告的整理方式、填写位置和格式要求…'
+            "
+            @input="
+              twoStep
+                ? emit('update:contentPrompt', ($event.target as HTMLTextAreaElement).value)
+                : emit('update:prompt', ($event.target as HTMLTextAreaElement).value)
+            "
           />
           <div class="excel-generation-editor-hint">
             <p id="excel-session-prompt-hint">
-              修改仅用于本次生成，不会同步到模块设置；关闭后恢复 Excel 设置中的提示词。
+              {{
+                twoStep
+                  ? '只决定报告写什么，不包含单元格和格式规则；留空使用默认内容规则。修改仅本次有效。'
+                  : '修改仅用于本次生成，不会同步到模块设置；关闭后恢复 Excel 设置中的提示词。'
+              }}
             </p>
-            <span>{{ prompt?.length ?? 0 }} / 6000</span>
+            <span>{{ activePrompt?.length ?? 0 }} / 6000</span>
           </div>
           <p v-if="blockedReason" class="settings-error" role="alert">
             {{ blockedReason }}
@@ -207,13 +279,87 @@ function styleText(style: ExcelPreviewStyle): string {
               class="dialog-button dialog-button-primary excel-start-generation"
               :disabled="!!blockedReason || !!promptError || preparing || exporting"
               @click="emit('generate')"
-              >确认并生成</md-filled-button
+              >{{ twoStep ? '生成报告内容' : '确认并生成' }}</md-filled-button
+            >
+          </div>
+        </footer>
+      </template>
+      <template v-else-if="reviewingContent && !preparing">
+        <div class="excel-content-review">
+          <section class="excel-generation-editor excel-confirmed-content-field">
+            <div class="excel-generation-editor-heading">
+              <label for="excel-confirmed-content">待填充内容</label><span>核对后可直接修改</span>
+            </div>
+            <textarea
+              id="excel-confirmed-content"
+              :value="content"
+              spellcheck="false"
+              aria-describedby="excel-confirmed-content-hint"
+              :aria-invalid="!!contentError || undefined"
+              @input="emit('update:content', ($event.target as HTMLTextAreaElement).value)"
+            />
+            <div class="excel-generation-editor-hint">
+              <p id="excel-confirmed-content-hint">
+                填表时仅使用这里确认的正文。修改内容后，生成的 Excel 预览会以本次确认内容为准。
+              </p>
+              <span>{{ content?.length ?? 0 }} 字</span>
+            </div>
+          </section>
+          <section class="excel-generation-editor">
+            <div class="excel-generation-editor-heading">
+              <label for="excel-session-prompt">Excel 填充提示词</label><span>仅本次有效</span>
+            </div>
+            <textarea
+              id="excel-session-prompt"
+              :value="prompt"
+              maxlength="6000"
+              spellcheck="false"
+              aria-describedby="excel-fill-prompt-hint"
+              :aria-invalid="!!promptError || undefined"
+              placeholder="说明填写的工作表、单元格、固定字段及样式…"
+              @input="emit('update:prompt', ($event.target as HTMLTextAreaElement).value)"
+            />
+            <div class="excel-generation-editor-hint">
+              <p id="excel-fill-prompt-hint">只决定已确认内容怎么填入模板，不重新生成报告正文。</p>
+              <span>{{ prompt?.length ?? 0 }} / 6000</span>
+            </div>
+          </section>
+          <div class="excel-fill-template">
+            <PhMicrosoftExcelLogo :size="16" aria-hidden="true" /><span>填充模板</span
+            ><strong :title="templateName">{{ templateName || '尚未选择模板' }}</strong>
+          </div>
+          <p v-if="blockedReason" class="settings-error" role="alert">
+            {{ blockedReason
+            }}<button type="button" class="text-action" @click="emit('configure')">前往 Excel 设置</button>
+          </p>
+          <p v-else-if="contentError || promptError || error" class="settings-error" role="alert">
+            {{ contentError || promptError || error }}
+          </p>
+        </div>
+        <footer class="excel-generation-actions">
+          <button type="button" class="text-action excel-edit-content" @click="emit('edit-content')">
+            <PhArrowClockwise :size="14" aria-hidden="true" />返回内容生成
+          </button>
+          <div class="ai-dialog-confirm-actions">
+            <md-text-button class="dialog-button dialog-button-secondary" data-window-close @click="emit('close')"
+              >取消</md-text-button
+            >
+            <md-filled-button
+              class="dialog-button dialog-button-primary excel-confirm-content"
+              :disabled="!!blockedReason || !!contentError || !!promptError || preparing || exporting"
+              @click="emit('fill')"
+              >确认内容并填充 Excel</md-filled-button
             >
           </div>
         </footer>
       </template>
       <details v-else-if="session" class="excel-session-prompt">
         <summary>本次提示词</summary>
+        <template v-if="twoStep"
+          ><strong>内容生成提示词</strong>
+          <pre>{{ contentPrompt || '使用默认内容生成规则' }}</pre>
+          <strong>Excel 填充提示词</strong></template
+        >
         <pre>{{ prompt }}</pre>
       </details>
       <template v-if="!configuring && preparing">
@@ -222,11 +368,17 @@ function styleText(style: ExcelPreviewStyle): string {
           <div class="ai-progress" role="status" aria-live="polite">
             <div class="ai-progress-head">
               <PhCircleNotch class="spin" :size="18" aria-hidden="true" />
-              <strong>AI 正在处理所选日报…</strong>
+              <strong>{{ generatingContent ? 'AI 正在生成报告内容…' : 'AI 正在填充 Excel 模板…' }}</strong>
               <span class="ai-progress-time">已用时 {{ elapsedSeconds ?? 0 }} 秒</span>
             </div>
             <div class="ai-progress-track" role="progressbar" aria-label="Excel报告生成进度"><span /></div>
-            <p class="ai-progress-hint">正在生成填充内容并准备工作表预览，内容较多时需要更久。</p>
+            <p class="ai-progress-hint">
+              {{
+                generatingContent
+                  ? '完成后将显示报告正文供你核对，不会自动填充 Excel。'
+                  : '仅将已确认的内容映射到模板，完成后可核对工作表预览。'
+              }}
+            </p>
           </div>
         </div>
         <footer class="excel-generation-actions">
@@ -329,7 +481,9 @@ function styleText(style: ExcelPreviewStyle): string {
           </div>
           <div class="ai-dialog-confirm-actions">
             <button type="button" class="text-action" :disabled="exporting" @click="emit('regenerate')">
-              <PhArrowClockwise :size="14" aria-hidden="true" />{{ session ? '修改提示词并重新生成' : '重新生成' }}
+              <PhArrowClockwise :size="14" aria-hidden="true" />{{
+                twoStep ? '返回修改内容与填充规则' : session ? '修改提示词并重新生成' : '重新生成'
+              }}
             </button>
             <md-text-button
               class="dialog-button dialog-button-secondary"
@@ -350,7 +504,7 @@ function styleText(style: ExcelPreviewStyle): string {
           </div>
         </footer>
       </template>
-      <div v-else-if="!configuring && error" class="excel-generation-progress">
+      <div v-else-if="!configuring && !reviewingContent && error" class="excel-generation-progress">
         <p class="settings-error" role="alert">{{ error }}</p>
         <div class="ai-dialog-confirm-actions">
           <md-text-button class="dialog-button dialog-button-secondary" data-window-close @click="emit('close')"
@@ -364,3 +518,5 @@ function styleText(style: ExcelPreviewStyle): string {
     </dialog>
   </Teleport>
 </template>
+
+<style src="./excelWorkflow.css"></style>

@@ -67,7 +67,7 @@ defineExpose({ validate, focusInvalid })
     <ModuleSettingsSection
       title="Excel 输出"
       heading-id="excel-output-title"
-      description="用默认 AI 整理所选日报，并填入指定模板。"
+      description="先生成并确认报告内容，再按填充规则写入 Excel 模板。"
     >
       <ExcelSettings
         ref="excelForm"

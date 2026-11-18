@@ -2,9 +2,14 @@
 import { computed, ref, watch } from 'vue'
 import { isTauri } from '@tauri-apps/api/core'
 import { open } from '@tauri-apps/plugin-dialog'
-import { PhFileXls, PhQuestion, PhSparkle } from '@phosphor-icons/vue'
+import { PhFileXls, PhSparkle } from '@phosphor-icons/vue'
 import SettingHint from './SettingHint.vue'
-import { cloneExcelSettings, RECOMMENDED_EXCEL_PROMPT, type ExcelSettings } from '../lib/useExcel'
+import {
+  cloneExcelSettings,
+  RECOMMENDED_EXCEL_CONTENT_PROMPT,
+  RECOMMENDED_EXCEL_PROMPT,
+  type ExcelSettings,
+} from '../lib/useExcel'
 
 const props = defineProps<{
   modelValue: ExcelSettings
@@ -19,6 +24,8 @@ const emit = defineEmits<{
   configureDirectories: []
 }>()
 const draft = computed(() => props.modelValue)
+const contentPrompt = computed(() => draft.value.contentPrompt ?? RECOMMENDED_EXCEL_CONTENT_PROMPT)
+const root = ref<HTMLElement>()
 const picking = ref(false)
 const localError = ref('')
 const formBusy = computed(() => props.busy || picking.value)
@@ -50,6 +57,10 @@ function toggle() {
 function applyRecommendedPrompt() {
   if (formBusy.value || !props.workspacePath) return
   update({ prompt: RECOMMENDED_EXCEL_PROMPT })
+}
+function applyRecommendedContentPrompt() {
+  if (formBusy.value || !props.workspacePath) return
+  update({ contentPrompt: RECOMMENDED_EXCEL_CONTENT_PROMPT })
 }
 
 async function chooseTemplate() {
@@ -95,30 +106,40 @@ function validate(): boolean {
       localError.value = '请选择一个 .xlsx 格式的 Excel 模板。'
       return false
     }
+    if (contentPrompt.value.length > 6000) {
+      localError.value = '内容生成提示词不能超过 6000 字。'
+      return false
+    }
     if (!draft.value.prompt.trim()) {
-      localError.value = '请填写 Excel 输出提示词，说明需要填入的内容和位置。'
+      localError.value = '请填写 Excel 填充提示词，说明如何填入模板。'
       return false
     }
     if (draft.value.prompt.length > 6000) {
-      localError.value = 'Excel 输出提示词不能超过 6000 字。'
+      localError.value = 'Excel 填充提示词不能超过 6000 字。'
       return false
     }
   }
   return true
 }
 
-defineExpose({ validate })
+function focusInvalid() {
+  const selector = localError.value.includes('内容生成提示词')
+    ? '#excel-content-prompt'
+    : localError.value.includes('填充提示词')
+      ? '#excel-output-prompt'
+      : '#excel-template'
+  root.value?.querySelector<HTMLElement>(selector)?.focus()
+}
+defineExpose({ validate, focusInvalid })
 </script>
 
 <template>
-  <div class="excel-settings">
+  <div ref="root" class="excel-settings">
     <div class="excel-enable-row">
       <div class="excel-enable-copy">
         <div class="setting-field-header">
           <h3 id="excel-enable-label">启用 Excel 输出</h3>
-          <SettingHint
-            text="在 Excel 报告模块点击 Xls 图标，核对或临时修改提示词，确认后调用默认 AI 整理日报并填充模板。"
-          />
+          <SettingHint text="先用内容生成提示词整理日报，核对并确认正文后，再按 Excel 填充提示词填入模板并预览。" />
         </div>
       </div>
       <button
@@ -153,6 +174,36 @@ defineExpose({ validate })
       <div v-if="draft.enabled" class="settings-reveal-shell">
         <div class="settings-reveal-inner">
           <div class="excel-settings-fields">
+            <div class="generation-preference excel-prompt-field excel-content-prompt-field">
+              <div class="excel-prompt-heading">
+                <div class="setting-field-header">
+                  <label for="excel-content-prompt">内容生成提示词</label>
+                  <SettingHint
+                    text="第一步：说明如何归纳日报、组织报告内容。此时不填写 Excel；留空使用默认内容规则。"
+                  />
+                </div>
+                <button
+                  type="button"
+                  class="text-action"
+                  aria-label="使用推荐内容生成提示词"
+                  :disabled="formBusy || !workspacePath || contentPrompt === RECOMMENDED_EXCEL_CONTENT_PROMPT"
+                  @click="applyRecommendedContentPrompt"
+                >
+                  <PhSparkle :size="16" aria-hidden="true" />使用推荐设置
+                </button>
+              </div>
+              <textarea
+                id="excel-content-prompt"
+                :value="contentPrompt"
+                :disabled="formBusy || !workspacePath"
+                maxlength="6000"
+                rows="4"
+                placeholder="例如：按项目归类，整理已完成事项、成果和工时；只使用日报中已有的事实。"
+                spellcheck="false"
+                @input="update({ contentPrompt: ($event.target as HTMLTextAreaElement).value })"
+              ></textarea>
+              <span class="preference-count">{{ contentPrompt.length }} / 6000</span>
+            </div>
             <div class="excel-path-field">
               <div class="setting-field-header">
                 <label for="excel-template">Excel 模板</label>
@@ -179,26 +230,18 @@ defineExpose({ validate })
                 </button>
               </div>
             </div>
-            <div class="generation-preference excel-prompt-field">
+            <div class="generation-preference excel-prompt-field excel-fill-prompt-field">
               <div class="excel-prompt-heading">
-                <label
-                  for="excel-output-prompt"
-                  title="说明日报整理方式和填写位置，也可要求黑色细边框、自动换行及按内容增高行高。仅对指定区域应用格式。推荐设置会替换当前提示词，保存后生效。支持单日或任意日期范围。"
-                >
-                  Excel 输出提示词
-                  <span
-                    class="setting-hint-trigger"
-                    role="img"
-                    data-tooltip="说明日报整理方式和填写位置，也可要求黑色细边框、自动换行及按内容增高行高。仅对指定区域应用格式。推荐设置会替换当前提示词，保存后生效。支持单日或任意日期范围。"
-                    title="说明日报整理方式和填写位置，也可要求黑色细边框、自动换行及按内容增高行高。仅对指定区域应用格式。推荐设置会替换当前提示词，保存后生效。支持单日或任意日期范围。"
-                    aria-label="提示：说明日报整理方式和填写位置，也可要求黑色细边框、自动换行及按内容增高行高。仅对指定区域应用格式。推荐设置会替换当前提示词，保存后生效。支持单日或任意日期范围。"
-                  >
-                    <PhQuestion :size="12" aria-hidden="true" />
-                  </span>
-                </label>
+                <div class="setting-field-header">
+                  <label for="excel-output-prompt">Excel 填充提示词</label>
+                  <SettingHint
+                    text="第二步：指定已确认内容应填入的工作表、单元格、固定字段和样式。只填写已确认的报告内容，不重新归纳日报。"
+                  />
+                </div>
                 <button
                   type="button"
                   class="text-action"
+                  aria-label="使用推荐 Excel 填充提示词"
                   :disabled="formBusy || !workspacePath || draft.prompt === RECOMMENDED_EXCEL_PROMPT"
                   @click="applyRecommendedPrompt"
                 >
@@ -211,7 +254,7 @@ defineExpose({ validate })
                 :disabled="formBusy || !workspacePath"
                 maxlength="6000"
                 rows="5"
-                placeholder="使用推荐设置填入按项目分类、日期和工时的模板规则，也可输入自定义提示词。"
+                placeholder="例如：将确认的项目明细从 A14 开始填写，日期写入 F2，保留模板其余内容和格式。"
                 spellcheck="false"
                 @input="update({ prompt: ($event.target as HTMLTextAreaElement).value })"
               ></textarea

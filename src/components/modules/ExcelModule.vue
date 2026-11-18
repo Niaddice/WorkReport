@@ -4,7 +4,12 @@ import dayjs from 'dayjs'
 import { PhArrowClockwise, PhCircleNotch, PhFileXls, PhFolderOpen, PhMicrosoftExcelLogo } from '@phosphor-icons/vue'
 import ExcelPreviewDialog from '../ExcelPreviewDialog.vue'
 import ExcelExportPreviewDialog from '../ExcelExportPreviewDialog.vue'
-import { reportOverlapsRange, validExcelDates, type ExcelExportFile } from '../../lib/useExcel'
+import {
+  RECOMMENDED_EXCEL_CONTENT_PROMPT,
+  reportOverlapsRange,
+  validExcelDates,
+  type ExcelExportFile,
+} from '../../lib/useExcel'
 import { useModuleContext } from '../../modules/context'
 
 const context = useModuleContext()
@@ -16,6 +21,8 @@ const {
   loading: settingsLoading,
   error: settingsError,
   preparing,
+  generatingContent,
+  contentDraft,
   exporting,
   preview,
   result,
@@ -34,11 +41,18 @@ const {
 const actionError = ref('')
 const directoryOpening = ref(false)
 const previewFilename = ref('')
-const generationOpen = ref(preparing.value)
+const generationOpen = ref(preparing.value || generatingContent.value || !!contentDraft.value)
 const generationDates = ref<string[]>([...summarySelectionDates.value])
 const generationStarting = ref(false)
-const generationEditing = ref(!preparing.value && !preview.value)
+const generationPhase = ref<'content' | 'fill'>('content')
+const generationEditing = ref(!preparing.value && !generatingContent.value && !preview.value && !contentDraft.value)
 const generationPrompt = ref(excel.previewPrompt.value || settings.value.prompt)
+const generationContentPrompt = ref(
+  generatingContent.value || contentDraft.value
+    ? excel.contentPrompt.value
+    : (settings.value.contentPrompt ?? RECOMMENDED_EXCEL_CONTENT_PROMPT),
+)
+const generationContent = ref(contentDraft.value)
 const generationTemplate = computed(() => settings.value.templatePath.split(/[\\/]/).pop() ?? '')
 const generationDirectory = computed(() => {
   const directory = context.fileSettings?.value.excel.directory ?? excel.fileRule.value.directory
@@ -47,7 +61,25 @@ const generationDirectory = computed(() => {
 const elapsedSeconds = ref(0)
 let generationRevision = 0
 let progressTimer: ReturnType<typeof setInterval> | undefined
-const generationBusy = computed(() => generationStarting.value || preparing.value)
+watch(
+  contentDraft,
+  (value, previous) => {
+    if (value || !previous) return
+    generationRevision++
+    generationStarting.value = false
+    generationContent.value = ''
+    generationEditing.value = true
+    generationOpen.value = false
+  },
+  { flush: 'sync' },
+)
+const generationBusy = computed(() => generationStarting.value || preparing.value || generatingContent.value)
+const contentBusy = computed(
+  () => generatingContent.value || (generationStarting.value && generationPhase.value === 'content'),
+)
+const reviewingContent = computed(
+  () => !generationEditing.value && !generationBusy.value && !preview.value && !!contentDraft.value,
+)
 watch(
   generationBusy,
   (busy) => {
@@ -96,6 +128,8 @@ onBeforeUnmount(() => clearInterval(progressTimer))
 watch(
   () => workspace.value?.path,
   () => {
+    generationRevision++
+    generationStarting.value = false
     generationOpen.value = false
   },
 )
@@ -121,17 +155,27 @@ watch(result, (value) => {
 
 function requestGeneration() {
   if (generationBusy.value || exporting.value || disabled.value) return
-  if (preview.value) actions.discardExcelPreview()
+  actions.discardExcelPreview()
   actionError.value = ''
   exportError.value = ''
   generationDates.value = [...dates.value]
   generationPrompt.value = settings.value.prompt
+  generationContentPrompt.value = settings.value.contentPrompt ?? RECOMMENDED_EXCEL_CONTENT_PROMPT
+  generationContent.value = ''
+  generationPhase.value = 'content'
   generationEditing.value = true
   generationOpen.value = true
 }
 function editGeneration() {
   if (generationBusy.value || exporting.value) return
-  actions.discardExcelPreview()
+  excel.discardWorkbookPreview()
+  actionError.value = ''
+  exportError.value = ''
+  generationEditing.value = false
+}
+function editContent() {
+  if (generationBusy.value || exporting.value) return
+  excel.discardWorkbookPreview()
   actionError.value = ''
   exportError.value = ''
   generationEditing.value = true
@@ -140,12 +184,41 @@ function configureExcel() {
   closeGeneration()
   actions.openExcelSettings()
 }
+async function generateContent() {
+  if (
+    generationBusy.value ||
+    exporting.value ||
+    disabled.value ||
+    blockedReason.value ||
+    generationContentPrompt.value.length > 6000
+  )
+    return
+  const revision = ++generationRevision
+  actionError.value = ''
+  generationOpen.value = true
+  generationStarting.value = true
+  generationPhase.value = 'content'
+  generationEditing.value = false
+  try {
+    await actions.generateExcelContent([...generationDates.value], generationContentPrompt.value)
+    if (revision === generationRevision && !exportError.value && contentDraft.value.trim())
+      generationContent.value = contentDraft.value
+  } catch (cause) {
+    if (revision === generationRevision) actionError.value = `生成报告内容失败：${String(cause)}`
+  } finally {
+    if (revision === generationRevision) {
+      generationStarting.value = false
+      if (!contentDraft.value.trim()) generationEditing.value = true
+    }
+  }
+}
 async function prepare() {
   if (
     generationBusy.value ||
     exporting.value ||
     disabled.value ||
     blockedReason.value ||
+    !generationContent.value.trim() ||
     !generationPrompt.value.trim() ||
     generationPrompt.value.length > 6000
   )
@@ -154,15 +227,15 @@ async function prepare() {
   actionError.value = ''
   generationOpen.value = true
   generationStarting.value = true
+  generationPhase.value = 'fill'
   generationEditing.value = false
   try {
-    await actions.prepareExcel([...generationDates.value], generationPrompt.value)
+    await actions.prepareExcel([...generationDates.value], generationPrompt.value, generationContent.value)
   } catch (cause) {
     if (revision === generationRevision) actionError.value = `生成 Excel 预览失败：${String(cause)}`
   } finally {
     if (revision === generationRevision) {
       generationStarting.value = false
-      if (!preview.value) generationEditing.value = true
     }
   }
 }
@@ -274,7 +347,11 @@ function formatSize(value: number) {
     </div>
     <ExcelPreviewDialog
       v-model:prompt="generationPrompt"
+      v-model:content-prompt="generationContentPrompt"
+      v-model:content="generationContent"
       :configuring="generationEditing"
+      :reviewing-content="reviewingContent"
+      :generating-content="contentBusy"
       :provider="defaultProvider?.name ?? ''"
       :template-name="generationTemplate"
       :output-directory="generationDirectory"
@@ -288,7 +365,9 @@ function formatSize(value: number) {
       :error="exportError || actionError"
       @close="closeGeneration"
       @confirm="actions.confirmExcel"
-      @generate="prepare"
+      @generate="generateContent"
+      @fill="prepare"
+      @edit-content="editContent"
       @regenerate="editGeneration"
       @configure="configureExcel"
     />

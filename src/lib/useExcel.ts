@@ -6,6 +6,9 @@ import { DEFAULT_FILE_SETTINGS, type FileRule } from './fileSettings'
 export interface ExcelSettings {
   enabled: boolean
   templatePath: string
+  /** 日报整理规则；旧配置缺失时使用默认内容生成规则。 */
+  contentPrompt?: string
+  /** 已确认正文如何填入工作簿；保留旧字段以兼容已有设置。 */
   prompt: string
 }
 export interface ExcelExportResult {
@@ -49,8 +52,10 @@ export interface ExcelExportPreview {
   sheets: ExcelSheetPreviewData[]
 }
 export const EXCEL_STORAGE_KEY = 'work-report.excel-preview'
+export const RECOMMENDED_EXCEL_CONTENT_PROMPT =
+  '根据所选日期的日报，按项目归类整理工作成果、进展、问题和下一步计划，保留事实、数字和完成状态。输出清晰、可核对的 Markdown 正文，不包含 Excel 单元格坐标或填表规则。'
 export const RECOMMENDED_EXCEL_PROMPT = `1、F2填写框选区域的最后日期，格式按照YYYYMMDD
-2、根据项目分类提炼成果
+2、使用用户已确认的项目分类与成果内容，不重新生成或改写成果事实
 3、在第14行开始填写根据分类提炼的成果内容，A列序号，从1开始递增；B列项目分类名称；C列固定文本：开发；D列固定文本：功能正常；E列引入F2内容；F列固定文本：张三；G列根据项目分类预估工时，保证所有任务总和工时为工作日数*8；H列固定文本：进行中；I列固定文本：李四；J列每个项目分类提炼的详细内容；K列留空
 4、D11为G列工时的总和
 5、B11为任务数量
@@ -58,6 +63,7 @@ export const RECOMMENDED_EXCEL_PROMPT = `1、F2填写框选区域的最后日期
 export const DEFAULT_EXCEL_SETTINGS: ExcelSettings = {
   enabled: false,
   templatePath: '',
+  contentPrompt: RECOMMENDED_EXCEL_CONTENT_PROMPT,
   prompt: '',
 }
 
@@ -65,6 +71,7 @@ export function cloneExcelSettings(value: ExcelSettings): ExcelSettings {
   return {
     enabled: value.enabled,
     templatePath: value.templatePath,
+    contentPrompt: value.contentPrompt ?? RECOMMENDED_EXCEL_CONTENT_PROMPT,
     prompt: value.prompt,
   }
 }
@@ -133,7 +140,8 @@ function readPreviewSettings(): ExcelSettings {
       'templatePath' in value &&
       typeof value.templatePath === 'string' &&
       'prompt' in value &&
-      typeof value.prompt === 'string'
+      typeof value.prompt === 'string' &&
+      (!('contentPrompt' in value) || typeof value.contentPrompt === 'string')
     )
       return cloneExcelSettings(value as ExcelSettings)
   } catch {
@@ -148,6 +156,9 @@ export function useExcel() {
   const loading = ref(false)
   const error = ref('')
   const preparing = ref(false)
+  const generatingContent = ref(false)
+  const contentDraft = ref('')
+  const contentPrompt = ref('')
   const exporting = ref(false)
   const preview = ref<ExcelPreview | null>(null)
   const previewPrompt = ref('')
@@ -166,6 +177,8 @@ export function useExcel() {
   let exportsRevision = 0
   let exportsWorkspace = ''
   let previewWorkspace = ''
+  let contentWorkspace = ''
+  let contentDates = ''
   let writingPreviewId = ''
   let exportPreviewRevision = 0
 
@@ -173,19 +186,41 @@ export function useExcel() {
     return isTauri() ? invoke<void>('discard_excel_preview', { previewId: id }).catch(() => {}) : Promise.resolve()
   }
 
-  /** Preparation can be canceled; a confirmed file write keeps its busy state until it finishes. */
-  async function cancel(): Promise<void> {
-    const id = requestId
+  function clearWorkbook(): Promise<void> {
     const pending = preview.value
-    exportRevision++
-    requestId = ''
-    preparing.value = false
     preview.value = null
     previewPrompt.value = ''
     previewWorkspace = ''
+    return pending && pending.id !== writingPreviewId ? discardToken(pending.id) : Promise.resolve()
+  }
+
+  /** 返回内容确认步骤时，只撤销填表预览，保留已生成的正文和生成提示词。 */
+  async function discardWorkbookPreview(): Promise<void> {
+    if (exporting.value) return
+    const id = preparing.value ? requestId : ''
+    exportRevision++
+    if (id) requestId = ''
+    preparing.value = false
+    await Promise.all([
+      clearWorkbook(),
+      id && isTauri() ? invoke<void>('cancel_ai', { requestId: id }).catch(() => {}) : Promise.resolve(),
+    ])
+  }
+
+  /** Preparation can be canceled; a confirmed file write keeps its busy state until it finishes. */
+  async function cancel(): Promise<void> {
+    const id = requestId
+    exportRevision++
+    requestId = ''
+    preparing.value = false
+    generatingContent.value = false
+    contentDraft.value = ''
+    contentPrompt.value = ''
+    contentWorkspace = ''
+    contentDates = ''
     await Promise.all([
       id && isTauri() ? invoke<void>('cancel_ai', { requestId: id }).catch(() => {}) : Promise.resolve(),
-      pending && pending.id !== writingPreviewId ? discardToken(pending.id) : Promise.resolve(),
+      clearWorkbook(),
     ])
   }
 
@@ -300,15 +335,86 @@ export function useExcel() {
     return load()
   }
 
-  /** Generate an AI-filled preview without writing an output file. */
-  async function prepareSelection(workspacePath: string, dates: string[], prompt?: string): Promise<boolean> {
-    if (preparing.value || exporting.value) return false
-    const previous = preview.value
-    preview.value = null
-    previewPrompt.value = prompt ?? settings.value.prompt
-    previewWorkspace = ''
-    if (previous) void discardToken(previous.id)
+  /** 第一步只整理日报正文；用户确认前不请求填表，也不创建 Excel 文件。 */
+  async function generateContent(workspacePath: string, dates: string[], prompt?: string): Promise<boolean> {
+    if (generatingContent.value || preparing.value || exporting.value) return false
+    void discardWorkbookPreview()
+    exportError.value = ''
     result.value = null
+    if (!workspacePath) {
+      exportError.value = '请先打开工作空间。'
+      return false
+    }
+    if (!validExcelDates(dates)) {
+      exportError.value = '请选择有效的日期或日期范围。'
+      return false
+    }
+    if (prompt !== undefined && prompt.length > 6000) {
+      exportError.value = '内容生成提示词不能超过 6000 字。'
+      return false
+    }
+    if (!isTauri()) {
+      exportError.value = '请在桌面应用中使用 Excel 输出。'
+      return false
+    }
+    const selection = [...new Set(dates)].sort()
+    const dateScope = selection.join(',')
+    if (contentWorkspace !== workspacePath || contentDates !== dateScope) {
+      contentDraft.value = ''
+      contentWorkspace = ''
+      contentDates = ''
+    }
+    const currentScope = scope
+    const id = crypto.randomUUID()
+    requestId = id
+    generatingContent.value = true
+    contentPrompt.value = prompt ?? settings.value.contentPrompt ?? RECOMMENDED_EXCEL_CONTENT_PROMPT
+    const current = () => scope === currentScope && requestId === id
+    try {
+      if (!(await load())) {
+        if (current()) exportError.value = error.value || '读取 Excel 输出设置失败，请重试。'
+        return false
+      }
+      if (!current()) return false
+      if (!settings.value.enabled) {
+        exportError.value = '请先在 Excel 设置中启用输出。'
+        return false
+      }
+      contentPrompt.value = prompt ?? settings.value.contentPrompt ?? RECOMMENDED_EXCEL_CONTENT_PROMPT
+      const value = await invoke<string>('generate_excel_content', {
+        workspacePath,
+        dates: selection,
+        requestId: id,
+        ...(prompt === undefined ? {} : { prompt }),
+      })
+      if (!current()) return false
+      if (typeof value !== 'string' || !value.trim() || new TextEncoder().encode(value).length > 500_000) {
+        exportError.value = '生成内容为空或超过 500 KB，请调整提示词或缩小日期范围后重试。'
+        return false
+      }
+      contentDraft.value = value
+      contentWorkspace = workspacePath
+      contentDates = dateScope
+      return true
+    } catch (cause) {
+      if (current()) exportError.value = String(cause)
+      return false
+    } finally {
+      if (requestId === id) {
+        requestId = ''
+        generatingContent.value = false
+      }
+    }
+  }
+
+  /** 第二步仅把用户确认的正文填入模板，不会重新整理原始日报。 */
+  async function prepareSelection(
+    workspacePath: string,
+    dates: string[],
+    prompt?: string,
+    content?: string,
+  ): Promise<boolean> {
+    if (generatingContent.value || preparing.value || exporting.value) return false
     exportError.value = ''
     if (!workspacePath) {
       exportError.value = '请先打开工作空间。'
@@ -319,7 +425,7 @@ export function useExcel() {
       return false
     }
     if (prompt !== undefined && (!prompt.trim() || prompt.length > 6000)) {
-      exportError.value = '请填写本次提示词，长度不能超过 6000 字。'
+      exportError.value = '请填写 Excel 填充提示词，长度不能超过 6000 字。'
       return false
     }
     if (!isTauri()) {
@@ -327,6 +433,17 @@ export function useExcel() {
       return false
     }
     const selection = [...new Set(dates)].sort()
+    if (!contentDraft.value || contentWorkspace !== workspacePath || contentDates !== selection.join(',')) {
+      exportError.value = '请先为当前工作空间和日期范围生成内容，再确认填充 Excel。'
+      return false
+    }
+    if (!content?.trim() || new TextEncoder().encode(content).length > 500_000) {
+      exportError.value = '请确认需要填充的内容，正文不能为空或超过 500 KB。'
+      return false
+    }
+    void discardWorkbookPreview()
+    previewPrompt.value = prompt ?? settings.value.prompt
+    result.value = null
     const currentScope = scope
     const id = crypto.randomUUID()
     requestId = id
@@ -347,6 +464,7 @@ export function useExcel() {
         workspacePath,
         dates: selection,
         requestId: id,
+        content,
         ...(prompt === undefined ? {} : { prompt }),
       })
       if (!current()) {
@@ -369,7 +487,7 @@ export function useExcel() {
 
   /** Confirm exactly the prepared workbook; this command never requests AI again. */
   async function confirmPreview(workspacePath: string): Promise<boolean> {
-    if (preparing.value || exporting.value) return false
+    if (generatingContent.value || preparing.value || exporting.value) return false
     const approved = preview.value
     if (!approved) {
       exportError.value = '请先生成 Excel 预览。'
@@ -399,6 +517,10 @@ export function useExcel() {
       preview.value = null
       previewPrompt.value = ''
       previewWorkspace = ''
+      contentDraft.value = ''
+      contentPrompt.value = ''
+      contentWorkspace = ''
+      contentDates = ''
       return true
     } catch (cause) {
       if (current()) exportError.value = String(cause)
@@ -441,13 +563,18 @@ export function useExcel() {
     error,
     load,
     reload,
+    generateContent,
     prepareSelection,
     confirmPreview,
     discardPreview,
+    discardWorkbookPreview,
     cancel,
     clearExport,
     clearSelection,
     preparing,
+    generatingContent,
+    contentDraft,
+    contentPrompt,
     preview,
     previewPrompt,
     exporting,
