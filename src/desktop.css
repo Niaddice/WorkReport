@@ -720,6 +720,131 @@
   min-height: 28px;
   border-radius: var(--desktop-control-radius);
 }
+
+/* Settings leave confirmation dialog */
+:root :is(.settings-leave-dialog, .module-settings-leave-dialog) {
+  width: 440px;
+  max-width: min(440px, calc(var(--viewport-width) - 32px));
+  padding: 24px 26px 22px;
+  border: 1px solid var(--skin-border);
+  border-radius: 12px;
+  background: var(--skin-surface);
+  box-shadow:
+    0 24px 60px -12px rgba(0, 0, 0, 0.28),
+    0 4px 16px -2px rgba(0, 0, 0, 0.12);
+  color: var(--skin-text);
+}
+
+:root :is(.settings-leave-dialog, .module-settings-leave-dialog) .dialog-icon {
+  display: inline-grid;
+  place-items: center;
+  width: 42px;
+  height: 42px;
+  margin: 0 0 16px;
+  border-radius: 10px;
+  background: var(--skin-accent-soft);
+  border: 1px solid var(--skin-accent-border);
+  color: var(--skin-accent);
+}
+
+:root :is(.settings-leave-dialog, .module-settings-leave-dialog) h2 {
+  margin: 0 0 8px;
+  font-size: 17px;
+  font-weight: 600;
+  line-height: 1.35;
+  color: var(--skin-text);
+  letter-spacing: -0.01em;
+}
+
+:root :is(.settings-leave-dialog, .module-settings-leave-dialog) p {
+  margin: 0;
+  font-size: var(--text-body);
+  line-height: 1.55;
+  color: var(--skin-text-muted);
+}
+
+:root :is(.settings-leave-dialog, .module-settings-leave-dialog) .dialog-error {
+  margin-top: 10px;
+  font-size: var(--text-small);
+  line-height: 1.4;
+  color: var(--skin-danger);
+}
+
+:root :is(.settings-leave-dialog, .module-settings-leave-dialog) .dialog-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  border-top: none;
+  padding-top: 0;
+  margin-top: 22px;
+}
+
+:root :is(.settings-leave-dialog, .module-settings-leave-dialog) .dialog-button {
+  min-height: 30px;
+  height: 30px;
+  font-size: var(--text-body);
+  font-weight: 500;
+  cursor: pointer;
+  --md-filled-button-container-height: 30px;
+  --md-filled-button-container-shape: 7px;
+  --md-filled-button-label-text-size: var(--text-body);
+  --md-filled-button-label-text-weight: 500;
+  --md-filled-button-leading-space: 14px;
+  --md-filled-button-trailing-space: 14px;
+  --md-text-button-container-height: 30px;
+  --md-text-button-container-shape: 7px;
+  --md-text-button-label-text-size: var(--text-body);
+  --md-text-button-label-text-weight: 500;
+  --md-text-button-leading-space: 12px;
+  --md-text-button-trailing-space: 12px;
+}
+
+:root :is(.settings-leave-dialog, .module-settings-leave-dialog) .dialog-button-cancel {
+  background: var(--skin-surface);
+  border: 1px solid var(--skin-border);
+  border-radius: 7px;
+  --md-text-button-label-text-color: var(--skin-text-secondary);
+}
+
+:root :is(.settings-leave-dialog, .module-settings-leave-dialog) .dialog-button-cancel:hover:not(:disabled) {
+  background: var(--skin-hover);
+  border-color: var(--control-border-hover);
+  --md-text-button-label-text-color: var(--skin-text);
+}
+
+:root :is(.settings-leave-dialog, .module-settings-leave-dialog) .dialog-button-discard {
+  background: var(--skin-danger-soft);
+  border: 1px solid var(--skin-danger-border);
+  border-radius: 7px;
+  --md-text-button-label-text-color: var(--skin-danger);
+}
+
+:root :is(.settings-leave-dialog, .module-settings-leave-dialog) .dialog-button-discard:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--skin-danger-soft) 70%, var(--skin-danger) 30%);
+  border-color: var(--skin-danger);
+  --md-text-button-label-text-color: var(--skin-danger);
+}
+
+:root :is(.settings-leave-dialog, .module-settings-leave-dialog) .dialog-button-primary {
+  --md-filled-button-container-color: var(--skin-accent-fill);
+  --md-filled-button-label-text-color: var(--skin-on-accent, #ffffff);
+  border: 1px solid var(--skin-accent-fill);
+  border-radius: 7px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
+}
+
+:root :is(.settings-leave-dialog, .module-settings-leave-dialog) .dialog-button-primary:hover:not(:disabled) {
+  --md-filled-button-container-color: var(--skin-accent-fill-hover, var(--skin-accent-strong));
+  border-color: var(--skin-accent-fill-hover, var(--skin-accent-strong));
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.18);
+}
+
+:root :is(.settings-leave-dialog, .module-settings-leave-dialog) .dialog-button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+  pointer-events: none;
+}
 .app-shell .welcome-art {
   width: 64px;
   height: 64px;
