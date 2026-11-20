@@ -206,7 +206,7 @@ describe('history version context menu', () => {
       historyMenu()
         .findAll('[role="menuitem"]')
         .map((item) => item.text()),
-    ).toEqual(['预览版本内容', '复制版本内容', '查看当日日报', '刷新历史版本'])
+    ).toEqual(['预览版本内容', '查看差异对比…', '恢复至此版本…', '复制版本内容', '查看当日日报', '刷新历史版本'])
     expect(document.body.querySelector('.history-tooltip')).toBeNull()
     expect(wrapper.findAll('.history-module-row')[1]!.classes()).toContain('is-context-target')
 
@@ -294,7 +294,7 @@ describe('history version context menu', () => {
     await flushPromises()
     expect(document.activeElement?.textContent).toBe('预览版本内容')
     await historyMenu().trigger('keydown', { key: 'ArrowDown' })
-    expect(document.activeElement?.textContent).toBe('复制版本内容')
+    expect(document.activeElement?.textContent).toBe('查看差异对比…')
     await historyMenu().trigger('keydown', { key: 'Escape' })
     await flushPromises()
     expect(document.body.querySelector('.history-context-menu')).toBeNull()

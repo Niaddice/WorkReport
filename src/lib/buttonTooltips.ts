@@ -237,13 +237,19 @@ export function installButtonTooltips(options: TooltipOptions): () => void {
       if (root instanceof ShadowRoot) observer.observe(root, observation)
     }
     if (active.dismissed) return
+    const isInstant =
+      active.anchor.classList.contains('setting-hint-trigger') ||
+      active.source.classList.contains('setting-hint-trigger') ||
+      active.anchor.hasAttribute('data-tooltip-instant') ||
+      active.source.hasAttribute('data-tooltip-instant')
+    const delay = isInstant ? 150 : BUTTON_TOOLTIP_DELAY
     timer = setTimeout(() => {
       timer = undefined
       refresh()
       if (!active || active.dismissed || !mayShow(active.anchor)) return
       visible = true
       options.show({ anchor: active.anchor, text: active.text, portal: active.portal })
-    }, BUTTON_TOOLTIP_DELAY)
+    }, delay)
   }
 
   function eventPath(event: Event): HTMLElement[] {

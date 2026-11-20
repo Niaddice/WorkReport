@@ -1,6 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { aiApi, useAi, type AiProvider, type AiSettings } from '../src/lib/ai'
-vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn() }))
+vi.mock('@tauri-apps/api/core', () => {
+  class MockChannel {
+    onmessage: (chunk: unknown) => void = () => {}
+  }
+  return { invoke: vi.fn(), Channel: MockChannel }
+})
 const provider: AiProvider = {
   id: 'one',
   name: 'AI',
@@ -102,7 +107,7 @@ describe('AI preview lifecycle', () => {
     vi.spyOn(aiApi, 'cancel').mockResolvedValue()
     ai.openSummary({ ai: 'reports', direct: 'plain' }, ['20261019', '20261018'])
     await ai.generateSummary()
-    expect(aiApi.summarize).toHaveBeenCalledWith('reports', expect.any(String))
+    expect(aiApi.summarize).toHaveBeenCalledWith('reports', expect.any(String), undefined, expect.any(Object))
     expect(ai.summaryMode.value).toBe('ai')
     expect(ai.summaryResult.value).toContain('完成事项')
     ai.closeSummary()
@@ -129,11 +134,11 @@ describe('AI preview lifecycle', () => {
     const summarize = vi.spyOn(aiApi, 'summarize').mockResolvedValue('项目成果')
     ai.openSummary({ ai: 'reports', direct: 'plain' }, ['20261019'])
     await ai.generateSummary('本次按项目分类')
-    expect(summarize).toHaveBeenLastCalledWith('reports', expect.any(String), '本次按项目分类')
+    expect(summarize).toHaveBeenLastCalledWith('reports', expect.any(String), '本次按项目分类', expect.any(Object))
     expect(ai.settings.value.summaryPrompt).toBe('设置中的规则')
     expect(ai.summaryPromptUsed.value).toBe('本次按项目分类')
     await ai.generateSummary()
-    expect(summarize).toHaveBeenLastCalledWith('reports', expect.any(String))
+    expect(summarize).toHaveBeenLastCalledWith('reports', expect.any(String), undefined, expect.any(Object))
     expect(ai.summaryPromptUsed.value).toBe('设置中的规则')
   })
   it.each([' ', '字'.repeat(2001)])('rejects an invalid temporary summary prompt before calling AI', async (prompt) => {
@@ -192,5 +197,18 @@ describe('AI preview lifecycle', () => {
     await Promise.resolve()
     expect(ai.summaryVisible.value).toBe(false)
     expect(ai.summaryResult.value).toBe('')
+  })
+  it('calls test_ai_provider and returns connectivity status', async () => {
+    const { invoke } = await import('@tauri-apps/api/core')
+    vi.mocked(invoke).mockResolvedValueOnce({
+      success: true,
+      latencyMs: 85,
+      reply: 'pong',
+      error: null,
+    })
+    const res = await aiApi.testProvider(provider)
+    expect(res.success).toBe(true)
+    expect(res.latencyMs).toBe(85)
+    expect(invoke).toHaveBeenCalledWith('test_ai_provider', { provider })
   })
 })

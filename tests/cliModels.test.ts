@@ -14,6 +14,14 @@ afterEach(() => {
 })
 
 describe('CLI model catalog', () => {
+  it.each(['cursor', 'grok'] as const)('fetches the %s catalog using its own CLI path', async (kind) => {
+    const source = reactive<{ kind: ProviderKind; executable: string }>({ kind, executable: `/tools/${kind}` })
+    const catalog = scope.run(() => useCliModels(() => source))!
+    vi.spyOn(aiApi, 'cliModels').mockResolvedValue(available)
+    expect(await catalog.fetchModels()).toBe(true)
+    expect(aiApi.cliModels).toHaveBeenCalledWith(kind, `/tools/${kind}`)
+    expect(catalog.models.value).toEqual(available)
+  })
   it('fetches with the current kind and executable', async () => {
     const source = reactive<{ kind: ProviderKind; executable: string }>({
       kind: 'codex',

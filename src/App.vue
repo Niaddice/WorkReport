@@ -9,8 +9,11 @@ import { PhCircleNotch } from '@phosphor-icons/vue'
 import AppToolbar from './components/AppToolbar.vue'
 import AppRail from './components/AppRail.vue'
 import SkinDialog from './components/SkinDialog.vue'
+import GlobalSearchDialog from './components/GlobalSearchDialog.vue'
+import ShortcutsDialog from './components/ShortcutsDialog.vue'
 import SettingsView from './components/SettingsView.vue'
 import SettingsDialog from './components/SettingsDialog.vue'
+import ModuleSettingsDialog from './components/ModuleSettingsDialog.vue'
 import WorkspaceGate from './components/WorkspaceGate.vue'
 import ConfirmDialog from './components/ConfirmDialog.vue'
 import SettingsLeaveDialog from './components/SettingsLeaveDialog.vue'
@@ -19,7 +22,7 @@ import WorkspaceSwitchDialog from './components/WorkspaceSwitchDialog.vue'
 import MessageHost from './components/MessageHost.vue'
 import ButtonTooltip from './components/ButtonTooltip.vue'
 import { api, type Document, type FileFormat } from './lib/workspace'
-import { historyShortcut } from './lib/shortcuts'
+import { cheatsheetShortcut, historyShortcut, saveShortcut, searchShortcut } from './lib/shortcuts'
 import { installContextMenuGuard } from './lib/contextMenus'
 import TextContextMenu from './components/TextContextMenu.vue'
 import { useJournal } from './lib/useJournal'
@@ -28,7 +31,7 @@ import { aiSummarySource, plainTextSummary } from './lib/summary'
 import { useAi } from './lib/ai'
 import ModuleBoard from './components/ModuleBoard.vue'
 import LayoutDialog from './components/LayoutDialog.vue'
-import type { DropSide, LayoutMetrics, ModuleId } from './modules/types'
+import type { DropSide, LayoutMetrics, ModuleId, ModuleType } from './modules/types'
 import { moduleType } from './modules/types'
 import { MODULE_CONTEXT, type CalendarHandle, type EditorHandle, type ModuleActions } from './modules/context'
 import { useModuleLayout } from './modules/useModuleLayout'
@@ -37,7 +40,15 @@ import { useAppearance } from './lib/useAppearance'
 import { validExcelDates, useExcel } from './lib/useExcel'
 import { useSummaryOutput } from './lib/useSummaryOutput'
 import { workspaceFilesApi, type FileRequest, type FileChangeResult } from './lib/workspaceFiles'
-import { settingsApi, type WorkspaceSettings } from './lib/settingsDraft'
+import {
+  settingsApi,
+  cloneEditorSettings,
+  DEFAULT_EDITOR_SETTINGS,
+  type EditorSettings,
+  type WorkspaceSettings,
+} from './lib/settingsDraft'
+import type { GlobalSettingsSection } from './lib/settingsSections'
+import type { SettingSearchTarget } from './lib/settingsSearch'
 import {
   cloneFileSettings,
   fileSettingsApi,
@@ -81,6 +92,7 @@ const {
 const ai = useAi()
 const appearance = useAppearance()
 const excel = useExcel()
+let excelGenerationRevision = 0
 const summaryOutput = useSummaryOutput()
 const holidays = useHolidays()
 const git = useGit()
@@ -88,7 +100,12 @@ const { state: holidayState, loading: holidayLoading, syncing: holidaySyncing, e
 const holidayReady = ref(false)
 const { settings: summaryOutputSettings } = summaryOutput
 const summaryWorkspacePath = ref('')
-const { settings: excelSettings, preparing: excelPreparing, exporting: excelExporting } = excel
+const {
+  settings: excelSettings,
+  preparing: excelPreparing,
+  generatingContent: excelGeneratingContent,
+  exporting: excelExporting,
+} = excel
 const {
   scale: appearanceScale,
   rail: appearanceRail,
@@ -107,9 +124,12 @@ watch(
 // Settings live inside the workspace, so a newly opened workspace brings its own values.
 watch(workspace, (value, previous) => {
   if (!value || value.path === previous?.path) return
+  moduleSettingsModule.value = null
   workspaceDocument.clear()
   fileOpenRevision++
   fileSettings.value = cloneFileSettings()
+  editorSettings.value = cloneEditorSettings(DEFAULT_EDITOR_SETTINGS)
+  journal.setEditorSettings(editorSettings.value)
   void loadWorkspaceSettings(true)
 })
 const { settings: aiSettings, error: aiSettingsError, defaultProvider, summaryVisible, summaryResult, summaryMode } = ai
@@ -122,10 +142,17 @@ const workspaceSwitchDialog = ref<InstanceType<typeof WorkspaceSwitchDialog>>()
 const pendingWorkspaceSwitch = ref<{ path: string; sourcePath: string; sourceName: string } | null>(null)
 const workspaceSwitchError = ref('')
 const requestingAi = ref(false)
-const excelBusy = computed(() => excelPreparing.value || excelExporting.value)
+const excelBusy = computed(() => excelGeneratingContent.value || excelPreparing.value || excelExporting.value)
 const summarySelectionDates = ref<string[]>([])
 const refreshRevision = ref(0)
 const settingsView = ref<InstanceType<typeof SettingsView>>()
+const moduleSettingsDialog = ref<InstanceType<typeof ModuleSettingsDialog>>()
+/** 当前从模块标题栏打开设置的模块；为空表示没有模块设置弹窗。 */
+const moduleSettingsModule = ref<ModuleType | null>(null)
+const moduleSettingsSource = ref<ModuleId | null>(null)
+const moduleSettingsInitialSection = ref<string | null>(null)
+const moduleSettingsVisible = computed(() => moduleSettingsModule.value !== null)
+const moduleSettingsBusy = computed(() => settingsLoading.value || settingsSaving.value || databaseBusy.value)
 const appRail = ref<InstanceType<typeof AppRail>>()
 const settingsCloseTarget = ref<'settings' | 'close'>('settings')
 function settingsButtonRect() {
@@ -147,6 +174,8 @@ const databaseActivity = ref(false)
 const storageRefreshing = ref(false)
 const databaseBusy = computed(() => databaseActivity.value || storageRefreshing.value || backupRetrying.value)
 const storageMode = computed(() => (!databaseSettings.value.enabled ? 'files' : databaseSettings.value.mode))
+const editorSettings = ref(cloneEditorSettings(DEFAULT_EDITOR_SETTINGS))
+const editorLoading = ref(false)
 
 // 新建日报沿用「数据存储」里选定的默认格式；已有日报不受影响。
 watch(
@@ -167,10 +196,12 @@ const workspaceSettings = computed<WorkspaceSettings>(() => ({
   summary: summaryOutputSettings.value,
   database: databaseSettings.value,
   git: git.settings.value,
+  editor: editorSettings.value,
   files: fileSettings.value,
 }))
 const settingsReading = ref(false)
 const settingsSaving = ref(false)
+const settingsCommitting = computed(() => settingsSaving.value || (settingsView.value?.savingProxy ?? false))
 const settingsReady = ref(false)
 const settingsError = ref('')
 const settingsLoading = computed(
@@ -180,14 +211,15 @@ const settingsLoading = computed(
     excel.loading.value ||
     summaryOutput.loading.value ||
     databaseLoading.value ||
-    git.loading.value,
+    git.loading.value ||
+    editorLoading.value,
 )
 const settingsDialogBusy = computed(
   () =>
     busy.value ||
     picking.value ||
     settingsLoading.value ||
-    settingsSaving.value ||
+    settingsCommitting.value ||
     settingsLeaveBusy.value ||
     databaseBusy.value ||
     summaryOutput.exporting.value ||
@@ -197,6 +229,8 @@ let settingsLoadRevision = 0
 type SettingsExit = 'home' | 'workspace' | 'close'
 const settingsLeaveDialog = ref<InstanceType<typeof SettingsLeaveDialog>>()
 const skinDialog = ref<InstanceType<typeof SkinDialog>>()
+const searchDialog = ref<InstanceType<typeof GlobalSearchDialog>>()
+const shortcutsOpened = ref(false)
 const pendingSettingsExit = ref<SettingsExit | null>(null)
 const settingsLeaveBusy = ref(false)
 const settingsLeaveError = ref('')
@@ -239,6 +273,13 @@ function closeLayoutDialog() {
 }
 function removeModule(id: ModuleId) {
   moduleLayout.remove(id)
+}
+/** 模块标题栏齿轮：按模块类型打开对应的模块设置弹窗。 */
+function openModuleFromBoard(id: ModuleId) {
+  void openModuleSettings(moduleType(id), id)
+}
+function moduleSettingsButtonRect() {
+  return moduleSettingsSource.value ? (moduleBoard.value?.getSettingsRect(moduleSettingsSource.value) ?? null) : null
 }
 async function activateModule(id: ModuleId) {
   if (page.value !== 'home') {
@@ -286,6 +327,46 @@ function openSkinDialog() {
 }
 function closeSkinDialog() {
   void skinDialog.value?.close()
+}
+function openSearchDialog() {
+  if (
+    !workspace.value ||
+    page.value !== 'home' ||
+    busy.value ||
+    excelBusy.value ||
+    picking.value ||
+    moduleSettingsVisible.value
+  )
+    return
+  searchDialog.value?.open()
+}
+function closeSearchDialog() {
+  void searchDialog.value?.close()
+}
+async function onSearchSelectJournal(date: string) {
+  await searchDialog.value?.close()
+  const editorModule = layoutItems.value.find((item) => moduleType(item.id) === 'editor')
+  if (!editorModule) moduleLayout.add('editor')
+  await nextTick()
+  moduleBoard.value?.reveal(editorModule?.id ?? 'editor', { focus: false })
+  await selectReport(date)
+}
+async function onSearchSelectFile(path: string) {
+  await searchDialog.value?.close()
+  await openWorkspaceFile(path)
+}
+async function onSearchSelectSetting(target: SettingSearchTarget) {
+  await searchDialog.value?.close()
+  if (target.type === 'global') {
+    if (page.value !== 'settings') {
+      await navigate('settings')
+    }
+    if ((page.value as string) === 'settings') {
+      await settingsView.value?.navigate(target.section, target.targetId)
+    }
+  } else if (target.type === 'module') {
+    await openModuleSettings(target.module, target.module, target.sectionId)
+  }
 }
 /** 目录或历史记录里选择单篇表示聚焦这一天：先解除框选，避免总结 / Excel 仍按旧范围统计。 */
 async function selectReport(date: string) {
@@ -355,13 +436,14 @@ async function prepareForUpdate(): Promise<boolean> {
     busy.value ||
     picking.value ||
     settingsLoading.value ||
-    settingsSaving.value ||
+    settingsCommitting.value ||
     settingsLeaveBusy.value ||
     databaseBusy.value ||
     requestingAi.value ||
     ai.summaryGenerating.value ||
     summaryOutput.exporting.value ||
     excelBusy.value ||
+    moduleSettingsVisible.value ||
     pendingWorkspaceSwitch.value
   )
     return false
@@ -386,10 +468,12 @@ async function restoreRecentWorkspace() {
 }
 
 async function navigate(target: 'home' | 'settings', closeTarget: 'settings' | 'close' = 'settings') {
+  // 模块设置弹窗是模态的；关闭它之后再切换页面。
+  if (moduleSettingsModule.value) return
   if (
     busy.value ||
     picking.value ||
-    settingsSaving.value ||
+    settingsCommitting.value ||
     settingsReading.value ||
     databaseBusy.value ||
     settingsLeaveBusy.value ||
@@ -409,6 +493,7 @@ async function navigate(target: 'home' | 'settings', closeTarget: 'settings' | '
   }
 }
 async function toggleSettings() {
+  if (moduleSettingsModule.value) return
   if (page.value !== 'settings') {
     await navigate('settings')
     return
@@ -418,7 +503,7 @@ async function toggleSettings() {
     busy.value ||
     picking.value ||
     settingsLoading.value ||
-    settingsSaving.value ||
+    settingsCommitting.value ||
     settingsLeaveBusy.value ||
     databaseBusy.value ||
     summaryOutput.exporting.value ||
@@ -434,21 +519,73 @@ async function toggleSettings() {
     settingsLeaveBusy.value = false
   }
 }
-async function openHolidaySettings() {
+/** 打开模块自己的设置弹窗；模块标题栏齿轮与模块内「设置」入口共用。 */
+async function openModuleSettings(module: ModuleType, source: ModuleId = module, initialSectionId?: string) {
+  if (busy.value || picking.value || settingsCommitting.value || databaseBusy.value || excelBusy.value) return
+  if (page.value !== 'home') {
+    await navigate('home')
+    if ((page.value as string) !== 'home') return
+  }
+  settingsError.value = ''
+  if (!settingsReady.value) await loadWorkspaceSettings(false)
+  if (busy.value || picking.value) return
+  moduleSettingsSource.value = source
+  moduleSettingsInitialSection.value = initialSectionId ?? null
+  moduleSettingsModule.value = module
+  if (initialSectionId) {
+    await nextTick()
+    moduleSettingsDialog.value?.navigateToSection(initialSectionId)
+  }
+}
+function closeModuleSettings() {
+  moduleSettingsModule.value = null
+  moduleSettingsInitialSection.value = null
+}
+/** 模块设置里点「前往模型配置」等入口时，先关闭弹窗再去全局设置对应分类。 */
+async function openModuleGlobalSettings(section: GlobalSettingsSection) {
+  moduleSettingsModule.value = null
+  await nextTick()
   await navigate('settings')
-  if (page.value === 'settings') await settingsView.value?.navigate('holidays')
+  if (page.value === 'settings') await settingsView.value?.navigate(section)
+}
+async function saveModuleSettings(settings: WorkspaceSettings): Promise<boolean> {
+  if (settingsCommitting.value || databaseBusy.value) return false
+  const savedOk = await saveWorkspaceSettings(settings)
+  if (savedOk) pushMessage({ tone: 'success', text: '设置已保存' })
+  return savedOk
+}
+async function openHolidaySettings() {
+  await openModuleSettings('calendar')
 }
 async function openAiSettings() {
   await navigate('settings')
   if ((page.value as string) === 'settings') await settingsView.value?.navigate('ai')
 }
 async function openExcelSettings() {
-  await navigate('settings')
-  if ((page.value as string) === 'settings') await settingsView.value?.navigate('excel')
+  await openModuleSettings('excel')
 }
 async function openGitSettings() {
-  await navigate('settings')
-  if ((page.value as string) === 'settings') await settingsView.value?.navigate('git')
+  await openModuleSettings('git')
+}
+async function openEditorSettings() {
+  await openModuleSettings('editor')
+}
+async function loadEditorSettings(): Promise<boolean> {
+  const path = workspace.value?.path
+  editorLoading.value = true
+  try {
+    const stored = nativeApp
+      ? await invoke<EditorSettings>('load_editor_settings')
+      : cloneEditorSettings(DEFAULT_EDITOR_SETTINGS)
+    if (workspace.value?.path !== path) return false
+    editorSettings.value = cloneEditorSettings(stored)
+    journal.setEditorSettings(editorSettings.value)
+    return true
+  } catch {
+    return false
+  } finally {
+    if (workspace.value?.path === path) editorLoading.value = false
+  }
 }
 async function loadWorkspaceSettings(reload: boolean): Promise<boolean> {
   const revision = ++settingsLoadRevision
@@ -463,6 +600,7 @@ async function loadWorkspaceSettings(reload: boolean): Promise<boolean> {
     loadDatabaseSettings(),
     git.load(),
     loadFileSettings(revision),
+    loadEditorSettings(),
   ])
   if (revision !== settingsLoadRevision) return false
   settingsReading.value = false
@@ -528,7 +666,7 @@ async function onDatabaseTransferred(result: DatabaseTransferResult) {
   }
 }
 async function saveWorkspaceSettings(value: WorkspaceSettings): Promise<boolean> {
-  if (settingsSaving.value || databaseBusy.value) return false
+  if (settingsCommitting.value || databaseBusy.value) return false
   if (!workspace.value || !settingsReady.value) {
     settingsError.value = '请先打开工作空间并完整读取设置后重试。'
     return false
@@ -568,6 +706,8 @@ async function saveWorkspaceSettings(value: WorkspaceSettings): Promise<boolean>
     acceptFileSettings(cloneFileSettings(stored.files, stored.summary.outputDirectory))
     git.acceptSaved(stored.git)
     databaseSettings.value = cloneDatabaseSettings(stored.database)
+    editorSettings.value = cloneEditorSettings(stored.editor)
+    journal.setEditorSettings(editorSettings.value)
     if (filesChanged) workspaceDocument.clear()
     if (storageChanged || filesChanged) {
       clearRange()
@@ -593,14 +733,14 @@ function requestSettingsExit(action: SettingsExit): boolean {
   return true
 }
 function cancelSettingsExit() {
-  if (settingsLeaveBusy.value || settingsSaving.value) return
+  if (settingsLeaveBusy.value || settingsCommitting.value) return
   pendingSettingsExit.value = null
   settingsCloseTarget.value = 'settings'
   settingsLeaveError.value = ''
   void settingsLeaveDialog.value?.close()
 }
 async function finishSettingsExit(save: boolean) {
-  if (!pendingSettingsExit.value || settingsLeaveBusy.value || settingsSaving.value) return
+  if (!pendingSettingsExit.value || settingsLeaveBusy.value || settingsCommitting.value) return
   settingsLeaveBusy.value = true
   settingsLeaveError.value = ''
   const action = pendingSettingsExit.value
@@ -631,7 +771,7 @@ async function chooseWorkspace() {
   if (
     picking.value ||
     busy.value ||
-    settingsSaving.value ||
+    settingsCommitting.value ||
     settingsReading.value ||
     databaseBusy.value ||
     settingsLeaveBusy.value ||
@@ -706,6 +846,7 @@ function showConfirmation() {
 }
 async function selectDate(date: string) {
   if (excelBusy.value || busy.value) return
+  excelGenerationRevision++
   const intent = ++fileOpenRevision
   if (!(await workspaceDocument.flush()) || intent !== fileOpenRevision) return
   workspaceDocument.clear()
@@ -777,6 +918,7 @@ function cancelConfirm() {
   if (!busy.value) void confirmDialog.value?.close()
 }
 function clearRange() {
+  excelGenerationRevision++
   excel.clearSelection()
   rangeRevision++
   rangeDates.value = []
@@ -786,6 +928,7 @@ function clearRange() {
 }
 async function loadRange(dates: string[], duringGitAppend = false) {
   if (excelBusy.value || (journal.appendingGit.value && !duringGitAppend)) return
+  excelGenerationRevision++
   if (!dates.length) {
     clearRange()
     return
@@ -848,6 +991,61 @@ function onHistoryKeydown(event: KeyboardEvent) {
   // WebKit can deliver shortcuts directly even when the native Edit menu is
   // installed. Handle those DOM events as well as the native menu events.
   if (event.isComposing || event.keyCode === 229 || event.defaultPrevented) return
+  if (searchShortcut(event, isMac)) {
+    if (searchDialog.value?.isOpen()) {
+      event.preventDefault()
+      closeSearchDialog()
+      return
+    }
+    if (
+      workspace.value &&
+      page.value === 'home' &&
+      !busy.value &&
+      !excelBusy.value &&
+      !picking.value &&
+      !moduleSettingsVisible.value &&
+      !document.querySelector('dialog[open]:not(.is-inline)')
+    ) {
+      event.preventDefault()
+      openSearchDialog()
+    }
+    return
+  }
+  if (saveShortcut(event, isMac)) {
+    if (document.querySelector('dialog[open]:not(.is-inline)')) return
+    event.preventDefault()
+    if (page.value === 'settings') {
+      void settingsView.value?.save()
+      return
+    }
+    if (workspaceDocument.path.value) {
+      void workspaceDocument.flush()
+    } else {
+      void journal.flush()
+    }
+    pushMessage({ tone: 'success', text: '草稿已立即保存' })
+    return
+  }
+  if (cheatsheetShortcut(event, isMac)) {
+    if (!shortcutsOpened.value && document.querySelector('dialog[open]:not(#shortcuts-dialog):not(.is-inline)')) {
+      return
+    }
+    event.preventDefault()
+    shortcutsOpened.value = !shortcutsOpened.value
+    return
+  }
+  if (event.key === '?' && !event.metaKey && !event.ctrlKey && !event.altKey) {
+    const target = event.target
+    if (
+      !(target instanceof HTMLElement && target.closest('input, textarea, [contenteditable="true"]')) &&
+      page.value === 'home' &&
+      !document.querySelector('dialog[open]:not(.is-inline)')
+    ) {
+      event.preventDefault()
+      shortcutsOpened.value = true
+      return
+    }
+  }
   if (
     page.value !== 'home' ||
     busy.value ||
@@ -928,14 +1126,16 @@ function exportSummary(format: FileFormat) {
     summaryMode.value,
   )
 }
-async function prepareExcel(dates: string[], prompt?: string) {
+async function generateExcelContent(dates: string[], prompt?: string) {
   if (busy.value || excelBusy.value || !workspace.value) return
+  const revision = ++excelGenerationRevision
+  const fileIntent = fileOpenRevision
   const workspacePath = workspace.value.path
   summaryWorkspacePath.value = workspacePath
   summarySelectionDates.value = [...dates].sort()
   excel.exportError.value = ''
   if (!excelSettings.value.enabled) {
-    excel.exportError.value = '请先在设置中启用 Excel 输出。'
+    excel.exportError.value = '请先在 Excel 设置中启用输出。'
     return
   }
   const blockedReason = excelBlockedReason.value
@@ -943,7 +1143,36 @@ async function prepareExcel(dates: string[], prompt?: string) {
     excel.exportError.value = blockedReason
     return
   }
-  await excel.prepareSelection(workspacePath, summarySelectionDates.value, prompt)
+  const flushed = await journal.flush()
+  if (
+    revision !== excelGenerationRevision ||
+    fileIntent !== fileOpenRevision ||
+    workspace.value?.path !== workspacePath ||
+    excelBusy.value
+  )
+    return
+  if (!flushed) {
+    excel.exportError.value = error.value || '请先保存当前日报，再生成报告内容。'
+    return
+  }
+  await excel.generateContent(workspacePath, [...dates], prompt)
+}
+async function prepareExcel(dates: string[], prompt?: string, content?: string) {
+  if (busy.value || excelBusy.value || !workspace.value) return
+  const workspacePath = workspace.value.path
+  summaryWorkspacePath.value = workspacePath
+  summarySelectionDates.value = [...dates].sort()
+  excel.exportError.value = ''
+  if (!excelSettings.value.enabled) {
+    excel.exportError.value = '请先在 Excel 设置中启用输出。'
+    return
+  }
+  const blockedReason = excelBlockedReason.value
+  if (blockedReason) {
+    excel.exportError.value = blockedReason
+    return
+  }
+  await excel.prepareSelection(workspacePath, summarySelectionDates.value, prompt, content)
 }
 async function confirmExcelPreview() {
   if (excelExporting.value || excelBusy.value || !excel.preview.value) return
@@ -955,6 +1184,7 @@ async function confirmExcelPreview() {
 }
 function discardExcelPreview() {
   if (excelExporting.value) return
+  excelGenerationRevision++
   void excel.discardPreview()
 }
 async function openExcelOutputDirectory() {
@@ -1006,7 +1236,7 @@ async function appendGitReport(workspacePath: string, date: string, content: str
     busy.value ||
     saving.value ||
     settingsLoading.value ||
-    settingsSaving.value ||
+    settingsCommitting.value ||
     page.value !== 'home' ||
     workspace.value?.path !== workspacePath ||
     selectedDate.value !== date ||
@@ -1029,7 +1259,7 @@ const moduleDisabled = computed(() => page.value !== 'home' || busy.value || req
 async function changeWorkspaceFiles(path: string, request: FileRequest, token?: string): Promise<FileChangeResult> {
   if (
     busy.value ||
-    settingsSaving.value ||
+    settingsCommitting.value ||
     settingsReading.value ||
     databaseBusy.value ||
     excelBusy.value ||
@@ -1082,6 +1312,7 @@ const moduleActions: ModuleActions = {
   directSummary: ai.directSummary,
   closeSummary,
   exportSummary,
+  generateExcelContent,
   prepareExcel,
   confirmExcel: confirmExcelPreview,
   discardExcelPreview,
@@ -1101,6 +1332,12 @@ const moduleActions: ModuleActions = {
   openGitSettings: () => {
     void openGitSettings()
   },
+  openEditorSettings: () => {
+    void openEditorSettings()
+  },
+  openShortcuts: () => {
+    shortcutsOpened.value = true
+  },
   appendGitReport,
   syncHolidays: (year: number) => {
     void syncHolidays(year)
@@ -1114,6 +1351,7 @@ provide(MODULE_CONTEXT, {
   excel,
   summaryOutput,
   fileSettings,
+  editorSettings,
   git,
   summarySelectionDates,
   excelBlockedReason,
@@ -1246,10 +1484,11 @@ function beforeUnload(event: BeforeUnloadEvent) {
     saving.value ||
     workspaceDocument.dirty.value ||
     workspaceDocument.saving.value ||
-    settingsSaving.value ||
+    settingsCommitting.value ||
     databaseBusy.value ||
     summaryOutput.exporting.value ||
     excelBusy.value ||
+    (moduleSettingsVisible.value && moduleSettingsDialog.value?.unchanged === false) ||
     (page.value === 'settings' && !settingsView.value?.unchanged)
   ) {
     event.preventDefault()
@@ -1307,12 +1546,17 @@ onMounted(async () => {
           cancelWorkspaceSwitch()
           return
         }
+        // 模块设置弹窗优先关闭；有未保存修改时先弹出弹窗内的放弃确认。
+        if (moduleSettingsVisible.value) {
+          moduleSettingsDialog.value?.requestClose()
+          return
+        }
         if (
           journal.appendingGit.value ||
           updater.busy.value ||
           busy.value ||
           picking.value ||
-          settingsSaving.value ||
+          settingsCommitting.value ||
           settingsReading.value ||
           databaseBusy.value ||
           settingsLeaveBusy.value ||
@@ -1362,29 +1606,35 @@ onBeforeUnmount(() => {
   >
     <div class="app-main">
       <AppToolbar
-        :inert="page === 'settings'"
+        :inert="page === 'settings' || moduleSettingsVisible"
         :page="page"
         :native-titlebar="nativeApp && isMac"
+        :is-mac="isMac"
         :greeting="greeting"
         :date-label="now.format('M 月 D 日 dddd')"
         :has-workspace="!!workspace"
+        :workspace-name="workspace?.name"
+        :workspace-path="workspace?.path"
         :busy="busy"
         :picking="picking"
         :excel-busy="excelBusy"
-        :settings-saving="settingsSaving"
+        :settings-saving="settingsCommitting"
         :settings-reading="settingsReading"
         :settings-leave-busy="settingsLeaveBusy"
         :database-busy="databaseBusy"
         :refresh-revision="refreshRevision"
         @navigate="navigate"
         @refresh="refreshHome"
+        @workspace="chooseWorkspace"
+        @search="openSearchDialog"
+        @shortcuts="shortcutsOpened = true"
       />
       <div class="app-content">
         <main v-if="startupPending" class="workspace-loading" role="status" aria-live="polite">
           <PhCircleNotch class="spin" :size="18" aria-hidden="true" /><span>正在打开工作空间…</span>
         </main>
         <Transition name="page-switch">
-          <main v-if="workspace && !startupPending" class="home" :inert="page !== 'home'">
+          <main v-if="workspace && !startupPending" class="home" :inert="page !== 'home' || moduleSettingsVisible">
             <ModuleBoard
               ref="moduleBoard"
               :layout="layoutTree"
@@ -1394,6 +1644,7 @@ onBeforeUnmount(() => {
               @edge="moveModuleToEdge"
               @resize="resizeModules"
               @remove="removeModule"
+              @settings="openModuleFromBoard"
             />
           </main>
         </Transition>
@@ -1410,6 +1661,16 @@ onBeforeUnmount(() => {
           />
         </Transition>
       </div>
+      <footer v-if="workspace && !startupPending" class="app-statusbar" aria-label="工作空间状态">
+        <span class="app-statusbar-path" :title="workspace.path">{{ workspace.path }}</span>
+        <span>{{ entries.length }} 篇日报</span>
+        <span class="app-statusbar-document" :title="workspaceDocument.path.value || selectedDate">{{
+          workspaceDocument.path.value || activeDocument?.filename || selectedDate
+        }}</span>
+        <span v-if="!workspaceDocument.path.value && activeDocument">{{
+          activeDocument.format === 'txt' ? '纯文本' : 'Markdown'
+        }}</span>
+      </footer>
       <SettingsDialog
         :visible="page === 'settings'"
         :busy="settingsDialogBusy"
@@ -1422,7 +1683,7 @@ onBeforeUnmount(() => {
             ref="settingsView"
             :key="workspace?.path ?? 'no-workspace'"
             :workspace="workspace"
-            :picking="picking || busy || excelBusy || settingsSaving"
+            :picking="picking || busy || excelBusy || settingsCommitting"
             :bundle="workspaceSettings"
             :loading="settingsLoading"
             :saving="settingsSaving"
@@ -1430,20 +1691,34 @@ onBeforeUnmount(() => {
             :before-database-transfer="journal.flush"
             :error="settingsError"
             :save="saveWorkspaceSettings"
-            :holidays="holidayState"
-            :holiday-loading="holidayLoading"
-            :holiday-syncing="holidaySyncing"
-            :holiday-error="holidayError"
-            :current-year="now.year()"
             :updater="updater"
             @database-busy="databaseActivity = $event"
             @database-transferred="onDatabaseTransferred"
-            @sync-holidays="syncHolidays"
             @back="navigate('home')"
             @workspace="chooseWorkspace"
           />
         </div>
       </SettingsDialog>
+      <ModuleSettingsDialog
+        ref="moduleSettingsDialog"
+        :visible="moduleSettingsVisible"
+        :module="moduleSettingsModule"
+        :initial-section-id="moduleSettingsInitialSection"
+        :button-rect="moduleSettingsButtonRect"
+        :workspace="workspace"
+        :bundle="workspaceSettings"
+        :busy="moduleSettingsBusy"
+        :error="settingsError"
+        :save="saveModuleSettings"
+        :holidays="holidayState"
+        :holiday-loading="holidayLoading"
+        :holiday-syncing="holidaySyncing"
+        :holiday-error="holidayError"
+        :current-year="now.year()"
+        @close="closeModuleSettings"
+        @open-global-settings="openModuleGlobalSettings"
+        @sync-holidays="syncHolidays"
+      />
       <FileChangesDialog ref="fileChangesDialog" />
       <SettingsLeaveDialog
         ref="settingsLeaveDialog"
@@ -1478,6 +1753,17 @@ onBeforeUnmount(() => {
         @cancel="cancelConfirm"
       />
       <SkinDialog ref="skinDialog" :active="activeSkin" @select="applySkin" @close="closeSkinDialog" />
+      <GlobalSearchDialog
+        ref="searchDialog"
+        :workspace-path="workspace?.path"
+        :entries="entries"
+        :is-mac="isMac"
+        @select-journal="onSearchSelectJournal"
+        @select-file="onSearchSelectFile"
+        @select-setting="onSearchSelectSetting"
+        @close="closeSearchDialog"
+      />
+      <ShortcutsDialog :visible="shortcutsOpened" @close="shortcutsOpened = false" />
       <LayoutDialog
         ref="layoutDialog"
         :saved-layouts="savedLayouts"
@@ -1493,12 +1779,14 @@ onBeforeUnmount(() => {
       v-if="workspace"
       :key="workspace.path"
       ref="appRail"
-      :disabled="busy || excelBusy || picking"
+      :disabled="busy || excelBusy || picking || moduleSettingsVisible"
       :active="layoutItems.map((item) => item.id)"
       :hold-delay-ms="railHoldDelayMs"
       :hold-duration-ms="railHoldDurationMs"
       :settings-active="page === 'settings'"
-      :settings-busy="settingsLoading || settingsSaving || settingsLeaveBusy || databaseBusy"
+      :settings-busy="
+        settingsLoading || settingsCommitting || settingsLeaveBusy || databaseBusy || moduleSettingsVisible
+      "
       @module="activateModule"
       @remove="removeModule"
       @refresh="refreshHome"

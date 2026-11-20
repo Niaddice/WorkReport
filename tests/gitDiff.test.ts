@@ -27,6 +27,59 @@ describe('unified Git diff display', () => {
     expect(result.additions).toBe(2)
     expect(result.deletions).toBe(2)
   })
+  it('extracts valid hunk patches with file headers attached for staging', () => {
+    const raw = [
+      'diff --git a/test.txt b/test.txt',
+      'index 123456..789abc 100644',
+      '--- a/test.txt',
+      '+++ b/test.txt',
+      '@@ -1,3 +1,3 @@',
+      ' line 1',
+      '-line 2',
+      '+line 2 modified',
+      ' line 3',
+      '@@ -10,3 +10,3 @@',
+      ' line 10',
+      '-line 11',
+      '+line 11 modified',
+      ' line 12',
+    ].join('\n')
+
+    const result = parseGitDiff(raw)
+    const hunkLines = result.lines.filter((l) => l.kind === 'hunk')
+    expect(hunkLines).toHaveLength(2)
+
+    expect(hunkLines[0].patch).toBe(
+      [
+        'diff --git a/test.txt b/test.txt',
+        'index 123456..789abc 100644',
+        '--- a/test.txt',
+        '+++ b/test.txt',
+        '@@ -1,3 +1,3 @@',
+        ' line 1',
+        '-line 2',
+        '+line 2 modified',
+        ' line 3',
+        '',
+      ].join('\n'),
+    )
+
+    expect(hunkLines[1].patch).toBe(
+      [
+        'diff --git a/test.txt b/test.txt',
+        'index 123456..789abc 100644',
+        '--- a/test.txt',
+        '+++ b/test.txt',
+        '@@ -10,3 +10,3 @@',
+        ' line 10',
+        '-line 11',
+        '+line 11 modified',
+        ' line 12',
+        '',
+      ].join('\n'),
+    )
+  })
+
   it('does not invent line numbers for binary diffs or fragments without a hunk header', () => {
     expect(parseGitDiff('Binary files a/a and b/a differ').lines[0]).toMatchObject({
       kind: 'meta',

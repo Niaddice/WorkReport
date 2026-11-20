@@ -38,12 +38,27 @@ const MAX_PENDING_PREVIEWS: usize = 4;
 const MAX_PENDING_BYTES: usize = 64 * 1024 * 1024;
 const STALE_PREVIEW: &str = "Excel 预览已失效，请重新生成预览";
 
-#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+pub const DEFAULT_CONTENT_PROMPT: &str = "根据所选日期的日报，按项目归类整理工作成果、进展、问题和下一步计划，保留事实、数字和完成状态。输出清晰、可核对的 Markdown 正文，不包含 Excel 单元格坐标或填表规则。";
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Settings {
     pub enabled: bool,
     pub template_path: String,
+    /// Saved `prompt` remains the workbook-filling rule for existing workspaces.
     pub prompt: String,
+    pub content_prompt: String,
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            template_path: String::new(),
+            prompt: String::new(),
+            content_prompt: DEFAULT_CONTENT_PROMPT.into(),
+        }
+    }
 }
 
 /// Read the current workspace rule rather than allowing a delayed action to
@@ -339,8 +354,11 @@ impl CellRange {
 }
 
 pub fn validate_settings(settings: &Settings) -> Result<(), String> {
+    if settings.content_prompt.chars().count() > 6000 {
+        return Err("Excel 内容生成提示词最多 6000 字".into());
+    }
     if settings.prompt.chars().count() > 6000 {
-        return Err("Excel 输出提示词最多 6000 字".into());
+        return Err("Excel 填充提示词最多 6000 字".into());
     }
     if settings.template_path.len() > 4096 {
         return Err("Excel 模板路径过长".into());
@@ -353,7 +371,7 @@ pub fn validate_settings(settings: &Settings) -> Result<(), String> {
     }
     require_xlsx(Path::new(settings.template_path.trim()))?;
     if settings.prompt.trim().is_empty() {
-        return Err("请填写 Excel 输出提示词".into());
+        return Err("请填写 Excel 填充提示词".into());
     }
     Ok(())
 }
@@ -1197,6 +1215,21 @@ mod tests {
     }
 
     #[test]
+    fn content_prompt_migrates_legacy_settings_and_has_an_independent_limit() {
+        let legacy: Settings = serde_json::from_str(
+            r#"{"enabled":false,"templatePath":"template.xlsx","prompt":"原有填表规则"}"#,
+        ).unwrap();
+        assert_eq!(legacy.prompt, "原有填表规则");
+        assert_eq!(legacy.content_prompt, DEFAULT_CONTENT_PROMPT);
+        let mut settings = Settings { content_prompt: "字".repeat(6000), ..legacy };
+        assert!(validate_settings(&settings).is_ok());
+        settings.content_prompt.push('字');
+        assert!(validate_settings(&settings).unwrap_err().contains("内容生成提示词"));
+        settings.content_prompt.clear();
+        assert!(validate_settings(&settings).is_ok());
+    }
+
+    #[test]
     fn fill_plan_rejects_new_formulas_merge_children_and_malformed_values() {
         let temporary = tempfile::tempdir().unwrap();
         let template = read_template(&template_file(temporary.path())).unwrap();
@@ -1619,6 +1652,7 @@ mod tests {
                 enabled: true,
                 template_path: template_path.to_string_lossy().into_owned(),
                 prompt: "写入内容".into(),
+                ..Settings::default()
             },
             file_rule: output_rule(template_path.parent().unwrap()).unwrap(),
             source_revision: "source-hash".into(),

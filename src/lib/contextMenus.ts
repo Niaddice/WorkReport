@@ -28,6 +28,7 @@ export interface ContextEditor {
   replace: (text: string, start: number, end: number) => unknown
   replaceSelection?: (text: string) => unknown
   selectedText?: () => string
+  polish?: (prompt?: string) => Promise<unknown>
 }
 
 const editors = new WeakMap<HTMLElement, ContextEditor>()

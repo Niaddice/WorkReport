@@ -73,7 +73,7 @@ impl Runtime {
     pub async fn sync(&self, directory: &Path, year: i32) -> Result<HolidayState, String> {
         validate_year(year)?;
         let _guard = self.lock.lock().await;
-        let client = reqwest::Client::builder()
+        let client = crate::network::client()?
             .timeout(Duration::from_secs(20))
             .connect_timeout(Duration::from_secs(10))
             .redirect(reqwest::redirect::Policy::none())

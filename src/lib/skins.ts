@@ -1,5 +1,16 @@
 export type SkinId =
-  'default' | 'jade' | 'apricot' | 'wisteria' | 'midnight' | 'graphite' | 'vscode-dark-2026' | 'vscode-light-2026'
+  | 'default'
+  | 'islands-light'
+  | 'islands-dark'
+  | 'apple'
+  | 'frosted-glass'
+  | 'jade'
+  | 'apricot'
+  | 'wisteria'
+  | 'midnight'
+  | 'graphite'
+  | 'vscode-dark-2026'
+  | 'vscode-light-2026'
 
 export interface Skin {
   id: SkinId
@@ -18,6 +29,34 @@ export const SKINS: readonly Skin[] = [
     description: '清透留白，经典蓝灰。',
     mode: 'light',
     swatches: ['#f8fafd', '#ffffff', '#0b57d0'],
+  },
+  {
+    id: 'islands-light',
+    name: 'Islands 浅色',
+    description: 'IDEA 风格，灰白工具窗口与蓝色活动标签。',
+    mode: 'light',
+    swatches: ['#ebecf0', '#ffffff', '#3574f0'],
+  },
+  {
+    id: 'islands-dark',
+    name: 'Islands 深色',
+    description: 'IDEA 风格，石墨工具窗口与独立编辑区。',
+    mode: 'dark',
+    swatches: ['#2b2d30', '#1e1f22', '#6b9bfa'],
+  },
+  {
+    id: 'apple',
+    name: 'Apple 风格',
+    description: '灰白层次，系统蓝与细腻圆角。',
+    mode: 'light',
+    swatches: ['#f2f2f7', '#ffffff', '#0066cc'],
+  },
+  {
+    id: 'frosted-glass',
+    name: '磨砂玻璃',
+    description: '柔和光影，通透面板与磨砂质感。',
+    mode: 'light',
+    swatches: ['#e7edf7', '#ffffffb8', '#315caa'],
   },
   {
     id: 'jade',

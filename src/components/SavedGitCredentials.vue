@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { onBeforeUnmount, ref } from 'vue'
 import { invoke, isTauri } from '@tauri-apps/api/core'
+import { PhKey } from '@phosphor-icons/vue'
 
 const props = defineProps<{ disabled: boolean }>()
 const opened = ref(false)
@@ -60,7 +61,13 @@ async function forget(origin: string | null) {
     <p>凭据加密保存在本机配置文件中，由系统安全存储保管密钥，可供本机的其他工作空间使用。</p>
     <template v-if="opened">
       <p v-if="busy" role="status">正在处理凭据…</p>
-      <p v-else-if="!entries.length && !error">尚未保存 Git 凭据。</p>
+      <div v-else-if="!entries.length && !error" class="settings-empty-card">
+        <div class="settings-empty-icon">
+          <PhKey :size="22" aria-hidden="true" />
+        </div>
+        <p class="settings-empty-title">尚未保存 Git 凭据</p>
+        <p class="settings-empty-desc">在 Git 操作需要身份认证时，勾选“保存凭据”后会自动加密保存在本机。</p>
+      </div>
       <ul v-if="entries.length">
         <li v-for="entry in entries" :key="entry.url">
           <span

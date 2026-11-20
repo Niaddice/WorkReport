@@ -1,9 +1,16 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { effectScope, nextTick, ref, type EffectScope } from 'vue'
 import { DEFAULT_DATABASE_SETTINGS, cloneDatabaseSettings } from '../src/lib/database'
-import { cloneWorkspaceSettings, useSettingsDraft, type WorkspaceSettings } from '../src/lib/settingsDraft'
+import {
+  cloneEditorSettings,
+  cloneWorkspaceSettings,
+  DEFAULT_EDITOR_SETTINGS,
+  useSettingsDraft,
+  type WorkspaceSettings,
+} from '../src/lib/settingsDraft'
 import { cloneGitSettings } from '../src/lib/useGit'
 import { cloneFileSettings } from '../src/lib/fileSettings'
+import { cloneExcelSettings, DEFAULT_EXCEL_SETTINGS } from '../src/lib/useExcel'
 
 const scopes: EffectScope[] = []
 afterEach(() => {
@@ -31,8 +38,9 @@ function initialSettings(): WorkspaceSettings {
       generationPreference: '',
       summaryPrompt: '',
     },
-    excel: { enabled: false, templatePath: '', prompt: '' },
+    excel: cloneExcelSettings(DEFAULT_EXCEL_SETTINGS),
     summary: { outputDirectory: 'summary' },
+    editor: cloneEditorSettings(DEFAULT_EDITOR_SETTINGS),
     files: cloneFileSettings(),
   }
 }
@@ -156,6 +164,8 @@ describe('manual settings draft', () => {
     state.draft.value.ai.providers.length = 0
     state.draft.value.ai.defaultProviderId = null
     state.draft.value.excel.enabled = true
+    state.draft.value.excel.contentPrompt = '临时内容生成规则'
+    state.draft.value.excel.prompt = '临时模板填充规则'
     state.draft.value.summary.outputDirectory = '临时目录'
     state.reset()
     expect(state.draft.value).toEqual(initialSettings())

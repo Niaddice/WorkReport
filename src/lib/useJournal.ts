@@ -11,6 +11,8 @@ import {
 import { dateKey } from './calendar'
 import { DEFAULT_DATABASE_SETTINGS } from './database'
 import { DEFAULT_FILE_SETTINGS, formatFileName, type FileSettings } from './fileSettings'
+import { cloneEditorSettings, DEFAULT_EDITOR_SETTINGS, type EditorSettings } from './settingsDraft'
+import { getJournalTemplateContent } from './journalTemplates'
 
 function emptyDocument(date: string, format: FileFormat, template: string): Document {
   return { date, filename: formatFileName(template, { date }, format), format, content: '', revision: '' }
@@ -40,12 +42,15 @@ export function useJournal(options: { beforeFlush?: () => Promise<boolean> } = {
   let lastHistoryAt = 0
   let timer: ReturnType<typeof setTimeout> | undefined
   let pendingSave: Promise<boolean> | null = null
+  let pendingHistory = false
   let previewRevision = 0
   const pendingPreviews = new Map<string, object>()
   const previewVersions = new Map<string, number>()
   /** 新建日报使用的格式，由「数据存储」中的默认格式设置驱动。 */
   let defaultFormat: FileFormat = DEFAULT_DATABASE_SETTINGS.defaultFormat
   let filenameTemplate = DEFAULT_FILE_SETTINGS.journal.filenameTemplate
+  let editorSettings: EditorSettings = cloneEditorSettings(DEFAULT_EDITOR_SETTINGS)
+  let initialDraftContent = ''
 
   function setFileSettings(settings: Pick<FileSettings, 'journal'>) {
     filenameTemplate = settings.journal.filenameTemplate
@@ -55,6 +60,10 @@ export function useJournal(options: { beforeFlush?: () => Promise<boolean> } = {
         filename: formatFileName(filenameTemplate, { date: document.value.date }, document.value.format),
       }
     }
+  }
+
+  function setEditorSettings(settings: EditorSettings) {
+    editorSettings = cloneEditorSettings(settings)
   }
 
   function setDefaultFormat(format: FileFormat) {
@@ -117,6 +126,8 @@ export function useJournal(options: { beforeFlush?: () => Promise<boolean> } = {
 
   function applyDocument(value: Document | null, preserveHistory = false) {
     isNewDraft.value = false
+    pendingHistory = false
+    initialDraftContent = ''
     document.value = value
     if (value) backupWarning.value = value.backupWarning ?? ''
     draft.value = value?.content ?? ''
@@ -126,8 +137,21 @@ export function useJournal(options: { beforeFlush?: () => Promise<boolean> } = {
 
   function applyDraft(date: string, format: FileFormat = defaultFormat) {
     isNewDraft.value = true
+    pendingHistory = false
     document.value = emptyDocument(date, format, filenameTemplate)
-    draft.value = ''
+    if (editorSettings.autoApplyTemplate && editorSettings.defaultTemplateId !== 'none') {
+      const template = getJournalTemplateContent(
+        editorSettings.defaultTemplateId,
+        format,
+        editorSettings.customTemplate,
+        date,
+      )
+      draft.value = template
+      initialDraftContent = template
+    } else {
+      draft.value = ''
+      initialDraftContent = ''
+    }
     savedAt.value = null
     resetHistory()
   }
@@ -181,11 +205,14 @@ export function useJournal(options: { beforeFlush?: () => Promise<boolean> } = {
     return null
   }
 
-  async function flushJournal(): Promise<boolean> {
+  async function flushJournal(automatic = false): Promise<boolean> {
     clearTimeout(timer)
-    if (pendingSave) return pendingSave.then((success) => (success && dirty.value ? flushJournal() : success))
+    if (pendingSave)
+      return pendingSave.then((success) =>
+        success && (dirty.value || (!automatic && pendingHistory)) ? flushJournal(automatic) : success,
+      )
     if (!document.value) return true
-    if (isNewDraft.value && !draft.value.trim()) return true
+    if (isNewDraft.value && (!draft.value.trim() || draft.value === initialDraftContent)) return true
     const task = (async () => {
       saving.value = true
       let lastSaved: Document | null = null
@@ -201,11 +228,26 @@ export function useJournal(options: { beforeFlush?: () => Promise<boolean> } = {
         // Serialize writes and keep saving if typing continued during a write.
         while (document.value && dirty.value) {
           const snapshot = draft.value
-          const saved = await api.save(document.value.date, snapshot, document.value.revision, document.value.format)
+          const { date, revision, format } = document.value
+          const saved = await (automatic
+            ? api.save(date, snapshot, revision, format, true)
+            : api.save(date, snapshot, revision, format))
           document.value = saved
+          pendingHistory = automatic
           backupWarning.value = saved.backupWarning ?? ''
           savedAt.value = new Date()
           lastSaved = saved
+        }
+        // Autosave is frequent; explicit saves and navigation also checkpoint
+        // the final stored contents, even when autosave already cleared dirty.
+        if (!automatic && pendingHistory && document.value) {
+          try {
+            await api.checkpointHistory(document.value.date, document.value.format)
+            pendingHistory = false
+            savedAt.value = new Date()
+          } catch {
+            // History is best effort and must not block a persisted journal.
+          }
         }
         error.value = ''
         if (lastSaved) {
@@ -229,12 +271,12 @@ export function useJournal(options: { beforeFlush?: () => Promise<boolean> } = {
       }
     })
     // Preview reads can outlive the write; include any edits made during them.
-    return task.then((success) => (success && dirty.value ? flushJournal() : success))
+    return task.then((success) => (success && dirty.value ? flushJournal(automatic) : success))
   }
 
-  async function flush(): Promise<boolean> {
+  async function flush(automatic = false): Promise<boolean> {
     if (options.beforeFlush && !(await options.beforeFlush())) return false
-    return flushJournal()
+    return flushJournal(automatic)
   }
 
   function scheduleSave() {
@@ -242,12 +284,13 @@ export function useJournal(options: { beforeFlush?: () => Promise<boolean> } = {
     // A failed save needs a deliberate retry; keep the draft intact.
     if (!error.value)
       timer = setTimeout(() => {
-        void flush()
+        void flush(true)
       }, 650)
   }
 
   function edit(content: string, forceHistory = false) {
     if (appendingGit.value || !document.value || content === draft.value) return
+    initialDraftContent = ''
     const now = Date.now()
     if (forceHistory || now - lastHistoryAt > 800) {
       pushUndo(draft.value)
@@ -539,6 +582,7 @@ export function useJournal(options: { beforeFlush?: () => Promise<boolean> } = {
     select,
     setDefaultFormat,
     setFileSettings,
+    setEditorSettings,
     open,
     switchFormat,
     reload,

@@ -6,5 +6,7 @@ import '@material/web/button/text-button.js'
 import '@material/web/iconbutton/icon-button.js'
 import App from './App.vue'
 import './style.css'
+import './desktop.css'
+import './components/moduleSettings/moduleSettings.css'
 
 createApp(App).mount('#app')

@@ -1,6 +1,6 @@
-import { invoke, isTauri } from '@tauri-apps/api/core'
+import { Channel, invoke, isTauri } from '@tauri-apps/api/core'
 import { ref } from 'vue'
-import { gitAuthenticationOrigin, gitErrorMessage, type GitCredentials } from './gitAuthentication'
+import { gitAuthenticationOrigin, gitErrorMessage, isGithubHttpsOrigin, type GitCredentials } from './gitAuthentication'
 
 export interface GitFileChange {
   path: string
@@ -54,7 +54,12 @@ export type GitOperation =
   | 'stage'
   | 'unstage'
   | 'discard'
+  | 'stageHunk'
+  | 'unstageHunk'
+  | 'discardHunk'
   | 'commit'
+  | 'commitAmend'
+  | 'undoCommit'
   | 'createBranch'
   | 'switchBranch'
   | 'deleteBranch'
@@ -72,6 +77,7 @@ export interface GitActionRequest {
   paths: string[]
   message: string
   reference: string
+  patch?: string
   credentials?: GitCredentials
 }
 
@@ -155,7 +161,7 @@ export function useGitWorkbench(scope: () => GitWorkbenchScope) {
     if (id && isTauri()) void invoke('cancel_git_commit_message', { requestId: id }).catch(() => {})
   }
 
-  async function generateCommitMessage(): Promise<string | null> {
+  async function generateCommitMessage(onChunkCallback?: (chunk: string) => void): Promise<string | null> {
     if (generatingMessage.value || busy.value || loading.value) return null
     const target = context()
     const id = crypto.randomUUID()
@@ -163,9 +169,17 @@ export function useGitWorkbench(scope: () => GitWorkbenchScope) {
     generatingMessage.value = true
     error.value = ''
     notice.value = ''
+    const onChunk = new Channel<string>()
+    if (onChunkCallback) {
+      onChunk.onmessage = onChunkCallback
+    }
     try {
       assertDesktop(target.value)
-      const message = await invoke<string>('generate_git_commit_message', { ...target.value, requestId: id })
+      const message = await invoke<string>('generate_git_commit_message', {
+        ...target.value,
+        requestId: id,
+        onChunk,
+      })
       if (!target.valid() || messageRequestId !== id) return null
       if (!message?.trim()) throw new Error('AI 未返回提交说明，请重试。')
       return message.trim()
@@ -264,7 +278,7 @@ export function useGitWorkbench(scope: () => GitWorkbenchScope) {
       assertDesktop(target.value)
       const output = await invoke<string>('git_repository_action', {
         ...target.value,
-        request: { paths: [], message: '', reference: '', ...request },
+        request: { paths: [], message: '', reference: '', patch: '', ...request },
       })
       if (!valid()) return false
       // A successful mutation is still successful if the subsequent status refresh fails.
@@ -274,10 +288,16 @@ export function useGitWorkbench(scope: () => GitWorkbenchScope) {
       return valid()
     } catch (cause) {
       if (!valid()) return false
-      const origin = ['pull', 'push'].includes(request.operation) ? gitAuthenticationOrigin(cause) : null
+      const origin = ['fetch', 'pull', 'push'].includes(request.operation) ? gitAuthenticationOrigin(cause) : null
       const detail = gitErrorMessage(cause)
       const message = origin
-        ? '远程仓库需要认证，请填写用户名和密码或访问令牌后重试。'
+        ? isGithubHttpsOrigin(origin)
+          ? detail.includes('已保存的凭据认证失败')
+            ? '已保存的 GitHub 授权未通过认证，请重新使用浏览器登录，或填写访问令牌。'
+            : 'GitHub 需要认证，请使用浏览器登录 GitHub，或填写用户名和访问令牌后重试。'
+          : detail.includes('已保存的凭据认证失败')
+            ? '已保存的账号密码未通过认证，请重新填写用户名和密码或访问令牌后重试。'
+            : '远程仓库需要认证，请填写用户名和密码或访问令牌后重试。'
         : `Git 操作失败：${request.credentials?.password ? detail.split(request.credentials.password).join('[已隐藏]') : detail}`
       // Merge, pull and stash application can leave conflicts even when Git exits with an error.
       await refresh()

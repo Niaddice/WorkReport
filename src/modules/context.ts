@@ -9,6 +9,7 @@ import type { useSummaryOutput } from '../lib/useSummaryOutput'
 import type { useJournalPreview } from '../lib/useJournalPreview'
 import type { useGit } from '../lib/useGit'
 import type { FileSettings } from '../lib/fileSettings'
+import type { EditorSettings } from '../lib/settingsDraft'
 import type { useWorkspaceDocument } from '../lib/useWorkspaceDocument'
 import type { FileRequest, FileChangeResult } from '../lib/workspaceFiles'
 
@@ -43,18 +44,24 @@ export interface ModuleActions {
   directSummary(): void
   closeSummary(): void
   exportSummary(format: FileFormat): void
-  /** 按所选单日或日期范围生成 Excel报告预览。 */
-  prepareExcel(dates: string[], prompt?: string): Promise<void>
+  /** 第一步：按所选日报生成可供用户确认和修改的报告正文。 */
+  generateExcelContent(dates: string[], prompt?: string): Promise<void>
+  /** 第二步：把用户确认的正文按填充提示词写入模板预览。 */
+  prepareExcel(dates: string[], prompt?: string, content?: string): Promise<void>
   confirmExcel(): Promise<void>
   discardExcelPreview(): void
   openExcelOutputDirectory(): Promise<void>
   requestFormat(format: FileFormat): void
   requestReload(): void
   requestRestore(): void
+  /** 打开全局设置的模型配置分类（AI 为所有模块共用）。 */
   openAiSettings(): void
+  /** 以下打开对应模块自己的设置弹窗，不再跳转全局设置页。 */
   openExcelSettings(): void
   openHolidaySettings(): void
   openGitSettings(): void
+  openEditorSettings?: () => void
+  openShortcuts?: () => void
   appendGitReport(workspacePath: string, date: string, content: string): Promise<boolean>
   syncHolidays(year: number): void
 }
@@ -66,6 +73,7 @@ export interface ModuleActions {
 export interface ModuleContext {
   workspaceDocument?: ReturnType<typeof useWorkspaceDocument>
   fileSettings?: Ref<FileSettings>
+  editorSettings?: Ref<EditorSettings>
   journal: JournalStore
   ai: AiStore
   holidays: HolidayStore

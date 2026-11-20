@@ -12,6 +12,7 @@ vi.mock('../src/lib/workspace', () => ({
     read: vi.fn(),
     create: vi.fn(),
     save: vi.fn(),
+    checkpointHistory: vi.fn(),
     switchFormat: vi.fn(),
   },
 }))
@@ -47,6 +48,67 @@ describe('workspace journal save lifecycle', () => {
     const journal = useJournal()
     expect(journal.workspace.value).toBeNull()
     expect(api.open).not.toHaveBeenCalled()
+  })
+
+  it('uses throttled history for autosave and checkpoints the final clean draft when explicitly flushed', async () => {
+    const journal = await setup()
+    vi.mocked(api.save).mockImplementation(async (date, content) => ({ ...original, date, content, revision: 'r2' }))
+    journal.edit('自动保存后的最终内容')
+    await vi.advanceTimersByTimeAsync(650)
+    expect(journal.dirty.value).toBe(false)
+    expect(api.save).toHaveBeenCalledExactlyOnceWith(original.date, '自动保存后的最终内容', 'r1', 'md', true)
+    expect(api.checkpointHistory).not.toHaveBeenCalled()
+
+    expect(await journal.flush()).toBe(true)
+    expect(api.checkpointHistory).toHaveBeenCalledExactlyOnceWith(original.date, 'md')
+    expect(api.save).toHaveBeenCalledOnce()
+    await journal.flush()
+    expect(api.checkpointHistory).toHaveBeenCalledOnce()
+    journal.dispose()
+  })
+
+  it('checkpoints an autosaved draft before changing date', async () => {
+    const journal = await setup()
+    vi.mocked(api.save).mockImplementation(async (date, content) => ({ ...original, date, content, revision: 'r2' }))
+    journal.edit('离开前的内容')
+    await vi.advanceTimersByTimeAsync(650)
+    await journal.select('20261019')
+    expect(api.checkpointHistory).toHaveBeenCalledExactlyOnceWith(original.date, 'md')
+    expect(journal.selectedDate.value).toBe('20261019')
+    journal.dispose()
+  })
+
+  it('waits for an in-flight autosave before checkpointing an explicit save', async () => {
+    const journal = await setup()
+    let finish!: (value: Document) => void
+    vi.mocked(api.save).mockReturnValueOnce(
+      new Promise((resolve) => {
+        finish = resolve
+      }),
+    )
+    journal.edit('正在自动保存的内容')
+    await vi.advanceTimersByTimeAsync(650)
+    const manual = journal.flush()
+    expect(api.checkpointHistory).not.toHaveBeenCalled()
+    finish({ ...original, content: '正在自动保存的内容', revision: 'r2' })
+    expect(await manual).toBe(true)
+    expect(api.checkpointHistory).toHaveBeenCalledExactlyOnceWith(original.date, 'md')
+    expect(journal.dirty.value).toBe(false)
+    journal.dispose()
+  })
+
+  it('retries a failed checkpoint without treating a persisted journal as unsaved', async () => {
+    const journal = await setup()
+    vi.mocked(api.save).mockImplementation(async (date, content) => ({ ...original, date, content, revision: 'r2' }))
+    vi.mocked(api.checkpointHistory).mockRejectedValueOnce(new Error('历史目录不可写'))
+    journal.edit('已保存的内容')
+    await vi.advanceTimersByTimeAsync(650)
+    expect(await journal.flush()).toBe(true)
+    expect(journal.dirty.value).toBe(false)
+    expect(journal.error.value).toBe('')
+    expect(await journal.flush()).toBe(true)
+    expect(api.checkpointHistory).toHaveBeenCalledTimes(2)
+    journal.dispose()
   })
 
   it.each(['md', 'txt'] as const)('starts a new draft in the configured %s format', async (format) => {
@@ -139,7 +201,7 @@ describe('workspace journal save lifecycle', () => {
     await vi.advanceTimersByTimeAsync(300)
     journal.edit('# 第二版\n\n- 完成工作\n')
     await vi.advanceTimersByTimeAsync(650)
-    expect(api.save).toHaveBeenCalledExactlyOnceWith(original.date, '# 第二版\n\n- 完成工作\n', 'r1', 'md')
+    expect(api.save).toHaveBeenCalledExactlyOnceWith(original.date, '# 第二版\n\n- 完成工作\n', 'r1', 'md', true)
     expect(journal.dirty.value).toBe(false)
     journal.dispose()
   })

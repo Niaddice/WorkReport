@@ -16,6 +16,8 @@ pub const DIR: &str = ".history";
 /// 同一天最多保留 100 个版本，避免单日版本无限增长。
 const MAX_VERSIONS_PER_DAY: usize = 100;
 const MAX_CONTENT_BYTES: usize = 2 * 1024 * 1024;
+/// 正文仍实时保存，自动保存产生的历史快照最多每分钟一份。
+const AUTO_INTERVAL_MILLIS: u64 = 60_000;
 
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -28,7 +30,7 @@ pub struct Version {
     pub bytes: usize,
 }
 
-/// 每次成功保存后记录一份快照；内容没变化时不重复写入。
+/// 重要操作的即时快照；内容和格式没变化时不重复写入。
 pub fn record(
     root: &Path,
     date: &str,
@@ -47,6 +49,28 @@ fn record_at(
     limit_bytes: u64,
     timestamp: u64,
 ) -> Result<(), String> {
+    record_with_interval_at(root, date, format, content, limit_bytes, timestamp, 0)
+}
+
+pub fn record_automatic(
+    root: &Path,
+    date: &str,
+    format: Format,
+    content: &str,
+    limit_bytes: u64,
+) -> Result<(), String> {
+    record_with_interval_at(root, date, format, content, limit_bytes, now_millis(), AUTO_INTERVAL_MILLIS)
+}
+
+fn record_with_interval_at(
+    root: &Path,
+    date: &str,
+    format: Format,
+    content: &str,
+    limit_bytes: u64,
+    timestamp: u64,
+    interval_millis: u64,
+) -> Result<(), String> {
     validate_date(date)?;
     if content.trim().is_empty() {
         return Ok(());
@@ -55,14 +79,19 @@ fn record_at(
         return Err("日报内容超过历史记录上限".into());
     }
     let directory = root.join(DIR).join(date);
-    fs::create_dir_all(&directory).map_err(|error| format!("无法创建历史记录目录：{error}"))?;
     let hash = short_hash(content);
     let latest = newest(&directory)?;
-    if let Some((_, id)) = &latest {
-        if id.contains(&format!("-{hash}.")) {
+    if let Some((stamp, id)) = &latest {
+        let same_format = parse_id(id).is_some_and(|(_, latest_format)| latest_format == format);
+        if same_format && id.contains(&format!("-{hash}.")) {
+            return Ok(());
+        }
+        // 时钟回拨时允许记录，并由下方逻辑维持版本顺序。
+        if same_format && timestamp >= *stamp && timestamp - stamp < interval_millis {
             return Ok(());
         }
     }
+    fs::create_dir_all(&directory).map_err(|error| format!("无法创建历史记录目录：{error}"))?;
     // fsync 在不同平台耗时不同，连续保存可能发生在同一毫秒。
     // 从磁盘最新版本递增，兼顾时钟回拨和重新打开工作空间，保留原文件名格式。
     let timestamp = timestamp.max(latest.as_ref().map_or(0, |(stamp, _)| stamp + 1));
@@ -404,6 +433,44 @@ mod tests {
         assert_eq!(versions[0].format, Format::Txt);
         assert_eq!(read(dir.path(), "20261024", &versions[1].id).unwrap(), "第一版");
         assert_eq!(read(dir.path(), "20261024", &versions[0].id).unwrap(), "第二版");
+    }
+
+    #[test]
+    fn automatic_snapshots_are_spaced_by_a_minute_and_keep_the_first_version() {
+        let dir = root();
+        let start = 1_700_000_000_000;
+        for (offset, content) in [(0, "初版"), (650, "中间版"), (59_999, "稍后版"), (60_000, "一分钟版"), (60_650, "继续编辑")] {
+            record_with_interval_at(dir.path(), "20261024", Format::Md, content, UNLIMITED, start + offset, AUTO_INTERVAL_MILLIS).unwrap();
+        }
+        let versions = day_list(&dir, "20261024").unwrap();
+        assert_eq!(versions.len(), 2);
+        assert_eq!(versions[0].saved_at, start + AUTO_INTERVAL_MILLIS);
+        assert_eq!(read(dir.path(), "20261024", &versions[0].id).unwrap(), "一分钟版");
+        assert_eq!(read(dir.path(), "20261024", &versions[1].id).unwrap(), "初版");
+
+        // An explicit checkpoint captures the final version immediately.
+        record_at(dir.path(), "20261024", Format::Md, "继续编辑", UNLIMITED, start + 61_000).unwrap();
+        assert_eq!(day_list(&dir, "20261024").unwrap().len(), 3);
+    }
+
+    #[test]
+    fn automatic_interval_is_per_day_and_does_not_block_format_changes_or_clock_rollback() {
+        let dir = root();
+        let start = 1_700_000_000_000;
+        for (date, format, content, timestamp) in [
+            ("20261024", Format::Md, "相同正文", start),
+            ("20261023", Format::Md, "另一天", start),
+            ("20261024", Format::Txt, "相同正文", start + 1),
+            ("20261024", Format::Txt, "回拨后的正文", start - 1),
+        ] {
+            record_with_interval_at(dir.path(), date, format, content, UNLIMITED, timestamp, AUTO_INTERVAL_MILLIS).unwrap();
+        }
+        let versions = day_list(&dir, "20261024").unwrap();
+        assert_eq!(versions.len(), 3);
+        assert_eq!(versions[0].saved_at, start + 2);
+        assert_eq!(versions[1].format, Format::Txt);
+        assert_eq!(versions[2].format, Format::Md);
+        assert_eq!(day_list(&dir, "20261023").unwrap().len(), 1);
     }
 
     #[test]

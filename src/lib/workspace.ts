@@ -24,6 +24,15 @@ export interface Preview {
   date: string
   preview: string
 }
+export interface SearchResultItem {
+  kind: 'journal' | 'file'
+  date: string | null
+  path: string
+  title: string
+  format: FileFormat | null
+  snippet: string
+  matchCount: number
+}
 export interface DailyActivity {
   date: string
   wordCount: number | null
@@ -52,6 +61,8 @@ export const api = {
   openDirectory: () => invoke<void>('open_workspace_directory'),
   list: () => invoke<Entry[]>('list_entries'),
   listWorkspaceFiles: () => invoke<FileNode[]>('list_workspace_files'),
+  search: (workspacePath: string, query: string, limit = 50) =>
+    invoke<SearchResultItem[]>('search_workspace', { workspacePath, query, limit }),
   backupWarning: () => invoke<string | null>('database_backup_warning'),
   retryBackup: (workspacePath: string) => invoke<unknown>('retry_database_backup', { workspacePath }),
   previews: (dates: string[]) => invoke<Preview[]>('list_previews', { dates }),
@@ -60,8 +71,9 @@ export const api = {
   read: (date: string, format: FileFormat = 'md') => invoke<Document>('read_entry', { date, format }),
   create: (date: string, format: FileFormat, content: string) =>
     invoke<Document>('create_entry', { date, format, content }),
-  save: (date: string, content: string, expectedRevision: string, format: FileFormat = 'md') =>
-    invoke<Document>('save_entry', { date, content, expectedRevision, format }),
+  save: (date: string, content: string, expectedRevision: string, format: FileFormat = 'md', automatic = false) =>
+    invoke<Document>('save_entry', { date, content, expectedRevision, format, ...(automatic ? { automatic } : {}) }),
+  checkpointHistory: (date: string, format: FileFormat) => invoke<void>('checkpoint_entry_history', { date, format }),
   appendGitReports: (workspacePath: string, reports: GitReportEntry[]) =>
     invoke<GitAppendResult>('append_git_reports', { workspacePath, reports }),
   switchFormat: (date: string, from: FileFormat, to: FileFormat, expectedRevision: string) =>

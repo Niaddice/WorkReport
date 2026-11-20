@@ -319,7 +319,14 @@ async function copySummary() {
       </header>
       <div class="summary-result" :aria-busy="generating">
         <Transition name="status-fade" mode="out-in">
-          <div v-if="generating" key="generating" class="summary-empty">
+          <div v-if="generating && result" key="streaming" class="summary-streaming">
+            <div class="ai-progress-head streaming-head">
+              <PhCircleNotch class="spin" :size="14" /><span>正在流式生成… ({{ elapsedLabel }})</span>
+              <button type="button" class="text-action summary-stop" @click="emit('close')">停止总结</button>
+            </div>
+            <div class="summary-markdown" v-html="rendered"></div>
+          </div>
+          <div v-else-if="generating" key="generating" class="summary-empty">
             <section class="ai-progress summary-progress" aria-live="polite">
               <div class="ai-progress-head">
                 <PhCircleNotch class="spin" :size="15" /><span>{{ progressText }}</span

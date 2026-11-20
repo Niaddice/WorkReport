@@ -20,6 +20,18 @@ export PATH="$HOME/.cargo/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
+# 如果使用 mise 或 nvm，加载当前项目所需 Node 版本（由 .node-version 指定）
+if command -v mise >/dev/null 2>&1; then
+  eval "$(mise activate bash)" 2>/dev/null || true
+fi
+
+if [[ -d "$HOME/.nvm" ]] && [[ -f "$HOME/.nvm/nvm.sh" ]]; then
+  export NVM_DIR="$HOME/.nvm"
+  # shellcheck source=/dev/null
+  \. "$NVM_DIR/nvm.sh" --no-use 2>/dev/null || true
+  nvm use 2>/dev/null || true
+fi
+
 PID_FILE="$SCRIPT_DIR/.dev.pid"
 LOG_FILE="$SCRIPT_DIR/.dev.log"
 DEV_PORT=1420
@@ -27,6 +39,21 @@ DEV_PORT=1420
 info() { printf '\033[1;34m[dev]\033[0m %s\n' "$*"; }
 ok()   { printf '\033[1;32m[dev]\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[dev]\033[0m %s\n' "$*"; }
+
+ensure_node() {
+  if ! command -v node >/dev/null 2>&1; then
+    warn "未找到 Node.js，请先安装 Node.js (推荐 v20+ 或 v22+)"
+    return 1
+  fi
+  local node_ver
+  node_ver="$(node -v 2>/dev/null | tr -d 'v' || echo "0")"
+  local major_ver="${node_ver%%.*}"
+  if [[ "$major_ver" -lt 20 ]]; then
+    warn "检测到当前 Node.js 版本为 v${node_ver}。Vite 7 要求 Node.js >= 20.19 或 >= 22.12。"
+    warn "请切换至 Node 20+ / 22+ 后重试（例如：mise use node@22 或 nvm use 22）"
+    return 1
+  fi
+}
 
 # 递归结束一个进程及其全部子进程（先子后父，避免子进程被 init 收养后漏杀）
 kill_tree() {
@@ -56,13 +83,27 @@ start() {
     return 0
   fi
 
+  ensure_node || return 1
+
   # 清理失效的 pid 文件
   rm -f "$PID_FILE"
 
   info "启动 WorkReport 开发模式…"
   nohup npm run app:dev >"$LOG_FILE" 2>&1 &
-  echo $! >"$PID_FILE"
-  ok "已启动（PID $(cat "$PID_FILE")）"
+  local pid=$!
+  echo "$pid" >"$PID_FILE"
+
+  # 等待短暂片刻检查是否闪退
+  sleep 1.5
+  if ! kill -0 "$pid" 2>/dev/null; then
+    warn "启动失败，进程已退出（PID ${pid}）！"
+    warn "最近日志输出："
+    tail -n 20 "$LOG_FILE"
+    rm -f "$PID_FILE"
+    return 1
+  fi
+
+  ok "已启动（PID ${pid}）"
   info "前端 dev 地址：http://localhost:$DEV_PORT"
   info "日志文件：${LOG_FILE}（用 ./dev.sh logs 跟踪）"
 }
@@ -95,6 +136,7 @@ stop() {
 }
 
 build() {
+  ensure_node || return 1
   info "重新构建 WorkReport…"
   npm run app:build
   ok "构建完成"

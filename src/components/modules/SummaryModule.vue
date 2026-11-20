@@ -52,7 +52,11 @@ const sessionError = ref('')
 let sessionRevision = 0
 const sessionBusy = computed(() => sessionStarting.value || summaryGenerating.value)
 const sessionBlockedReason = computed(() =>
-  !aiConfigured.value ? '请先在设置中配置并选择默认 AI。' : !prepared.value ? '所选日期没有可总结的日报。' : '',
+  !aiConfigured.value
+    ? '请先在「设置 → 模型配置」中配置并选择默认 AI。'
+    : !prepared.value
+      ? '所选日期没有可总结的日报。'
+      : '',
 )
 const outputDirectory = computed(
   () =>

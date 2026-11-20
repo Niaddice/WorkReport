@@ -2,7 +2,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import TextContextMenu from '../src/components/TextContextMenu.vue'
-import { installContextMenuGuard, registerContextEditor } from '../src/lib/contextMenus'
+import { installContextMenuGuard, registerContextEditor, type ContextEditor } from '../src/lib/contextMenus'
 import { textMenuSession, type TextClipboard } from '../src/lib/textContextMenu'
 import JournalEditor from '../src/components/JournalEditor.vue'
 import RichMarkdownEditor from '../src/components/RichMarkdownEditor.vue'
@@ -31,7 +31,7 @@ function field(value = '原有文本') {
 function context(element: HTMLElement) {
   element.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, composed: true, button: 2 }))
 }
-function editable(element: HTMLTextAreaElement) {
+function editable(element: HTMLTextAreaElement, extra: Partial<ContextEditor> = {}) {
   let scope = 'first'
   const adapter = {
     scope: () => scope,
@@ -43,6 +43,7 @@ function editable(element: HTMLTextAreaElement) {
       element.setRangeText(text, start, end, 'end')
       element.dispatchEvent(new InputEvent('input', { bubbles: true }))
     }),
+    ...extra,
   }
   cleanup.push(registerContextEditor(element, adapter))
   return {
@@ -298,5 +299,18 @@ describe('text context menu integration', () => {
     await session.items.find((item) => item.id === 'redo')!.run()
     expect(wrapper.emitted('undo')).toHaveLength(1)
     expect(wrapper.emitted('redo')).toHaveLength(1)
+  })
+
+  it('includes ai-polish item in context menu when text is selected and adapter supports polish', async () => {
+    const element = field('选中润色测试')
+    element.setSelectionRange(0, 4)
+    const polishSpy = vi.fn(async () => {})
+    editable(element, { polish: polishSpy })
+    const session = textMenuSession(element, clipboard())!
+    const polishItem = session.items.find((item) => item.id === 'ai-polish')
+    expect(polishItem).toBeDefined()
+    expect(polishItem?.label).toBe('AI 润色选区')
+    await polishItem?.run()
+    expect(polishSpy).toHaveBeenCalledOnce()
   })
 })

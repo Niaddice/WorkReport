@@ -87,7 +87,7 @@ elif tool == 'gh':
         actual = subprocess.check_output([os.environ['RELEASE_TEST_GIT'], '--git-dir', os.environ['RELEASE_TEST_REMOTE'], 'rev-parse', tag + '^{commit}'], text=True).strip()
         assert actual == target
         body = Path(args[args.index('--notes-file') + 1]).read_text() if '--notes-file' in args else 'generated notes'
-        state[tag] = {'draft': '--draft' in args or bool(os.environ.get('RELEASE_TEST_FAIL_RELEASE')), 'assets': assets, 'body': body}
+        state[tag] = {'draft': '--draft' in args or bool(os.environ.get('RELEASE_TEST_FAIL_RELEASE')), 'assets': assets, 'body': body, 'prerelease': '--prerelease' in args}
         save()
         if os.environ.get('RELEASE_TEST_FAIL_RELEASE'): sys.exit(17)
     elif args[:2] == ['release', 'view']:
@@ -99,6 +99,7 @@ elif tool == 'gh':
     elif args[:2] == ['release', 'edit']:
         assert '--draft=false' in args
         state[args[2]]['draft'] = False
+        state[args[2]]['prerelease'] = '--prerelease' in args
         save()
     else:
         raise AssertionError(args)
@@ -304,6 +305,28 @@ class ReleaseTest(unittest.TestCase):
         self.assertIn('.AppImage.sig', checksums)
         tracked = self.real_git('-C', str(self.project), 'ls-files')
         self.assertNotIn('.updater/', tracked)
+
+    def test_main_and_dev_publish_to_distinct_update_channels(self):
+        self.run_release('0.17.0')
+        self.assertFalse(self.state()['v0.17.0']['prerelease'])
+        self.real_git('-C', str(self.project), 'checkout', '-b', 'dev')
+        self.run_release('0.18.0')
+        self.assertTrue(self.state()['v0.18.0']['prerelease'])
+        creates = [call for call in self.calls() if call[:3] == ['gh', 'release', 'create']]
+        self.assertIn('--latest', creates[0])
+        self.assertIn('--latest=false', creates[1])
+        self.assertTrue(any(asset.endswith('/latest.json') for asset in self.state()['v0.18.0']['assets']))
+
+    def test_dev_resume_keeps_prerelease_and_does_not_replace_latest(self):
+        self.run_release('0.19.0')
+        self.real_git('-C', str(self.project), 'checkout', '-b', 'dev')
+        self.run_release('0.20.0', success=False, RELEASE_TEST_FAIL_RELEASE='1')
+        self.run_release('--resume', 'v0.20.0')
+        self.assertFalse(self.state()['v0.20.0']['draft'])
+        self.assertTrue(self.state()['v0.20.0']['prerelease'])
+        edit = next(call for call in self.calls() if call[:3] == ['gh', 'release', 'edit'])
+        self.assertIn('--prerelease', edit)
+        self.assertIn('--latest=false', edit)
 
     def test_missing_update_signature_never_pushes_or_publishes(self):
         output = self.run_release('0.15.0', success=False, RELEASE_TEST_MISSING_SIGNATURE='1')

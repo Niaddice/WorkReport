@@ -47,7 +47,7 @@ onBeforeUnmount(() => motion.dispose())
   >
     <div class="dialog-icon"><PhDownloadSimple :size="28" weight="light" aria-hidden="true" /></div>
     <h2 id="update-title">更新到 WorkReport {{ updater.release.value?.version }}</h2>
-    <p id="update-description">安装前会保存日报和设置，完成后自动重新启动。</p>
+    <p id="update-description">{{ updater.channelLabel.value }} · 安装前会保存日报和设置，完成后自动重新启动。</p>
     <div v-if="updater.release.value?.notes" class="update-release-notes">{{ updater.release.value.notes }}</div>
     <div v-if="updater.busy.value" class="update-progress" role="status" aria-live="polite">
       <progress

@@ -50,6 +50,7 @@ function context(overrides: Record<string, unknown> = {}) {
     actions: {
       requestSummary: vi.fn(async () => {}),
       prepareExcel: vi.fn(async () => {}),
+      generateExcelContent: vi.fn(async () => {}),
       openAiSettings: vi.fn(),
       generateSummary: vi.fn(async () => {}),
       cancelSummary: vi.fn(),
@@ -78,6 +79,7 @@ function configuredExcelContext() {
     enabled: true,
     templatePath: '/tmp/workreport-inline/template.xlsx',
     prompt: '填充本周工作',
+    contentPrompt: '按项目提炼本周工作成果',
   }
   value.ai.settings.value = {
     providers: [
@@ -95,6 +97,12 @@ function configuredExcelContext() {
     generationPreference: '',
     summaryPrompt: '',
   }
+  vi.mocked(value.actions.generateExcelContent).mockImplementation(async () => {
+    value.excel.contentDraft.value = '已生成的项目成果'
+  })
+  vi.mocked(value.actions.discardExcelPreview).mockImplementation(() => {
+    void value.excel.discardPreview()
+  })
   return value
 }
 
@@ -308,13 +316,20 @@ describe('inline modules', () => {
     wrapper.unmount()
   })
 
-  it('opens one window to edit the prompt, confirm generation, show progress and preview the result', async () => {
+  it('keeps one window for content generation, explicit content confirmation, filling and preview', async () => {
     const value = configuredExcelContext()
-    let complete!: () => void
+    let completeContent!: () => void
+    let completeFill!: () => void
+    vi.mocked(value.actions.generateExcelContent).mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          completeContent = resolve
+        }),
+    )
     vi.mocked(value.actions.prepareExcel).mockImplementation(
       () =>
         new Promise<void>((resolve) => {
-          complete = resolve
+          completeFill = resolve
         }),
     )
     const opening = vi.spyOn(HTMLDialogElement.prototype, 'showModal')
@@ -324,24 +339,45 @@ describe('inline modules', () => {
     })
     const wrapper = new DOMWrapper(document.body)
     try {
-      await wrapper.find('.excel-generate-button').trigger('click')
+      await wrapper.get('.excel-generate-button').trigger('click')
+      expect(value.actions.generateExcelContent).not.toHaveBeenCalled()
       expect(value.actions.prepareExcel).not.toHaveBeenCalled()
-      expect(wrapper.find('.excel-confirm-popover').exists()).toBe(false)
       expect(wrapper.get('.excel-session-overview').text()).toContain('默认 AI')
       const dialog = wrapper.get('.excel-preview-dialog').element
-      expect(wrapper.get<HTMLTextAreaElement>('#excel-session-prompt').element.value).toBe('填充本周工作')
-      await wrapper.get('#excel-session-prompt').setValue('本次按项目分类，突出交付成果')
-      expect(value.excel.settings.value.prompt).toBe('填充本周工作')
+      expect(wrapper.get<HTMLTextAreaElement>('#excel-session-content-prompt').element.value).toBe(
+        '按项目提炼本周工作成果',
+      )
+      await wrapper.get('#excel-session-content-prompt').setValue('本次按项目分类，突出交付成果')
       await wrapper.get('.excel-start-generation').trigger('click')
-      expect(value.actions.prepareExcel).toHaveBeenCalledExactlyOnceWith(['20261025'], '本次按项目分类，突出交付成果')
+      expect(value.actions.generateExcelContent).toHaveBeenCalledExactlyOnceWith(
+        ['20261025'],
+        '本次按项目分类，突出交付成果',
+      )
+      expect(value.actions.prepareExcel).not.toHaveBeenCalled()
       expect(wrapper.get('.excel-preview-dialog').element).toBe(dialog)
       expect(wrapper.get('.excel-preview-dialog').attributes('open')).toBeDefined()
       expect(wrapper.find('.excel-preview-dialog [role="progressbar"]').exists()).toBe(true)
-      expect(wrapper.get('.excel-preview-dialog').text()).toContain('AI 正在处理所选日报')
+      expect(wrapper.get('.excel-preview-dialog').text()).toContain('AI 正在生成报告内容')
       expect(wrapper.find('.excel-exports').exists()).toBe(true)
       expect(wrapper.findAll('.excel-exports-header .excel-module-actions button')).toHaveLength(3)
 
-      value.excel.preview.value = {
+      value.excel.contentDraft.value = '项目成果：完成客户检索。'
+      completeContent()
+      await flushPromises()
+      expect(wrapper.get<HTMLTextAreaElement>('#excel-confirmed-content').element.value).toBe(
+        '项目成果：完成客户检索。',
+      )
+      expect(value.actions.prepareExcel).not.toHaveBeenCalled()
+      await wrapper.get('#excel-confirmed-content').setValue('确认成果：客户检索已验收。')
+      await wrapper.get('#excel-session-prompt').setValue('填入工作表 B5，保留原有样式')
+      await wrapper.get('.excel-confirm-content').trigger('click')
+      expect(value.actions.prepareExcel).toHaveBeenCalledExactlyOnceWith(
+        ['20261025'],
+        '填入工作表 B5，保留原有样式',
+        '确认成果：客户检索已验收。',
+      )
+      expect(wrapper.get('.excel-preview-dialog').text()).toContain('AI 正在填充 Excel 模板')
+      const preview = {
         id: 'p1',
         templateName: '周报.xlsx',
         outputDirectory: '/tmp/workreport-inline/excel',
@@ -351,7 +387,8 @@ describe('inline modules', () => {
         styles: [],
         sheets: [],
       }
-      complete()
+      value.excel.preview.value = preview
+      completeFill()
       await flushPromises()
       expect(wrapper.get('.excel-preview-dialog').attributes('open')).toBeDefined()
       expect(wrapper.find('.excel-preview-dialog.is-inline').exists()).toBe(false)
@@ -359,22 +396,31 @@ describe('inline modules', () => {
       expect(wrapper.get('.excel-preview-dialog').text()).toContain('确认输出')
       expect(wrapper.get('.excel-preview-dialog').element).toBe(dialog)
       expect(wrapper.get('.excel-session-prompt').text()).toContain('本次按项目分类，突出交付成果')
+      expect(wrapper.get('.excel-session-prompt').text()).toContain('填入工作表 B5，保留原有样式')
       expect(value.actions.confirmExcel).not.toHaveBeenCalled()
+
       await wrapper.get('.excel-preview-actions .text-action').trigger('click')
+      expect(wrapper.get<HTMLTextAreaElement>('#excel-confirmed-content').element.value).toBe(
+        '确认成果：客户检索已验收。',
+      )
       expect(wrapper.get<HTMLTextAreaElement>('#excel-session-prompt').element.value).toBe(
-        '本次按项目分类，突出交付成果',
+        '填入工作表 B5，保留原有样式',
       )
       expect(wrapper.find('.excel-preview-actions').exists()).toBe(false)
-      await wrapper.get('#excel-session-prompt').setValue('本次补充项目风险')
-      await wrapper.get('.excel-start-generation').trigger('click')
-      expect(value.actions.prepareExcel).toHaveBeenLastCalledWith(['20261025'], '本次补充项目风险')
-      value.excel.preview.value = { ...value.excel.preview.value!, id: 'p2' }
-      complete()
+      await wrapper.get('#excel-session-prompt').setValue('改填 C5，按内容换行')
+      await wrapper.get('.excel-confirm-content').trigger('click')
+      expect(value.actions.prepareExcel).toHaveBeenLastCalledWith(
+        ['20261025'],
+        '改填 C5，按内容换行',
+        '确认成果：客户检索已验收。',
+      )
+      expect(value.actions.generateExcelContent).toHaveBeenCalledTimes(1)
+      value.excel.preview.value = { ...preview, id: 'p2' }
+      completeFill()
       await flushPromises()
       expect(wrapper.get('.excel-preview-dialog').element).toBe(dialog)
-      await wrapper.get('.excel-preview-dialog md-filled-button').trigger('click')
+      await wrapper.get('.excel-preview-actions md-filled-button').trigger('click')
       expect(value.actions.confirmExcel).toHaveBeenCalledTimes(1)
-
       expect(opening).toHaveBeenCalledTimes(1)
     } finally {
       mounted.unmount()
@@ -438,7 +484,11 @@ describe('inline modules', () => {
     expect(value.actions.prepareExcel).not.toHaveBeenCalled()
     expect(wrapper.get('.excel-session-overview').text()).toContain('2026 年 12 月 27 日')
     await wrapper.get('.excel-start-generation').trigger('click')
-    expect(value.actions.prepareExcel).toHaveBeenCalledExactlyOnceWith(dates, '填充本周工作')
+    expect(value.actions.generateExcelContent).toHaveBeenCalledExactlyOnceWith(dates, '按项目提炼本周工作成果')
+    expect(value.actions.prepareExcel).not.toHaveBeenCalled()
+    await flushPromises()
+    await wrapper.get('.excel-confirm-content').trigger('click')
+    expect(value.actions.prepareExcel).toHaveBeenCalledExactlyOnceWith(dates, '填充本周工作', '已生成的项目成果')
     wrapper.unmount()
   })
 
@@ -446,14 +496,16 @@ describe('inline modules', () => {
     const value = configuredExcelContext()
     const wrapper = mountWithContext(ExcelModule, value)
     await wrapper.get('.excel-generate-button').trigger('click')
-    await wrapper.get('#excel-session-prompt').setValue('仅用于这一次')
+    await wrapper.get('#excel-session-content-prompt').setValue('仅用于这一次')
     await wrapper.get('.excel-generation-actions md-text-button').trigger('click')
     expect(wrapper.get('.excel-preview-dialog').attributes('open')).toBeUndefined()
     expect(value.actions.prepareExcel).not.toHaveBeenCalled()
     expect(value.excel.settings.value.prompt).toBe('填充本周工作')
     await wrapper.get('.excel-generate-button').trigger('click')
-    expect(wrapper.get<HTMLTextAreaElement>('#excel-session-prompt').element.value).toBe('填充本周工作')
-    await wrapper.get('#excel-session-prompt').setValue('  ')
+    expect(wrapper.get<HTMLTextAreaElement>('#excel-session-content-prompt').element.value).toBe(
+      '按项目提炼本周工作成果',
+    )
+    await wrapper.get('#excel-session-content-prompt').setValue('字'.repeat(6001))
     expect(wrapper.get('.excel-start-generation').attributes('disabled')).toBeDefined()
     expect(value.actions.prepareExcel).not.toHaveBeenCalled()
     wrapper.unmount()
@@ -462,7 +514,7 @@ describe('inline modules', () => {
   it('cancels generation from the progress window before the AI finishes', async () => {
     const value = configuredExcelContext()
     let complete!: () => void
-    vi.mocked(value.actions.prepareExcel).mockImplementation(
+    vi.mocked(value.actions.generateExcelContent).mockImplementation(
       () =>
         new Promise<void>((resolve) => {
           complete = resolve
@@ -470,9 +522,10 @@ describe('inline modules', () => {
     )
     const wrapper = mountWithContext(ExcelModule, value)
     await wrapper.get('.excel-generate-button').trigger('click')
+    const discardsBeforeCancel = vi.mocked(value.actions.discardExcelPreview).mock.calls.length
     await wrapper.get('.excel-start-generation').trigger('click')
     await wrapper.get('.excel-preview-dialog md-text-button').trigger('click')
-    expect(value.actions.discardExcelPreview).toHaveBeenCalledExactlyOnceWith()
+    expect(value.actions.discardExcelPreview).toHaveBeenCalledTimes(discardsBeforeCancel + 1)
     expect(wrapper.get('.excel-preview-dialog').attributes('open')).toBeUndefined()
     complete()
     await flushPromises()
@@ -482,7 +535,7 @@ describe('inline modules', () => {
 
   it('keeps a generation failure visible and retries with the original dates', async () => {
     const value = configuredExcelContext()
-    vi.mocked(value.actions.prepareExcel).mockRejectedValueOnce('AI 请求失败')
+    vi.mocked(value.actions.generateExcelContent).mockRejectedValueOnce('AI 请求失败')
     const wrapper = mountWithContext(ExcelModule, value)
     await wrapper.get('.excel-generate-button').trigger('click')
     await wrapper.get('.excel-start-generation').trigger('click')
@@ -491,7 +544,78 @@ describe('inline modules', () => {
     value.journal.selectedDate.value = '20261026'
     await nextTick()
     await wrapper.get('.excel-start-generation').trigger('click')
-    expect(value.actions.prepareExcel).toHaveBeenLastCalledWith(['20261025'], '填充本周工作')
+    expect(value.actions.generateExcelContent).toHaveBeenLastCalledWith(['20261025'], '按项目提炼本周工作成果')
+    expect(value.actions.prepareExcel).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('keeps edited content after filling fails and retries filling without regenerating the report', async () => {
+    const value = configuredExcelContext()
+    vi.mocked(value.actions.prepareExcel).mockRejectedValueOnce('模板填充失败')
+    const wrapper = mountWithContext(ExcelModule, value)
+    await wrapper.get('.excel-generate-button').trigger('click')
+    await wrapper.get('.excel-start-generation').trigger('click')
+    await flushPromises()
+    await wrapper.get('#excel-confirmed-content').setValue('用户确认：只输出已经验收的成果')
+    await wrapper.get('#excel-session-prompt').setValue('写入 B5，自动换行')
+    await wrapper.get('.excel-confirm-content').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.get('.excel-preview-dialog [role="alert"]').text()).toContain('模板填充失败')
+    expect(wrapper.get<HTMLTextAreaElement>('#excel-confirmed-content').element.value).toBe(
+      '用户确认：只输出已经验收的成果',
+    )
+    expect(wrapper.get<HTMLTextAreaElement>('#excel-session-prompt').element.value).toBe('写入 B5，自动换行')
+    await wrapper.get('.excel-confirm-content').trigger('click')
+    expect(value.actions.generateExcelContent).toHaveBeenCalledTimes(1)
+    expect(value.actions.prepareExcel).toHaveBeenCalledTimes(2)
+    expect(value.actions.prepareExcel).toHaveBeenLastCalledWith(
+      ['20261025'],
+      '写入 B5，自动换行',
+      '用户确认：只输出已经验收的成果',
+    )
+    wrapper.unmount()
+  })
+
+  it('closes an invalidated content session and starts again from content generation when reopened', async () => {
+    const value = configuredExcelContext()
+    const wrapper = mountWithContext(ExcelModule, value)
+    await wrapper.get('.excel-generate-button').trigger('click')
+    await wrapper.get('.excel-start-generation').trigger('click')
+    await flushPromises()
+    expect(wrapper.get<HTMLTextAreaElement>('#excel-confirmed-content').element.value).toBe('已生成的项目成果')
+
+    value.excel.clearSelection()
+    await nextTick()
+    expect(wrapper.get('.excel-preview-dialog').attributes('open')).toBeUndefined()
+    expect(value.actions.prepareExcel).not.toHaveBeenCalled()
+    await wrapper.get('.excel-generate-button').trigger('click')
+    expect(wrapper.find('#excel-confirmed-content').exists()).toBe(false)
+    expect(wrapper.get<HTMLTextAreaElement>('#excel-session-content-prompt').element.value).toBe(
+      '按项目提炼本周工作成果',
+    )
+    wrapper.unmount()
+  })
+
+  it('preserves a user-edited draft when returning to regenerate content and the regeneration fails', async () => {
+    const value = configuredExcelContext()
+    const wrapper = mountWithContext(ExcelModule, value)
+    await wrapper.get('.excel-generate-button').trigger('click')
+    await wrapper.get('.excel-start-generation').trigger('click')
+    await flushPromises()
+    await wrapper.get('#excel-confirmed-content').setValue('用户已核对并补充的报告正文')
+    await wrapper.get('.excel-edit-content').trigger('click')
+    vi.mocked(value.actions.generateExcelContent).mockImplementationOnce(async () => {
+      value.excel.exportError.value = '内容重新生成失败'
+    })
+    await wrapper.get('.excel-start-generation').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.get('.excel-preview-dialog [role="alert"]').text()).toContain('内容重新生成失败')
+    expect(wrapper.get<HTMLTextAreaElement>('#excel-confirmed-content').element.value).toBe(
+      '用户已核对并补充的报告正文',
+    )
+    expect(value.actions.prepareExcel).not.toHaveBeenCalled()
     wrapper.unmount()
   })
 

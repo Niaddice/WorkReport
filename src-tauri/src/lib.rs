@@ -5,6 +5,8 @@ mod excel;
 mod git;
 mod git_auth;
 mod git_credentials;
+mod git_install;
+mod github_auth;
 mod git_client;
 mod history;
 mod holidays;
@@ -13,6 +15,7 @@ mod settings;
 mod summary;
 mod ui;
 mod updates;
+mod network;
 mod workspace;
 mod file_rules;
 mod directory_ops;
@@ -22,7 +25,7 @@ mod file_migration;
 use std::{fs, io::Write, sync::{Arc, Mutex}};
 use tauri::{Emitter, Manager, State};
 use tauri_plugin_opener::OpenerExt;
-use workspace::{DailyActivity, Document, Entry, FileNode, Format, Preview, Workspace, WorkspaceInfo};
+use workspace::{DailyActivity, Document, Entry, FileNode, Format, Preview, SearchResultItem, Workspace, WorkspaceInfo};
 
 #[derive(Default)]
 struct AppState(Arc<Mutex<Option<Workspace>>>);
@@ -113,6 +116,7 @@ fn stored_settings_at(
         summary: summary::Settings::default(),
         database: database::Settings::default(),
         git: git::Settings::default(),
+        editor: settings::EditorSettings::default(),
     })
 }
 
@@ -192,6 +196,20 @@ async fn list_entries(state: State<'_, AppState>) -> Result<Vec<Entry>, String> 
 #[tauri::command]
 async fn list_workspace_files(state: State<'_, AppState>) -> Result<Vec<FileNode>, String> {
     run_workspace(state.0.clone(), Workspace::list_workspace_files).await
+}
+
+#[tauri::command]
+async fn search_workspace(
+    state: State<'_, AppState>,
+    workspace_path: String,
+    query: String,
+    limit: Option<usize>,
+) -> Result<Vec<SearchResultItem>, String> {
+    run_workspace(state.0.clone(), move |workspace| {
+        summary::validate_workspace(workspace.root(), &workspace_path)?;
+        workspace.search(&query, limit.unwrap_or(50))
+    })
+    .await
 }
 
 #[tauri::command]
@@ -318,10 +336,20 @@ async fn save_entry(
     content: String,
     format: Format,
     expected_revision: String,
+    automatic: Option<bool>,
 ) -> Result<Document, String> {
     run_workspace(state.0.clone(), move |workspace| {
-        workspace.save(&date, format, &content, &expected_revision)
+        workspace.save_with_mode(&date, format, &content, &expected_revision, automatic.unwrap_or(false))
     }).await
+}
+
+#[tauri::command]
+async fn checkpoint_entry_history(
+    state: State<'_, AppState>,
+    date: String,
+    format: Format,
+) -> Result<(), String> {
+    run_workspace(state.0.clone(), move |workspace| workspace.checkpoint_history(&date, format)).await
 }
 
 #[tauri::command]
@@ -375,6 +403,14 @@ async fn load_summary_settings(state: State<'_, AppState>) -> Result<summary::Se
         let stored = settings::load(&workspace.root().join(settings::FILE_NAME))?.unwrap_or_default();
         if let Some(files) = stored.files { Ok(summary::Settings { output_directory: files.summary.directory }) }
         else { summary::normalize_settings(workspace.root(), &stored.summary) }
+    }).await
+}
+
+#[tauri::command]
+async fn load_editor_settings(state: State<'_, AppState>) -> Result<settings::EditorSettings, String> {
+    run_optional_workspace(state.0.clone(), |workspace| {
+        let Some(workspace) = workspace else { return Ok(settings::EditorSettings::default()); };
+        Ok(settings::load(&workspace.root().join(settings::FILE_NAME))?.unwrap_or_default().editor)
     }).await
 }
 
@@ -506,6 +542,7 @@ fn save_workspace_settings_confirmed(
     appearance::validate(&stored.appearance)?;
     ai::validate(&stored.ai)?;
     git::validate(&stored.git)?;
+    settings::validate_editor_settings(&stored.editor)?;
     // Validate the dependency against this same save, so enabling Excel and
     // configuring its AI provider succeeds or fails as one transaction.
     validate_excel_settings(&stored.excel, &stored.ai)?;
@@ -654,8 +691,10 @@ async fn read_git_diff(state: State<'_, AppState>, workspace_path: String, repos
 async fn git_repository_action(app: tauri::AppHandle, state: State<'_, AppState>, workspace_path: String, repository_id: String, request: git_client::Action) -> Result<String, String> {
     let configuration = git_configuration(state.0.clone(), workspace_path.clone()).await?;
     let _guard = git_client::repository_lock(&configuration, &repository_id).await?;
+    validate_git_configuration(state.0.clone(), workspace_path.clone(), configuration.clone()).await?;
+    let origins = git_client::authentication_origins(&configuration, &repository_id, &request.operation).await?;
     let storage = Arc::new(git_credentials::LocalStore(legacy_config_dir(&app)));
-    git_credentials::execute(request, storage, |request| {
+    git_credentials::execute(request, storage, origins, |request, cached| {
         let state = state.0.clone();
         let workspace_path = workspace_path.clone();
         let configuration = configuration.clone();
@@ -663,7 +702,7 @@ async fn git_repository_action(app: tauri::AppHandle, state: State<'_, AppState>
         async move {
             // Revalidate after waiting for the lock or decrypting a saved credential.
             validate_git_configuration(state, workspace_path, configuration.clone()).await?;
-            git_client::action(&configuration, &repository_id, request).await
+            git_client::action_with_credentials(&configuration, &repository_id, request, &cached).await
         }
     }).await
 }
@@ -691,6 +730,7 @@ fn cancel_git_commit_message(runtime: State<'_, GitCommitRuntime>, request_id: S
 async fn generate_git_commit_message(
     state: State<'_, AppState>, runtime: State<'_, GitCommitRuntime>,
     workspace_path: String, repository_id: String, request_id: String,
+    on_chunk: tauri::ipc::Channel<String>,
 ) -> Result<String, String> {
     let token = runtime.0.begin(request_id.clone())?;
     let result = async {
@@ -704,7 +744,16 @@ async fn generate_git_commit_message(
         }).await?;
         let source = git_client::commit_source(&configuration, &repository_id).await?;
         validate_git_configuration(state.0.clone(), workspace_path.clone(), configuration.clone()).await?;
-        let message = ai::git_commit_message(&provider, &source.content, &configuration.commit_prompt, token.clone()).await?;
+        let cb = move |chunk: &str| {
+            let _ = on_chunk.send(chunk.to_string());
+        };
+        let message = ai::git_commit_message_with_stream(
+            &provider,
+            &source.content,
+            &configuration.commit_prompt,
+            token.clone(),
+            Some(&cb),
+        ).await?;
         if token.is_cancelled() { return Err("已取消生成 Git 提交说明".into()); }
         validate_git_configuration(state.0.clone(), workspace_path, configuration.clone()).await?;
         let current = git_client::commit_source(&configuration, &repository_id).await?;
@@ -893,6 +942,76 @@ fn excel_request_snapshot(
     Ok((snapshot, saved_settings))
 }
 
+/// Content-generation overrides never alter either saved prompt.
+fn excel_content_snapshot(
+    workspace: &mut Workspace,
+    mut stored: settings::StoredSettings,
+    dates: &[String],
+    workspace_path: &str,
+    prompt: Option<String>,
+) -> Result<ExcelSnapshot, String> {
+    if let Some(prompt) = prompt {
+        stored.excel.content_prompt = prompt;
+    }
+    excel_snapshot(workspace, stored, dates, workspace_path)
+}
+
+/// Only the reviewed text and date context are exposed to the workbook-filling pass.
+fn excel_confirmed_content(dates: &[String], content: &str) -> Result<String, String> {
+    if content.trim().is_empty() || content.len() > 500_000 {
+        return Err("请确认需要填充的 Excel 内容，正文不能为空或超过 500 KB".into());
+    }
+    let (start, end) = excel::validate_dates(dates)?;
+    let mut selected = dates.to_vec();
+    selected.sort();
+    selected.dedup();
+    let payload = serde_json::to_string(&serde_json::json!({
+        "selectedDates": selected,
+        "start": start,
+        "end": end,
+        "confirmedContent": content,
+    })).map_err(|_| "无法准备已确认的 Excel 内容")?;
+    if payload.len() > 500_000 {
+        return Err("已确认的 Excel 内容超过 500 KB，请精简内容后重试".into());
+    }
+    Ok(payload)
+}
+
+#[tauri::command]
+async fn generate_excel_content(
+    app: tauri::AppHandle,
+    state: State<'_, ai::Runtime>,
+    workspace_state: State<'_, AppState>,
+    dates: Vec<String>,
+    workspace_path: String,
+    request_id: String,
+    prompt: Option<String>,
+) -> Result<String, String> {
+    let token = state.begin(request_id.clone())?;
+    let result = async {
+        let snapshot = run_workspace(workspace_state.0.clone(), move |workspace| {
+            summary::validate_workspace(workspace.root(), &workspace_path)?;
+            let stored = stored_settings_at(&app, workspace.root())?;
+            excel_content_snapshot(workspace, stored, &dates, &workspace_path, prompt)
+        }).await?;
+        if token.is_cancelled() {
+            return Err("已取消 Excel 内容生成".into());
+        }
+        let content = ai::generate_excel_content(
+            &snapshot.provider,
+            &snapshot.content,
+            &snapshot.settings.content_prompt,
+            token.clone(),
+        ).await?;
+        if token.is_cancelled() {
+            return Err("已取消 Excel 内容生成".into());
+        }
+        Ok(content)
+    }.await;
+    state.finish(&request_id);
+    result
+}
+
 #[tauri::command]
 async fn prepare_excel(
     app: tauri::AppHandle,
@@ -903,7 +1022,9 @@ async fn prepare_excel(
     workspace_path: String,
     request_id: String,
     prompt: Option<String>,
+    content: String,
 ) -> Result<excel::ExcelPreview, String> {
+    let confirmed_content = excel_confirmed_content(&dates, &content)?;
     let token = state.begin(request_id.clone())?;
     let result = async {
         let snapshot_path = workspace_path.clone();
@@ -925,7 +1046,7 @@ async fn prepare_excel(
         let response = ai::fill_excel(
             &snapshot.provider,
             &context,
-            &snapshot.content,
+            &confirmed_content,
             &snapshot.settings.prompt,
             token.clone(),
         ).await?;
@@ -1117,6 +1238,10 @@ async fn list_cli_models(
     ai::list_cli_models(&kind, &executable).await
 }
 #[tauri::command]
+async fn test_ai_provider(provider: ai::Provider) -> Result<ai::TestProviderResult, String> {
+    ai::test_provider(&provider).await
+}
+#[tauri::command]
 fn cancel_ai(state: State<'_, ai::Runtime>, request_id: String) {
     state.cancel(&request_id);
 }
@@ -1128,6 +1253,8 @@ async fn polish_entry(
     content: String,
     format: Format,
     request_id: String,
+    prompt: Option<String>,
+    on_chunk: tauri::ipc::Channel<String>,
 ) -> Result<String, String> {
     let settings = read_ai_settings(&app, &workspace_state)?;
     let provider = settings
@@ -1137,12 +1264,21 @@ async fn polish_entry(
         .ok_or("请先在设置中选择默认 AI")?
         .clone();
     let token = state.begin(request_id.clone())?;
-    let result = ai::polish(
+    let preference = prompt
+        .as_deref()
+        .map(str::trim)
+        .filter(|p| !p.is_empty())
+        .unwrap_or(&settings.generation_preference);
+    let cb = move |chunk: &str| {
+        let _ = on_chunk.send(chunk.to_string());
+    };
+    let result = ai::polish_with_stream(
         &provider,
         &content,
         format.extension(),
-        &settings.generation_preference,
+        preference,
         token,
+        Some(&cb),
     )
     .await;
     state.finish(&request_id);
@@ -1156,6 +1292,7 @@ async fn summarize_entries(
     content: String,
     request_id: String,
     prompt: Option<String>,
+    on_chunk: tauri::ipc::Channel<String>,
 ) -> Result<String, String> {
     let settings = read_ai_settings(&app, &workspace_state)?;
     let prompt = ai::summary_request_prompt(&settings.summary_prompt, prompt)?;
@@ -1166,7 +1303,17 @@ async fn summarize_entries(
         .ok_or("请先在设置中选择默认 AI")?
         .clone();
     let token = state.begin(request_id.clone())?;
-    let result = ai::summarize(&provider, &content, &prompt, token).await;
+    let cb = move |chunk: &str| {
+        let _ = on_chunk.send(chunk.to_string());
+    };
+    let result = ai::summarize_with_stream(
+        &provider,
+        &content,
+        &prompt,
+        token,
+        Some(&cb),
+    )
+    .await;
     state.finish(&request_id);
     result
 }
@@ -1174,6 +1321,7 @@ async fn summarize_entries(
 pub fn run() {
     tauri::Builder::default()
         .setup(|_app| {
+            if let Ok(directory) = legacy_config_dir(_app.handle()) { network::initialize(directory); }
             #[cfg(target_os = "macos")]
             {
                 // Native menu key equivalents are handled before WebKit keydown.
@@ -1227,11 +1375,15 @@ pub fn run() {
         .plugin(tauri_plugin_clipboard_manager::init())
         .manage(ai::Runtime::default())
         .manage(GitCommitRuntime::default())
+        .manage(github_auth::Runtime::default())
         .manage(excel::Runtime::default())
         .manage(holidays::Runtime::default())
         .manage(AppState::default())
         .invoke_handler(tauri::generate_handler![
-            updates::has_published_update,
+            updates::check_channel_update,
+            network::load_proxy_settings,
+            network::save_proxy_settings,
+            network::test_proxy_settings,
             updates::open_update_download,
             recent_workspace,
             load_holiday_data,
@@ -1240,6 +1392,7 @@ pub fn run() {
             open_workspace_directory,
             list_entries,
             list_workspace_files,
+            search_workspace,
             preview_workspace_file_change,
             apply_workspace_file_change,
             list_workspace_trash,
@@ -1250,6 +1403,7 @@ pub fn run() {
             create_entry,
             append_git_reports,
             save_entry,
+            checkpoint_entry_history,
             list_entry_history,
             read_entry_history,
             switch_entry_format,
@@ -1258,6 +1412,7 @@ pub fn run() {
             load_ai_settings,
             load_appearance_settings,
             load_summary_settings,
+            load_editor_settings,
             load_file_settings,
             preview_file_settings,
             open_summary_output_directory,
@@ -1269,6 +1424,12 @@ pub fn run() {
             read_git_history,
             read_git_diff,
             git_repository_action,
+            git_install::detect_git,
+            git_install::install_git,
+            github_auth::start_github_login,
+            github_auth::read_github_login,
+            github_auth::cancel_github_login,
+            github_auth::open_github_login_browser,
             list_git_credentials,
             forget_git_credential,
             generate_git_commit_message,
@@ -1282,6 +1443,7 @@ pub fn run() {
             retry_database_backup,
             database_backup_warning,
             open_excel_output_directory,
+            generate_excel_content,
             prepare_excel,
             confirm_excel,
             discard_excel_preview,
@@ -1293,6 +1455,7 @@ pub fn run() {
             detect_ai_clis,
             list_ai_models,
             list_cli_models,
+            test_ai_provider,
             cancel_ai,
             polish_entry,
             summarize_entries
@@ -1431,6 +1594,7 @@ mod excel_integration_tests {
                 enabled: true,
                 template_path: template.to_string_lossy().into_owned(),
                 prompt: "将工作内容填写到日报模板".into(),
+                ..excel::Settings::default()
             },
             ai: ai::Settings {
                 providers: vec![provider],
@@ -1844,6 +2008,41 @@ mod excel_integration_tests {
             assert!(excel_request_snapshot(&mut workspace, stored.clone(), &["20261020".into()], &path, Some(prompt)).is_err());
         }
         assert_eq!(fs::read(settings_path).unwrap(), saved_bytes);
+    }
+
+    #[test]
+    fn content_generation_uses_its_own_request_prompt_without_parsing_the_template() {
+        let root = tempfile::tempdir().unwrap();
+        let mut workspace = Workspace::open(root.path().to_str().unwrap()).unwrap();
+        workspace.create_with_content("20261020", Format::Md, "日报原文").unwrap();
+        // configured_settings deliberately writes a non-workbook template. Step one
+        // must still be usable because only the filling pass parses the workbook.
+        let stored = configured_settings(root.path());
+        let original = stored.excel.clone();
+        let snapshot = excel_content_snapshot(
+            &mut workspace, stored, &["20261020".into()], root.path().to_str().unwrap(),
+            Some("先按项目归类，供用户核对".into()),
+        ).unwrap();
+        assert_eq!(snapshot.settings.content_prompt, "先按项目归类，供用户核对");
+        assert_eq!(snapshot.settings.prompt, original.prompt);
+        assert!(snapshot.content.contains("日报原文"));
+        assert_eq!(original.content_prompt, excel::DEFAULT_CONTENT_PROMPT);
+    }
+
+    #[test]
+    fn workbook_filling_payload_contains_only_reviewed_text_and_date_context() {
+        let dates = vec!["20261021".into(), "20261020".into(), "20261021".into()];
+        let payload: serde_json::Value = serde_json::from_str(
+            &excel_confirmed_content(&dates, "用户修改并确认的成果\n保留这行").unwrap(),
+        ).unwrap();
+        assert_eq!(payload["confirmedContent"], "用户修改并确认的成果\n保留这行");
+        assert_eq!(payload["selectedDates"], serde_json::json!(["20261020", "20261021"]));
+        assert_eq!(payload["start"], "20261020");
+        assert_eq!(payload["end"], "20261021");
+        assert!(payload.get("reports").is_none());
+        assert!(excel_confirmed_content(&dates, " \n ").is_err());
+        assert!(excel_confirmed_content(&dates, &"x".repeat(500_001)).is_err());
+        assert!(excel_confirmed_content(&["not-a-date".into()], "已确认").is_err());
     }
 
     fn preview_fixture(root: &std::path::Path) -> (Workspace, settings::StoredSettings) {

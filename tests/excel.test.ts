@@ -3,6 +3,7 @@ import { invoke, isTauri } from '@tauri-apps/api/core'
 import {
   DEFAULT_EXCEL_SETTINGS,
   EXCEL_STORAGE_KEY,
+  RECOMMENDED_EXCEL_CONTENT_PROMPT,
   reportDateRange,
   reportOverlapsRange,
   validExcelDates,
@@ -19,6 +20,7 @@ const configured: ExcelSettings = {
   enabled: true,
   templatePath: '/templates/week.xlsx',
   prompt: '将本周工作填入周报 B5，保留公式。',
+  contentPrompt: '按项目整理日报成果，保留事实与工时。',
 }
 const exported: ExcelExportResult = { path: '/reports/week.xlsx', filename: 'week.xlsx', cells: 3 }
 const prepared: ExcelPreview = {
@@ -200,10 +202,11 @@ describe('Excel export list refresh', () => {
 
 describe('Excel settings state', () => {
   it('ignores the custom output directory from legacy settings', async () => {
-    vi.mocked(invoke).mockResolvedValueOnce({ ...configured, outputDirectory: '/old-custom-reports' })
+    const legacy = { enabled: configured.enabled, templatePath: configured.templatePath, prompt: configured.prompt }
+    vi.mocked(invoke).mockResolvedValueOnce({ ...legacy, outputDirectory: '/old-custom-reports' })
     const excel = useExcel()
     expect(await excel.load()).toBe(true)
-    expect(excel.settings.value).toEqual(configured)
+    expect(excel.settings.value).toEqual({ ...configured, contentPrompt: RECOMMENDED_EXCEL_CONTENT_PROMPT })
     expect(excel.settings.value).not.toHaveProperty('outputDirectory')
   })
   it('loads settings and does not write disabled defaults', async () => {
@@ -252,73 +255,125 @@ describe('Excel settings state', () => {
   })
 })
 
-describe('Excel preview and confirmation lifecycle', () => {
+describe('Excel content, fill and confirmation lifecycle', () => {
+  const generatedContent = '## 客户管理平台\n完成客户检索与导出功能，解决 2 个问题。'
+  const dates = ['20261021']
   const settle = async () => {
-    for (let index = 0; index < 8; index++) await Promise.resolve()
+    for (let index = 0; index < 12; index++) await Promise.resolve()
   }
-
   function mockConfiguredCommands() {
     vi.mocked(invoke).mockImplementation((command) => {
       if (command === 'load_excel_settings') return Promise.resolve(configured)
+      if (command === 'generate_excel_content') return Promise.resolve(generatedContent)
       if (command === 'prepare_excel') return Promise.resolve(prepared)
       if (command === 'confirm_excel') return Promise.resolve(exported)
       return Promise.resolve()
     })
   }
+  const commands = () => vi.mocked(invoke).mock.calls.map(([command]) => command)
+  async function generate(excel: ReturnType<typeof useExcel>, path = '/workspace', selected = dates) {
+    expect(await excel.generateContent(path, selected)).toBe(true)
+  }
+  async function fill(excel: ReturnType<typeof useExcel>, path = '/workspace', selected = dates) {
+    await generate(excel, path, selected)
+    expect(await excel.prepareSelection(path, selected, undefined, generatedContent)).toBe(true)
+  }
 
-  it('prepares the sorted unique selection without writing an Excel file or requiring a summary', async () => {
+  it('generates readable content for the sorted unique selection and waits for user confirmation before filling', async () => {
     mockConfiguredCommands()
     const excel = useExcel()
-    expect(await excel.prepareSelection('/workspace', ['20261025', '20261019', '20261025'])).toBe(true)
-    expect(invoke).toHaveBeenNthCalledWith(1, 'load_excel_settings')
-    expect(invoke).toHaveBeenLastCalledWith('prepare_excel', {
+    expect(await excel.generateContent('/workspace', ['20261025', '20261019', '20261025'])).toBe(true)
+    expect(invoke).toHaveBeenCalledWith('generate_excel_content', {
       workspacePath: '/workspace',
       dates: ['20261019', '20261025'],
       requestId: expect.any(String),
     })
-    expect(excel.preview.value).toEqual(prepared)
+    expect(excel.contentDraft.value).toBe(generatedContent)
+    expect(excel.preview.value).toBeNull()
     expect(excel.result.value).toBeNull()
+    expect(excel.generatingContent.value).toBe(false)
     expect(excel.preparing.value).toBe(false)
-    expect(excel.exporting.value).toBe(false)
-    expect(vi.mocked(invoke).mock.calls.some((call) => call[0] === 'confirm_excel' || call[0] === 'export_excel')).toBe(
-      false,
-    )
+    expect(commands()).not.toContain('prepare_excel')
+    expect(commands()).not.toContain('confirm_excel')
   })
 
-  it('uses a temporary prompt only for the current request and preserves saved settings', async () => {
+  it('keeps generation and filling prompts independent and sends the user-edited content to the second AI request', async () => {
     mockConfiguredCommands()
     const excel = useExcel()
-    expect(await excel.prepareSelection('/workspace', ['20261021'], '仅本次按项目整理')).toBe(true)
+    const contentPrompt = '只归纳已完成成果，不估算工时'
+    const fillingPrompt = '按已确认内容填入 Sheet1!B5，保留模板样式'
+    expect(await excel.generateContent('/workspace', dates, contentPrompt)).toBe(true)
+    const approved = `${generatedContent}\n用户补充：导出功能已验收。`
+    expect(await excel.prepareSelection('/workspace', dates, fillingPrompt, approved)).toBe(true)
+    expect(invoke).toHaveBeenCalledWith('generate_excel_content', {
+      workspacePath: '/workspace',
+      dates,
+      requestId: expect.any(String),
+      prompt: contentPrompt,
+    })
     expect(invoke).toHaveBeenLastCalledWith('prepare_excel', {
       workspacePath: '/workspace',
-      dates: ['20261021'],
+      dates,
       requestId: expect.any(String),
-      prompt: '仅本次按项目整理',
+      prompt: fillingPrompt,
+      content: approved,
     })
+    expect(excel.contentDraft.value).toBe(generatedContent)
+    expect(excel.contentPrompt.value).toBe(contentPrompt)
+    expect(excel.previewPrompt.value).toBe(fillingPrompt)
     expect(excel.settings.value).toEqual(configured)
-    expect(excel.previewPrompt.value).toBe('仅本次按项目整理')
-    await excel.discardPreview()
-    expect(excel.previewPrompt.value).toBe('')
-    expect(await excel.prepareSelection('/workspace', ['20261021'])).toBe(true)
-    expect(invoke).toHaveBeenLastCalledWith('prepare_excel', {
-      workspacePath: '/workspace',
-      dates: ['20261021'],
-      requestId: expect.any(String),
-    })
-    expect(vi.mocked(invoke).mock.calls.some(([command]) => command === 'save_workspace_settings')).toBe(false)
+    expect(commands()).not.toContain('save_workspace_settings')
   })
 
-  it.each(['  ', '字'.repeat(6001)])('rejects an invalid temporary prompt before requesting AI', async (prompt) => {
+  it('rejects filling before content generation or without confirmed content', async () => {
+    mockConfiguredCommands()
     const excel = useExcel()
-    expect(await excel.prepareSelection('/workspace', ['20261021'], prompt)).toBe(false)
-    expect(excel.exportError.value).toContain('本次提示词')
+    expect(await excel.prepareSelection('/workspace', dates, configured.prompt, '手工传入正文')).toBe(false)
+    expect(commands()).not.toContain('prepare_excel')
+    await generate(excel)
+    expect(await excel.prepareSelection('/workspace', dates)).toBe(false)
+    expect(await excel.prepareSelection('/workspace', dates, configured.prompt, '  ')).toBe(false)
+    expect(commands()).not.toContain('prepare_excel')
+    expect(excel.contentDraft.value).toBe(generatedContent)
+  })
+
+  it.each(['字'.repeat(6001)])('rejects an overlong content prompt before requesting AI', async (prompt) => {
+    const excel = useExcel()
+    expect(await excel.generateContent('/workspace', dates, prompt)).toBe(false)
+    expect(excel.exportError.value).toContain('提示词')
     expect(invoke).not.toHaveBeenCalled()
   })
 
-  it('prepares a range of more than seven days across weeks and years', async () => {
+  it('allows an empty content prompt to use the backend default generation rules', async () => {
     mockConfiguredCommands()
     const excel = useExcel()
-    const dates = [
+    expect(await excel.generateContent('/workspace', dates, '')).toBe(true)
+    expect(invoke).toHaveBeenLastCalledWith('generate_excel_content', {
+      workspacePath: '/workspace',
+      dates,
+      requestId: expect.any(String),
+      prompt: '',
+    })
+    expect(excel.settings.value).toEqual(configured)
+  })
+
+  it.each(['  ', '字'.repeat(6001)])(
+    'rejects an invalid filling prompt without discarding generated content',
+    async (prompt) => {
+      mockConfiguredCommands()
+      const excel = useExcel()
+      await generate(excel)
+      expect(await excel.prepareSelection('/workspace', dates, prompt, generatedContent)).toBe(false)
+      expect(excel.exportError.value).toContain('提示词')
+      expect(commands()).not.toContain('prepare_excel')
+      expect(excel.contentDraft.value).toBe(generatedContent)
+    },
+  )
+
+  it('accepts an arbitrary range across weeks and years in both stages', async () => {
+    mockConfiguredCommands()
+    const excel = useExcel()
+    const selected = [
       '20261225',
       '20261226',
       '20261227',
@@ -329,293 +384,324 @@ describe('Excel preview and confirmation lifecycle', () => {
       '20270101',
       '20270102',
     ]
-    expect(await excel.prepareSelection('/workspace', dates)).toBe(true)
+    await fill(excel, '/workspace', selected)
     expect(invoke).toHaveBeenLastCalledWith('prepare_excel', {
       workspacePath: '/workspace',
-      dates,
+      dates: selected,
       requestId: expect.any(String),
+      content: generatedContent,
     })
   })
 
-  it('writes only after confirmation using the same preview without requesting AI again', async () => {
+  it('binds generated content to its workspace and dates before allowing filling', async () => {
     mockConfiguredCommands()
-    const write = deferred<ExcelExportResult>()
     const excel = useExcel()
-    await excel.prepareSelection('/workspace', ['20261021'])
-    vi.mocked(invoke).mockReturnValueOnce(write.promise)
-    const confirming = excel.confirmPreview('/workspace')
-    expect(excel.preparing.value).toBe(false)
-    expect(excel.exporting.value).toBe(true)
-    expect(excel.result.value).toBeNull()
-    expect(invoke).toHaveBeenLastCalledWith('confirm_excel', { workspacePath: '/workspace', previewId: prepared.id })
-    write.resolve(exported)
-    expect(await confirming).toBe(true)
-    expect(excel.result.value).toEqual(exported)
-    expect(excel.preview.value).toBeNull()
-    expect(excel.exporting.value).toBe(false)
-    expect(vi.mocked(invoke).mock.calls.map((call) => call[0])).toEqual([
-      'load_excel_settings',
-      'prepare_excel',
-      'confirm_excel',
-    ])
+    await generate(excel)
+    expect(await excel.prepareSelection('/another-workspace', dates, undefined, generatedContent)).toBe(false)
+    expect(await excel.prepareSelection('/workspace', ['20261022'], undefined, generatedContent)).toBe(false)
+    expect(commands()).not.toContain('prepare_excel')
+    expect(await excel.prepareSelection('/workspace', dates, undefined, generatedContent)).toBe(true)
   })
 
-  it('keeps the original selection while loading settings', async () => {
+  it('copies the original selection while generation waits for settings', async () => {
     const read = deferred<ExcelSettings>()
-    vi.mocked(invoke).mockReturnValueOnce(read.promise).mockResolvedValueOnce(prepared)
+    vi.mocked(invoke).mockImplementation((command) =>
+      command === 'load_excel_settings' ? read.promise : Promise.resolve(generatedContent),
+    )
     const excel = useExcel()
-    const dates = ['20261021', '20261022']
-    const pending = excel.prepareSelection('/workspace', dates)
-    dates.splice(0, dates.length, '20261026')
+    const selected = ['20261021', '20261022']
+    const pending = excel.generateContent('/workspace', selected)
+    selected.splice(0, selected.length, '20261026')
     read.resolve(configured)
     expect(await pending).toBe(true)
-    expect(invoke).toHaveBeenLastCalledWith('prepare_excel', {
+    expect(invoke).toHaveBeenLastCalledWith('generate_excel_content', {
       workspacePath: '/workspace',
       dates: ['20261021', '20261022'],
       requestId: expect.any(String),
     })
   })
 
-  it('rejects a missing workspace before invoking native commands', async () => {
+  it('validates workspace and every selected date before reading settings', async () => {
     const excel = useExcel()
-    expect(await excel.prepareSelection('', ['20261021'])).toBe(false)
+    expect(await excel.generateContent('', dates)).toBe(false)
     expect(excel.exportError.value).toContain('工作空间')
-    expect(invoke).not.toHaveBeenCalled()
-  })
-
-  it('checks all selected dates, including dates without a journal, before reading config', async () => {
-    const excel = useExcel()
-    expect(await excel.prepareSelection('/workspace', ['20261025', '20260229'])).toBe(false)
+    expect(await excel.generateContent('/workspace', ['20261025', '20260229'])).toBe(false)
     expect(excel.exportError.value).toContain('有效的日期')
     expect(invoke).not.toHaveBeenCalled()
   })
 
-  it('checks the latest enabled setting rather than an earlier in-memory value', async () => {
+  it('reads current enabled settings for generation and never reuses stale enabled configuration', async () => {
     vi.mocked(invoke).mockResolvedValueOnce(configured).mockResolvedValueOnce(DEFAULT_EXCEL_SETTINGS)
     const excel = useExcel()
     await excel.load()
-    expect(await excel.prepareSelection('/workspace', ['20261021'])).toBe(false)
+    expect(await excel.generateContent('/workspace', dates)).toBe(false)
     expect(excel.exportError.value).toContain('启用')
     expect(excel.settings.value.enabled).toBe(false)
-    expect(vi.mocked(invoke).mock.calls.map((call) => call[0])).toEqual(['load_excel_settings', 'load_excel_settings'])
+    expect(commands()).not.toContain('generate_excel_content')
   })
 
-  it('does not prepare old enabled config when the latest settings read fails', async () => {
-    vi.mocked(invoke).mockResolvedValueOnce(configured).mockRejectedValueOnce('cannot read config')
+  it('rechecks settings before filling and preserves content if the read fails', async () => {
+    mockConfiguredCommands()
     const excel = useExcel()
-    await excel.load()
-    expect(await excel.prepareSelection('/workspace', ['20261021'])).toBe(false)
+    await generate(excel)
+    vi.mocked(invoke).mockRejectedValueOnce('cannot read config')
+    expect(await excel.prepareSelection('/workspace', dates, undefined, generatedContent)).toBe(false)
     expect(excel.exportError.value).toContain('cannot read config')
-    expect(excel.preparing.value).toBe(false)
-    expect(vi.mocked(invoke).mock.calls.some((call) => call[0] === 'prepare_excel')).toBe(false)
+    expect(excel.contentDraft.value).toBe(generatedContent)
+    expect(commands()).not.toContain('prepare_excel')
   })
 
-  it('blocks concurrent preparation and awaits cancellation, discarding a late native preview', async () => {
-    const pendingPreview = deferred<ExcelPreview>()
+  it('keeps content generation failures visible until the session is cleared', async () => {
+    vi.mocked(invoke).mockResolvedValueOnce(configured).mockRejectedValueOnce('AI unavailable')
+    const excel = useExcel()
+    expect(await excel.generateContent('/workspace', dates)).toBe(false)
+    expect(excel.exportError.value).toContain('AI unavailable')
+    expect(excel.contentDraft.value).toBe('')
+    excel.clearSelection()
+    expect(excel.exportError.value).toBe('')
+  })
+
+  it.each([
+    ['empty', ''],
+    ['whitespace', '  '],
+    ['larger than 500 KB in UTF-8', '字'.repeat(170_000)],
+  ])('rejects %s generated content without enabling filling', async (_label, content) => {
+    vi.mocked(invoke).mockImplementation((command) =>
+      command === 'load_excel_settings' ? Promise.resolve(configured) : Promise.resolve(content),
+    )
+    const excel = useExcel()
+    expect(await excel.generateContent('/workspace', dates)).toBe(false)
+    expect(excel.contentDraft.value).toBe('')
+    expect(excel.exportError.value).toContain('500 KB')
+    expect(commands()).not.toContain('prepare_excel')
+  })
+
+  it('rejects confirmed content above the UTF-8 size limit before asking AI to fill the workbook', async () => {
+    mockConfiguredCommands()
+    const excel = useExcel()
+    await generate(excel)
+    expect(await excel.prepareSelection('/workspace', dates, configured.prompt, '字'.repeat(170_000))).toBe(false)
+    expect(excel.exportError.value).toContain('500 KB')
+    expect(excel.contentDraft.value).toBe(generatedContent)
+    expect(commands()).not.toContain('prepare_excel')
+  })
+
+  it('retains generated content after filling fails and retries only filling', async () => {
+    mockConfiguredCommands()
+    const excel = useExcel()
+    await generate(excel)
+    vi.mocked(invoke).mockImplementation((command) => {
+      if (command === 'load_excel_settings') return Promise.resolve(configured)
+      if (command === 'prepare_excel') return Promise.reject('template changed')
+      return Promise.resolve()
+    })
+    expect(await excel.prepareSelection('/workspace', dates, configured.prompt, generatedContent)).toBe(false)
+    expect(excel.exportError.value).toContain('template changed')
+    expect(excel.contentDraft.value).toBe(generatedContent)
+    expect(excel.preview.value).toBeNull()
+    mockConfiguredCommands()
+    expect(await excel.prepareSelection('/workspace', dates, configured.prompt, generatedContent)).toBe(true)
+    expect(commands().filter((command) => command === 'generate_excel_content')).toHaveLength(1)
+    expect(commands().filter((command) => command === 'prepare_excel')).toHaveLength(2)
+  })
+
+  it('cancels content generation and ignores a late result without starting filling', async () => {
+    const native = deferred<string>()
     const canceled = deferred<void>()
     vi.mocked(invoke).mockImplementation((command) => {
       if (command === 'load_excel_settings') return Promise.resolve(configured)
-      if (command === 'prepare_excel') return pendingPreview.promise
+      if (command === 'generate_excel_content') return native.promise
       if (command === 'cancel_ai') return canceled.promise
       return Promise.resolve()
     })
     const excel = useExcel()
-    const pending = excel.prepareSelection('/workspace', ['20261021'])
-    expect(await excel.prepareSelection('/workspace', ['20261022'])).toBe(false)
+    const pending = excel.generateContent('/workspace', dates)
     await settle()
-    const args = vi.mocked(invoke).mock.calls.find((call) => call[0] === 'prepare_excel')?.[1] as { requestId: string }
-    const cancel = excel.cancel()
-    expect(excel.preparing.value).toBe(false)
+    expect(excel.generatingContent.value).toBe(true)
+    expect(await excel.generateContent('/workspace', ['20261022'])).toBe(false)
+    expect(await excel.prepareSelection('/workspace', dates, configured.prompt, '未确认结果')).toBe(false)
+    const args = vi.mocked(invoke).mock.calls.find(([command]) => command === 'generate_excel_content')![1] as {
+      requestId: string
+    }
+    const cancellation = excel.cancel()
+    expect(excel.generatingContent.value).toBe(false)
     expect(invoke).toHaveBeenLastCalledWith('cancel_ai', { requestId: args.requestId })
-    let cancellationDone = false
-    void cancel.then(() => {
-      cancellationDone = true
+    let done = false
+    void cancellation.then(() => {
+      done = true
     })
     await Promise.resolve()
-    expect(cancellationDone).toBe(false)
+    expect(done).toBe(false)
     canceled.resolve()
-    await cancel
-    pendingPreview.resolve(prepared)
+    await cancellation
+    native.resolve(generatedContent)
     expect(await pending).toBe(false)
-    expect(invoke).toHaveBeenLastCalledWith('discard_excel_preview', { previewId: prepared.id })
+    expect(excel.contentDraft.value).toBe('')
     expect(excel.preview.value).toBeNull()
-    expect(excel.result.value).toBeNull()
     expect(excel.exportError.value).toBe('')
+    expect(commands()).not.toContain('prepare_excel')
   })
 
-  it('stops preparation if the dialog closes during settings loading', async () => {
+  it('does not let an old canceled content request clear a newer generation state', async () => {
+    const oldResult = deferred<string>()
+    const newResult = deferred<string>()
+    let requests = 0
+    vi.mocked(invoke).mockImplementation((command) => {
+      if (command === 'load_excel_settings') return Promise.resolve(configured)
+      if (command === 'generate_excel_content') return ++requests === 1 ? oldResult.promise : newResult.promise
+      return Promise.resolve()
+    })
+    const excel = useExcel()
+    const previous = excel.generateContent('/workspace', dates)
+    await settle()
+    excel.clearSelection()
+    const current = excel.generateContent('/workspace', ['20261022'])
+    await settle()
+    oldResult.resolve('旧内容')
+    expect(await previous).toBe(false)
+    expect(excel.generatingContent.value).toBe(true)
+    expect(excel.contentDraft.value).toBe('')
+    newResult.resolve('新内容')
+    expect(await current).toBe(true)
+    expect(excel.contentDraft.value).toBe('新内容')
+    expect(excel.generatingContent.value).toBe(false)
+  })
+
+  it('stops generation if the dialog closes during the settings read', async () => {
     const read = deferred<ExcelSettings>()
     vi.mocked(invoke).mockImplementation((command) =>
       command === 'load_excel_settings' ? read.promise : Promise.resolve(),
     )
     const excel = useExcel()
-    const pending = excel.prepareSelection('/workspace', ['20261021'])
-    expect(excel.preparing.value).toBe(true)
-    expect(invoke).toHaveBeenCalledExactlyOnceWith('load_excel_settings')
+    const pending = excel.generateContent('/workspace', dates)
+    expect(excel.generatingContent.value).toBe(true)
     excel.clearExport()
     read.resolve(configured)
     expect(await pending).toBe(false)
-    expect(vi.mocked(invoke).mock.calls.map((call) => call[0])).toEqual(['load_excel_settings', 'cancel_ai'])
+    expect(commands()).not.toContain('generate_excel_content')
+    expect(commands()).toContain('cancel_ai')
     expect(excel.exportError.value).toBe('')
   })
 
-  it('does not cancel running preparation when settings are read again', async () => {
+  it('does not cancel generation when settings are read again, but invalidates it on a workspace reload', async () => {
+    const native = deferred<string>()
+    vi.mocked(invoke).mockImplementation((command) =>
+      command === 'generate_excel_content' ? native.promise : Promise.resolve(configured),
+    )
+    const excel = useExcel()
+    const pending = excel.generateContent('/old-workspace', dates)
+    await settle()
+    expect(await excel.load()).toBe(true)
+    expect(excel.generatingContent.value).toBe(true)
+    expect(commands()).not.toContain('cancel_ai')
+    expect(await excel.reload()).toBe(true)
+    native.resolve(generatedContent)
+    expect(await pending).toBe(false)
+    expect(excel.contentDraft.value).toBe('')
+    expect(excel.exportError.value).toBe('')
+  })
+
+  it('cancels filling and discards the late native workbook instead of allowing it to be confirmed', async () => {
+    mockConfiguredCommands()
+    const excel = useExcel()
+    await generate(excel)
     const native = deferred<ExcelPreview>()
     vi.mocked(invoke).mockImplementation((command) =>
       command === 'prepare_excel' ? native.promise : Promise.resolve(configured),
     )
-    const excel = useExcel()
-    const pending = excel.prepareSelection('/workspace', ['20261021'])
+    const pending = excel.prepareSelection('/workspace', dates, undefined, generatedContent)
     await settle()
-    expect(await excel.load()).toBe(true)
     expect(excel.preparing.value).toBe(true)
-    expect(vi.mocked(invoke).mock.calls.some((call) => call[0] === 'cancel_ai')).toBe(false)
+    await excel.cancel()
     native.resolve(prepared)
-    expect(await pending).toBe(true)
-  })
-
-  it('invalidates preparation when another workspace starts loading', async () => {
-    const oldRead = deferred<ExcelSettings>()
-    let reads = 0
-    vi.mocked(invoke).mockImplementation((command) => {
-      if (command === 'load_excel_settings')
-        return ++reads === 1 ? oldRead.promise : Promise.resolve({ ...configured, prompt: '新工作空间' })
-      return Promise.resolve()
-    })
-    const excel = useExcel()
-    const pending = excel.prepareSelection('/old-workspace', ['20261021'])
-    expect(await excel.reload()).toBe(true)
-    oldRead.reject('old config failure')
     expect(await pending).toBe(false)
-    expect(excel.settings.value.prompt).toBe('新工作空间')
-    expect(excel.exportError.value).toBe('')
-    expect(vi.mocked(invoke).mock.calls.some((call) => call[0] === 'prepare_excel')).toBe(false)
-  })
-
-  it('discards a native preview returned after changing workspace', async () => {
-    const pendingPreview = deferred<ExcelPreview>()
-    vi.mocked(invoke).mockImplementation((command) => {
-      if (command === 'load_excel_settings') return Promise.resolve(configured)
-      if (command === 'prepare_excel') return pendingPreview.promise
-      return Promise.resolve()
-    })
-    const excel = useExcel()
-    const pending = excel.prepareSelection('/old-workspace', ['20261021'])
-    await settle()
-    expect(await excel.reload()).toBe(true)
-    pendingPreview.resolve(prepared)
-    expect(await pending).toBe(false)
+    expect(excel.contentDraft.value).toBe('')
+    expect(excel.preview.value).toBeNull()
     expect(invoke).toHaveBeenLastCalledWith('discard_excel_preview', { previewId: prepared.id })
-    expect(excel.preview.value).toBeNull()
-    expect(excel.exportError.value).toBe('')
   })
 
-  it('does not let an old canceled request clear a newer modal’s preparation state', async () => {
-    const oldPreview = deferred<ExcelPreview>()
-    const newPreview = deferred<ExcelPreview>()
-    let requests = 0
-    vi.mocked(invoke).mockImplementation((command) => {
-      if (command === 'load_excel_settings') return Promise.resolve(configured)
-      if (command === 'prepare_excel') return ++requests === 1 ? oldPreview.promise : newPreview.promise
-      return Promise.resolve()
-    })
-    const excel = useExcel()
-    const previous = excel.prepareSelection('/workspace', ['20261021'])
-    await settle()
-    excel.clearExport()
-    const current = excel.prepareSelection('/workspace', ['20261022'])
-    await settle()
-    oldPreview.resolve(prepared)
-    expect(await previous).toBe(false)
-    expect(excel.preparing.value).toBe(true)
-    expect(excel.preview.value).toBeNull()
-    const newer = { ...prepared, id: 'new-preview' }
-    newPreview.resolve(newer)
-    expect(await current).toBe(true)
-    expect(excel.preview.value).toEqual(newer)
-    expect(excel.preparing.value).toBe(false)
-  })
-
-  it('discards an unconfirmed preview without invoking a file write', async () => {
+  it('discards only the filled workbook when returning to edit content', async () => {
     mockConfiguredCommands()
     const excel = useExcel()
-    await excel.prepareSelection('/workspace', ['20261021'])
-    await excel.discardPreview()
+    await fill(excel)
+    await excel.discardWorkbookPreview()
     expect(excel.preview.value).toBeNull()
+    expect(excel.contentDraft.value).toBe(generatedContent)
     expect(invoke).toHaveBeenLastCalledWith('discard_excel_preview', { previewId: prepared.id })
-    expect(vi.mocked(invoke).mock.calls.some((call) => call[0] === 'confirm_excel' || call[0] === 'cancel_ai')).toBe(
-      false,
+    expect(await excel.prepareSelection('/workspace', dates, undefined, '用户重新确认的正文')).toBe(true)
+    expect(commands().filter((command) => command === 'generate_excel_content')).toHaveLength(1)
+    expect(commands().filter((command) => command === 'prepare_excel')).toHaveLength(2)
+  })
+
+  it('removes old content and workbook approval before regenerating content', async () => {
+    mockConfiguredCommands()
+    const excel = useExcel()
+    await fill(excel)
+    const native = deferred<string>()
+    vi.mocked(invoke).mockImplementation((command) =>
+      command === 'generate_excel_content' ? native.promise : Promise.resolve(configured),
     )
+    const generation = excel.generateContent('/workspace', ['20261022'])
+    expect(excel.contentDraft.value).toBe('')
+    expect(excel.preview.value).toBeNull()
+    expect(invoke).toHaveBeenCalledWith('discard_excel_preview', { previewId: prepared.id })
+    native.resolve('下一天的新成果')
+    expect(await generation).toBe(true)
   })
 
-  it('clears a discarded preview even when native cleanup fails', async () => {
+  it('writes exactly the approved workbook after both AI stages and never requests AI during confirmation', async () => {
     mockConfiguredCommands()
     const excel = useExcel()
-    await excel.prepareSelection('/workspace', ['20261021'])
-    vi.mocked(invoke).mockRejectedValueOnce('already expired')
-    await expect(excel.discardPreview()).resolves.toBeUndefined()
-    expect(excel.preview.value).toBeNull()
-    expect(excel.exportError.value).toBe('')
-  })
-
-  it('keeps generation failures visible until the export state is cleared', async () => {
-    vi.mocked(invoke).mockResolvedValueOnce(configured).mockRejectedValueOnce('template changed')
-    const excel = useExcel()
-    expect(await excel.prepareSelection('/workspace', ['20261021'])).toBe(false)
-    expect(excel.exportError.value).toContain('template changed')
-    excel.clearExport()
-    expect(excel.exportError.value).toBe('')
-    expect(excel.preview.value).toBeNull()
-  })
-
-  it('requires a preview before confirming and invalidates it for a different workspace', async () => {
-    mockConfiguredCommands()
-    const excel = useExcel()
-    expect(await excel.confirmPreview('/workspace')).toBe(false)
-    expect(invoke).not.toHaveBeenCalled()
-    expect(excel.exportError.value).toContain('预览')
-    await excel.prepareSelection('/workspace', ['20261021'])
-    expect(await excel.confirmPreview('/another-workspace')).toBe(false)
-    expect(excel.exportError.value).toContain('工作空间已更改')
-    expect(excel.preview.value).toBeNull()
-    expect(invoke).toHaveBeenLastCalledWith('discard_excel_preview', { previewId: prepared.id })
-    expect(vi.mocked(invoke).mock.calls.some((call) => call[0] === 'confirm_excel')).toBe(false)
-  })
-
-  it('prevents duplicate confirmations and new preparation during the actual write', async () => {
-    mockConfiguredCommands()
-    const excel = useExcel()
-    await excel.prepareSelection('/workspace', ['20261021'])
+    await fill(excel)
     const write = deferred<ExcelExportResult>()
     vi.mocked(invoke).mockReturnValueOnce(write.promise)
     const confirming = excel.confirmPreview('/workspace')
-    expect(await excel.confirmPreview('/workspace')).toBe(false)
-    expect(await excel.prepareSelection('/workspace', ['20261022'])).toBe(false)
     expect(excel.exporting.value).toBe(true)
-    expect(vi.mocked(invoke).mock.calls.filter((call) => call[0] === 'confirm_excel')).toHaveLength(1)
+    expect(invoke).toHaveBeenLastCalledWith('confirm_excel', { workspacePath: '/workspace', previewId: prepared.id })
+    expect(await excel.confirmPreview('/workspace')).toBe(false)
+    expect(await excel.generateContent('/workspace', dates)).toBe(false)
+    expect(await excel.prepareSelection('/workspace', dates, undefined, generatedContent)).toBe(false)
     write.resolve(exported)
     expect(await confirming).toBe(true)
+    expect(excel.result.value).toEqual(exported)
+    expect(excel.preview.value).toBeNull()
+    expect(excel.exporting.value).toBe(false)
+    expect(
+      commands().filter((command) => ['generate_excel_content', 'prepare_excel', 'confirm_excel'].includes(command)),
+    ).toEqual(['generate_excel_content', 'prepare_excel', 'confirm_excel'])
   })
 
-  it('retains the preview after confirmation failure so the same approved workbook can be retried', async () => {
+  it('retains a preview after a publication failure and retries saving the same workbook', async () => {
     mockConfiguredCommands()
     const excel = useExcel()
-    await excel.prepareSelection('/workspace', ['20261021'])
+    await fill(excel)
     vi.mocked(invoke).mockRejectedValueOnce('directory is read only').mockResolvedValueOnce(exported)
     expect(await excel.confirmPreview('/workspace')).toBe(false)
     expect(excel.exportError.value).toContain('directory is read only')
     expect(excel.preview.value).toEqual(prepared)
-    expect(excel.exporting.value).toBe(false)
+    expect(excel.contentDraft.value).toBe(generatedContent)
     expect(await excel.confirmPreview('/workspace')).toBe(true)
-    expect(excel.exportError.value).toBe('')
-    expect(vi.mocked(invoke).mock.calls.filter((call) => call[0] === 'prepare_excel')).toHaveLength(1)
-    expect(vi.mocked(invoke).mock.calls.filter((call) => call[0] === 'confirm_excel')).toHaveLength(2)
+    expect(commands().filter((command) => command === 'prepare_excel')).toHaveLength(1)
+    expect(commands().filter((command) => command === 'confirm_excel')).toHaveLength(2)
   })
 
-  it('does not pretend to cancel a file write or display its stale failure after changing workspace', async () => {
+  it('requires a preview and invalidates its approval when the workspace changes', async () => {
     mockConfiguredCommands()
     const excel = useExcel()
-    await excel.prepareSelection('/old-workspace', ['20261021'])
+    expect(await excel.confirmPreview('/workspace')).toBe(false)
+    expect(invoke).not.toHaveBeenCalled()
+    await fill(excel)
+    expect(await excel.confirmPreview('/another-workspace')).toBe(false)
+    expect(excel.exportError.value).toContain('工作空间已更改')
+    expect(excel.preview.value).toBeNull()
+    expect(invoke).toHaveBeenLastCalledWith('discard_excel_preview', { previewId: prepared.id })
+    expect(commands()).not.toContain('confirm_excel')
+  })
+
+  it('does not pretend to cancel an in-progress file write or show its stale error after a workspace change', async () => {
+    mockConfiguredCommands()
+    const excel = useExcel()
+    await fill(excel, '/old-workspace')
     const write = deferred<ExcelExportResult>()
     vi.mocked(invoke).mockImplementation((command) =>
       command === 'confirm_excel'
@@ -628,8 +714,7 @@ describe('Excel preview and confirmation lifecycle', () => {
     expect(await excel.reload()).toBe(true)
     expect(excel.exporting.value).toBe(true)
     expect(excel.preview.value).toBeNull()
-    expect(await excel.prepareSelection('/new-workspace', ['20261021'])).toBe(false)
-    expect(vi.mocked(invoke).mock.calls.some((call) => call[0] === 'cancel_ai')).toBe(false)
+    expect(commands()).not.toContain('cancel_ai')
     write.reject('old write failed')
     expect(await confirming).toBe(false)
     expect(excel.exporting.value).toBe(false)
@@ -638,49 +723,27 @@ describe('Excel preview and confirmation lifecycle', () => {
     expect(invoke).toHaveBeenLastCalledWith('discard_excel_preview', { previewId: prepared.id })
   })
 
-  it('discards an old preview before regenerating instead of leaving stale content to confirm', async () => {
+  it('invalidates both steps on saved settings or changed output rules and preserves exported files', async () => {
     mockConfiguredCommands()
     const excel = useExcel()
-    await excel.prepareSelection('/workspace', ['20261021'])
-    vi.mocked(invoke).mockImplementation((command) =>
-      command === 'prepare_excel'
-        ? Promise.reject('AI unavailable')
-        : command === 'load_excel_settings'
-          ? Promise.resolve(configured)
-          : Promise.resolve(),
-    )
-    expect(await excel.prepareSelection('/workspace', ['20261022'])).toBe(false)
-    expect(excel.preview.value).toBeNull()
-    expect(excel.exportError.value).toContain('AI unavailable')
-    expect(invoke).toHaveBeenCalledWith('discard_excel_preview', { previewId: prepared.id })
-    expect(vi.mocked(invoke).mock.calls.some((call) => call[0] === 'confirm_excel')).toBe(false)
-  })
-
-  it('clears a pending preview when accepting saved settings without altering the accepted values', async () => {
-    mockConfiguredCommands()
-    const excel = useExcel()
-    await excel.prepareSelection('/workspace', ['20261021'])
-    excel.acceptSaved({ ...configured, prompt: '新规则' })
-    expect(excel.settings.value.prompt).toBe('新规则')
-    expect(excel.preview.value).toBeNull()
-    expect(invoke).toHaveBeenLastCalledWith('discard_excel_preview', { previewId: prepared.id })
-  })
-
-  it('discards an approved workbook when its filename rule changes and keeps an unchanged rule approved', async () => {
-    mockConfiguredCommands()
-    const excel = useExcel()
-    await excel.prepareSelection('/workspace', ['20261021'])
+    await fill(excel)
     excel.acceptFileSettings({ ...excel.fileRule.value })
     expect(excel.preview.value).toEqual(prepared)
     excel.acceptFileSettings({ directory: 'excel', filenameTemplate: '项目成果_{date}' })
+    expect(excel.contentDraft.value).toBe('')
     expect(excel.preview.value).toBeNull()
-    expect(excel.fileRule.value.filenameTemplate).toBe('项目成果_{date}')
-    expect(excel.settings.value).toEqual(configured)
     expect(invoke).toHaveBeenLastCalledWith('discard_excel_preview', { previewId: prepared.id })
-    expect(vi.mocked(invoke).mock.calls.some((call) => call[0] === 'confirm_excel')).toBe(false)
+    await generate(excel)
+    excel.acceptSaved({ ...configured, contentPrompt: '新生成规则', prompt: '新填充规则' })
+    expect(excel.contentDraft.value).toBe('')
+    expect(excel.settings.value).toMatchObject({ contentPrompt: '新生成规则', prompt: '新填充规则' })
+    expect(commands()).not.toContain('confirm_excel')
   })
 
-  it('ignores preparation and export-file reads finishing after a directory change', async () => {
+  it('ignores filling and exported-file reads finishing after the output directory changes', async () => {
+    mockConfiguredCommands()
+    const excel = useExcel()
+    await generate(excel)
     const generated = deferred<ExcelPreview>()
     const read = deferred<{ filename: string; path: string; sheets: [] }>()
     vi.mocked(invoke).mockImplementation((command) => {
@@ -689,23 +752,34 @@ describe('Excel preview and confirmation lifecycle', () => {
       if (command === 'read_excel_export') return read.promise
       return Promise.resolve()
     })
-    const excel = useExcel()
-    const preparation = excel.prepareSelection('/workspace', ['20261021'])
+    const filling = excel.prepareSelection('/workspace', dates, configured.prompt, generatedContent)
     const opening = excel.openExport('/workspace', '/workspace/excel/old.xlsx')
     await settle()
     excel.acceptFileSettings({ directory: '项目报告', filenameTemplate: excel.fileRule.value.filenameTemplate })
     generated.resolve(prepared)
     read.resolve({ filename: 'old.xlsx', path: '/workspace/excel/old.xlsx', sheets: [] })
-    expect(await preparation).toBe(false)
+    expect(await filling).toBe(false)
     expect(await opening).toBe(false)
     expect(excel.preview.value).toBeNull()
+    expect(excel.contentDraft.value).toBe('')
     expect(excel.exportPreview.value).toBeNull()
     expect(excel.previewOpening.value).toBe(false)
     expect(invoke).toHaveBeenCalledWith('cancel_ai', { requestId: expect.any(String) })
     expect(invoke).toHaveBeenLastCalledWith('discard_excel_preview', { previewId: prepared.id })
   })
 
-  it('reads browser preferences locally and never sends browser generation to native or AI', async () => {
+  it('discards an unconfirmed preview even if native cleanup fails, without writing a file', async () => {
+    mockConfiguredCommands()
+    const excel = useExcel()
+    await fill(excel)
+    vi.mocked(invoke).mockRejectedValueOnce('already expired')
+    await expect(excel.discardPreview()).resolves.toBeUndefined()
+    expect(excel.contentDraft.value).toBe('')
+    expect(excel.preview.value).toBeNull()
+    expect(commands()).not.toContain('confirm_excel')
+  })
+
+  it('keeps browser preferences local and never starts either AI stage in browser preview', async () => {
     const storage = new Map<string, string>([[EXCEL_STORAGE_KEY, JSON.stringify(configured)]])
     vi.stubGlobal('localStorage', {
       getItem: vi.fn((key: string) => storage.get(key) ?? null),
@@ -715,9 +789,10 @@ describe('Excel preview and confirmation lifecycle', () => {
     const excel = useExcel()
     await excel.load()
     expect(excel.settings.value).toEqual(configured)
-    expect(await excel.prepareSelection('/workspace', ['20261021'])).toBe(false)
+    expect(await excel.generateContent('/workspace', dates)).toBe(false)
     expect(excel.exportError.value).toContain('桌面应用')
     expect(invoke).not.toHaveBeenCalled()
     expect(JSON.parse(storage.get(EXCEL_STORAGE_KEY)!).prompt).toBe(configured.prompt)
+    expect(JSON.parse(storage.get(EXCEL_STORAGE_KEY)!).contentPrompt).toBe(configured.contentPrompt)
   })
 })

@@ -4,10 +4,13 @@ import JournalEditor from '../JournalEditor.vue'
 import WorkspaceDocumentView from '../WorkspaceDocumentView.vue'
 import RangeOverview from '../RangeOverview.vue'
 import { useModuleContext } from '../../modules/context'
+import { useGitJournalDraft } from '../../lib/useGitJournalDraft'
+import { pushMessage } from '../../lib/messages'
 const context = useModuleContext()
 const { journal, actions, disabled, storageMode, canRestore } = context
 const { rangeDates, rangeDocuments, rangeLoading, rangeError } = context
 const splitPreview = ref(false)
+const gitDraft = useGitJournalDraft()
 const { sourceKey: scrollSourceKey } = context.journalPreview
 const {
   document: activeDocument,
@@ -42,6 +45,45 @@ onMounted(() => {
 onBeforeUnmount(() => {
   if (context.editor.value?.focus === focus) context.editor.value = null
 })
+
+async function onGenerateGitDraft(options?: { mode?: 'replace' | 'append'; customPrompt?: string }) {
+  const path = journal.workspace.value?.path
+  if (!path || disabled.value || gitDraft.generating.value) return
+  if (!context.ai.defaultProvider.value) {
+    pushMessage({ tone: 'warning', text: '请先在全局设置中配置并选择默认 AI。' })
+    actions.openAiSettings()
+    return
+  }
+  const date = selectedDate.value
+  pushMessage({ tone: 'info', text: '正在读取 Git 提交并生成日报草稿…' })
+  const result = await gitDraft.generate(path, date, options?.customPrompt)
+  if (!result) {
+    if (gitDraft.error.value) {
+      reportError(gitDraft.error.value)
+      pushMessage({ tone: 'error', text: gitDraft.error.value })
+    }
+    return
+  }
+
+  const currentContent = draft.value.trim()
+  const insertMode = options?.mode ?? (currentContent ? 'append' : 'replace')
+  if (insertMode === 'replace' || !currentContent) {
+    edit(result.content, true)
+  } else {
+    const separator = currentContent.endsWith('\n\n') ? '' : currentContent.endsWith('\n') ? '\n' : '\n\n'
+    edit(
+      `${currentContent}${separator}### 🤖 今日 Git 提交归纳（${result.commitCount} 条提交）\n\n${result.content}`,
+      true,
+    )
+  }
+  await flush()
+  pushMessage({ tone: 'success', text: `已成功根据 ${result.commitCount} 条 Git 提交生成日报！` })
+}
+
+function onCancelGitDraft() {
+  gitDraft.cancel()
+  pushMessage({ tone: 'info', text: '已取消从 Git 生成日报' })
+}
 </script>
 
 <template>
@@ -55,6 +97,7 @@ onBeforeUnmount(() => {
         :disabled="disabled"
         @close="actions.showJournal?.()"
         @reload="actions.requestReload"
+        @shortcuts="actions.openShortcuts?.()"
       />
       <RangeOverview
         v-else-if="rangeDates.length"
@@ -86,6 +129,8 @@ onBeforeUnmount(() => {
         :can-redo="canRedo"
         :scroll-source-key="scrollSourceKey"
         :load-previous-report="readPreviousReport"
+        :generating-git-draft="gitDraft.generating.value"
+        :editor-settings="context.editorSettings?.value"
         @edit="edit"
         @undo="undo"
         @redo="redo"
@@ -94,6 +139,10 @@ onBeforeUnmount(() => {
         @format="actions.requestFormat"
         @restore="actions.requestRestore"
         @error="reportError"
+        @generate-git="onGenerateGitDraft"
+        @cancel-git="onCancelGitDraft"
+        @open-editor-settings="actions.openEditorSettings?.()"
+        @shortcuts="actions.openShortcuts?.()"
       />
     </Transition>
   </div>

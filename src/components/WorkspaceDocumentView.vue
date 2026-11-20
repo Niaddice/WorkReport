@@ -8,7 +8,7 @@ import type { Document } from '../lib/workspace'
 import { pushMessage } from '../lib/messages'
 
 const props = defineProps<{ state: ReturnType<typeof useWorkspaceDocument>; disabled: boolean }>()
-const emit = defineEmits<{ close: []; reload: [] }>()
+const emit = defineEmits<{ close: []; reload: []; shortcuts: [] }>()
 const preview = ref(false)
 const editor = ref<InstanceType<typeof JournalEditor>>()
 const file = computed(() => props.state.document.value)
@@ -93,6 +93,7 @@ defineExpose({ focus: () => editor.value?.focus() })
       @redo="state.redo"
       @reload="emit('reload')"
       @error="reportError"
+      @shortcuts="emit('shortcuts')"
     />
     <template v-else-if="file?.kind === 'table' && !state.error.value">
       <p v-if="file.message" class="workspace-document-notice">{{ file.message }}</p>

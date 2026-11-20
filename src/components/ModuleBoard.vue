@@ -22,14 +22,15 @@ const props = defineProps<{
 }>()
 const emit = defineEmits<{
   remove: [id: ModuleId]
+  settings: [id: ModuleId]
   split: [dragged: ModuleId, target: ModuleId, side: DropSide]
   insert: [dragged: ModuleId, path: number[]]
   edge: [dragged: ModuleId, side: 'left' | 'right']
   resize: [path: number[], ratio: number, metrics: LayoutMetrics]
 }>()
 
-/** 挂载前使用默认 0.2rem（16px 根字号下约 3.2px），挂载后读取 CSS 实际像素间距。 */
-const boardGap = ref(3.2)
+/** 挂载前使用默认 6px 的工具窗口间距，挂载后读取 CSS 实际像素间距。 */
+const boardGap = ref(6)
 /** 拖放到模块板最左 / 最右边缘的命中条带宽度。 */
 const EDGE_BAND = 40
 const board = ref<HTMLElement>()
@@ -227,7 +228,10 @@ function getModuleRect(id: ModuleId): DOMRect | null {
   const rect = panelElement(id)?.getBoundingClientRect()
   return rect && rect.width > 0 && rect.height > 0 ? rect : null
 }
-defineExpose({ reveal: revealModule, getModuleRect })
+function getSettingsRect(id: ModuleId): DOMRect | null {
+  return panelElement(id)?.querySelector('.module-settings-button')?.getBoundingClientRect() ?? null
+}
+defineExpose({ reveal: revealModule, getModuleRect, getSettingsRect })
 
 /** 窗口尺寸变化时，从当前画面矩形平滑缩放到新的布局矩形。 */
 function animateBoardResize(previous: Map<ModuleId, DOMRect>) {
@@ -638,6 +642,7 @@ onBeforeUnmount(() => {
         :title="moduleById(slot.id).title"
         :icon="moduleById(slot.id).icon"
         :help="moduleById(slot.id).help"
+        :has-settings="!!moduleById(slot.id).settings"
         :can-remove="true"
         :dragging="drag?.id === slot.id"
         :active="activeModule === slot.id"
@@ -645,6 +650,7 @@ onBeforeUnmount(() => {
         @activate="activateModule(slot.id)"
         @drag-start="startDrag(slot.id, $event)"
         @remove="emit('remove', slot.id)"
+        @settings="emit('settings', slot.id)"
         @toggle-maximize="toggleMaximize(slot.id)"
       >
         <template v-if="moduleById(slot.id).titleExtra" #subtitle>
