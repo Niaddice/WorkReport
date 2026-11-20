@@ -1,0 +1,20 @@
+{
+  "files": {
+    "journal": {
+      "directory": "日报",
+      "filenameTemplate": "日报_{date}"
+    }
+  },
+  "appearance": {
+    "scale": 110,
+    "rail": "left"
+  },
+  "database": {
+    "defaultFormat": "md"
+  },
+  "ui": {
+    "axis": "column",
+    "order": ["calendar", "editor", "history"],
+    "skin": "jade"
+  }
+}

@@ -1,0 +1,52 @@
+name: GPUI Prototype
+
+on:
+  push:
+    branches: [feature-gpui, main, dev]
+    paths:
+      - 'src-gpui/**'
+      - 'src-tauri/core/**'
+      - 'fixtures/gpui-migration/**'
+      - 'shared/calendar/**'
+      - '.github/workflows/gpui-prototype.yml'
+  pull_request:
+    paths:
+      - 'src-gpui/**'
+      - 'src-tauri/core/**'
+      - 'fixtures/gpui-migration/**'
+      - 'shared/calendar/**'
+      - '.github/workflows/gpui-prototype.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: gpui-prototype-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  RUSTUP_TOOLCHAIN: '1.99.1'
+
+jobs:
+  check:
+    name: GPUI 编译检查 (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2025]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: 安装 Rust 工具链
+        run: rustup toolchain install ${{ env.RUSTUP_TOOLCHAIN }} --profile minimal
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-gpui
+      - name: 安装 Linux 系统依赖
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config libfontconfig-dev libwayland-dev libxkbcommon-x11-dev libx11-xcb-dev
+      - name: 检查 GPUI 原型
+        run: cargo check --manifest-path src-gpui/Cargo.toml --locked

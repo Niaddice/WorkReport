@@ -2,6 +2,7 @@ node_modules/
 dist/
 src-tauri/target/
 src-tauri/gen/
+src-gpui/target/
 .DS_Store
 *.log
 test-results/

@@ -182,7 +182,7 @@ pub fn read(root: &Path, date: &str, id: &str) -> Result<String, String> {
     fs::read_to_string(&path).map_err(|error| format!("无法读取历史版本：{error}"))
 }
 
-fn validate_date(date: &str) -> Result<(), String> {
+pub(super) fn validate_date(date: &str) -> Result<(), String> {
     if date.len() != 8 || !date.bytes().all(|byte| byte.is_ascii_digit()) {
         return Err("日报日期必须为 yyyymmdd 格式".into());
     }
@@ -192,7 +192,7 @@ fn validate_date(date: &str) -> Result<(), String> {
 }
 
 /// 文件名格式：毫秒时间戳-8 位内容哈希.扩展名。
-fn parse_id(id: &str) -> Option<(u64, Format)> {
+pub(super) fn parse_id(id: &str) -> Option<(u64, Format)> {
     let (stamp, rest) = id.split_once('-')?;
     if stamp.len() != 13 || !stamp.bytes().all(|byte| byte.is_ascii_digit()) {
         return None;

@@ -6988,18 +6988,13 @@ dependencies = [
 name = "work-report"
 version = "0.1.8"
 dependencies = [
- "calamine",
- "chrono",
- "encoding_rs",
  "hex",
  "keyring",
- "quick-xml 0.41.0",
  "reqwest",
  "ring",
  "serde",
  "serde_json",
  "sha2 0.10.9",
- "sqlx",
  "tauri",
  "tauri-build",
  "tauri-plugin-clipboard-manager",
@@ -7007,6 +7002,28 @@ dependencies = [
  "tauri-plugin-opener",
  "tauri-plugin-process",
  "tauri-plugin-updater",
+ "tempfile",
+ "tokio",
+ "tokio-util",
+ "umya-spreadsheet",
+ "uuid",
+ "workreport-core",
+ "zeroize",
+]
+
+[[package]]
+name = "workreport-core"
+version = "0.1.0"
+dependencies = [
+ "calamine",
+ "chrono",
+ "encoding_rs",
+ "quick-xml 0.41.0",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "sqlx",
  "tempfile",
  "tokio",
  "tokio-util",

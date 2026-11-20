@@ -12,6 +12,11 @@ use std::{
 };
 use tempfile::NamedTempFile;
 
+pub(super) const FILE_REVISION_CONFLICT: &str =
+    "文件已被其他程序修改。请先复制当前草稿，再重新载入磁盘内容，以免覆盖修改。";
+const CREATE_LOCK_FILE: &str = ".workreport-create.lock";
+const CREATE_BUSY: &str = "另一个日报正在创建，请稍后重试。";
+
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum Format {
@@ -33,7 +38,7 @@ pub struct WorkspaceInfo {
     pub path: String,
     pub name: String,
 }
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Entry {
     pub date: String,
@@ -245,7 +250,7 @@ fn build_search_snippet(content: &str, terms: &[String]) -> String {
     }
     preview_text(content)
 }
-fn entry_preview(path: &Path) -> String {
+pub(super) fn entry_preview(path: &Path) -> String {
     let file = match fs::File::open(path) {
         Ok(file) => file,
         Err(_) => return "无法读取预览".into(),
@@ -266,7 +271,15 @@ fn entry_preview(path: &Path) -> String {
     preview_text(content)
 }
 impl Workspace {
-    pub fn open(path: &str) -> Result<Self, String> {
+    pub fn open(path: impl AsRef<Path>) -> Result<Self, String> {
+        Self::open_with_access(path.as_ref(), false)
+    }
+
+    pub(super) fn open_file_preview(path: &Path) -> Result<Self, String> {
+        Self::open_with_access(path, true)
+    }
+
+    fn open_with_access(path: &Path, preview: bool) -> Result<Self, String> {
         let root = fs::canonicalize(path).map_err(|error| {
             if error.kind() == std::io::ErrorKind::NotFound {
                 "工作空间目录已不存在，请重新选择文件夹。".to_string()
@@ -277,11 +290,27 @@ impl Workspace {
         if !root.is_dir() {
             return Err("请选择一个文件夹作为工作空间".into());
         }
-        NamedTempFile::new_in(&root).map_err(io_error)?;
-        let stored = crate::settings::load(&root.join(crate::settings::FILE_NAME))?.unwrap_or_default();
+        let settings_path = root.join(crate::settings::FILE_NAME);
+        if preview {
+            match fs::symlink_metadata(&settings_path) {
+                Ok(metadata) if !metadata.is_file() || metadata.file_type().is_symlink() => {
+                    return Err("设置文件 workreport.json 不是普通文件".into());
+                }
+                Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
+                    return Err(format!("无法读取设置文件 workreport.json：{error}"));
+                }
+                _ => {}
+            }
+        } else {
+            NamedTempFile::new_in(&root).map_err(io_error)?;
+        }
+        let stored = crate::settings::load(&settings_path)?.unwrap_or_default();
         let file_settings = file_rules::effective(&stored);
         let database_settings = stored.database;
-        let connection = if database_settings.enabled {
+        if preview && database_settings.enabled && database_settings.mode == Mode::Database {
+            return Err("此工作空间使用仅数据库存储，无法预览本地日报文件。".into());
+        }
+        let connection = if !preview && database_settings.enabled {
             Some(database::run_blocking(|| Database::connect(&root, &database_settings, &database_settings.workspace_id)))
         } else { None };
         let (database_pool, database_error) = match connection {
@@ -360,7 +389,41 @@ impl Workspace {
         file_rules::register(&self.root, ManagedFile::journal(&relative, date)?)
     }
 
-    fn entry_path(&self, date: &str, format: Format) -> Result<PathBuf, String> {
+    fn lock_journal_creation(&self) -> Result<fs::File, String> {
+        let path = self.root.join(CREATE_LOCK_FILE);
+        match fs::symlink_metadata(&path) {
+            Ok(metadata) if !metadata.is_file() || metadata.file_type().is_symlink() => {
+                return Err("日报创建锁必须是工作空间内的普通文件".into());
+            }
+            Err(error) if error.kind() != std::io::ErrorKind::NotFound => return Err(io_error(error)),
+            _ => {}
+        }
+        let lock = fs::OpenOptions::new().read(true).write(true).create(true).truncate(false)
+            .open(&path).map_err(io_error)?;
+        let opened = lock.metadata().map_err(io_error)?;
+        let current = fs::symlink_metadata(&path).map_err(io_error)?;
+        if !opened.is_file() || !current.is_file() || current.file_type().is_symlink() {
+            return Err("日报创建锁必须是工作空间内的普通文件".into());
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            if opened.dev() != current.dev() || opened.ino() != current.ino() {
+                return Err("日报创建锁已变化，请稍后重试。".into());
+            }
+        }
+        match lock.try_lock() {
+            Ok(()) => {}
+            Err(fs::TryLockError::WouldBlock) => return Err(CREATE_BUSY.into()),
+            Err(fs::TryLockError::Error(error)) => return Err(io_error(error)),
+        }
+        // Keep the file in place: deleting it lets another process lock a
+        // different inode. The OS releases this lock when the File drops or
+        // the process exits, including an interrupted creation.
+        Ok(lock)
+    }
+
+    pub(super) fn entry_path(&self, date: &str, format: Format) -> Result<PathBuf, String> {
         valid_date(date)?;
         if let Some(cached) = self.index.get(date).filter(|cached| cached.format == format) {
             let path = self.checked_journal_path(cached.path.clone())?;
@@ -485,7 +548,11 @@ impl Workspace {
     }
     fn read_file(&self, date: &str, format: Format) -> Result<Document, String> {
         let path = self.entry_path(date, format)?;
-        let content = fs::read_to_string(&path).map_err(|error| {
+        self.read_file_at(date, format, &path)
+    }
+
+    pub(super) fn read_file_at(&self, date: &str, format: Format, path: &Path) -> Result<Document, String> {
+        let content = fs::read_to_string(path).map_err(|error| {
             if error.kind() == std::io::ErrorKind::InvalidData {
                 "日报文件不是 UTF-8 编码，请在外部编辑器中转换后再打开".into()
             } else {
@@ -530,37 +597,61 @@ impl Workspace {
             self.remember(&document);
             return Ok(document);
         }
-        let directory = path.parent().ok_or("无法确定日报目录")?;
-        let relative = file_rules::relative_path(&self.root, directory)?;
-        let directory = file_rules::safe_directory(&self.root, &relative, true)?;
-        // Record identity before publishing, so even an interrupted write remains discoverable.
-        self.register_journal(&path, date)?;
-        let mut temp = NamedTempFile::new_in(&directory).map_err(io_error)?;
-        temp.write_all(content.as_bytes()).map_err(io_error)?;
-        temp.as_file().sync_all().map_err(io_error)?;
-        match temp.persist_noclobber(&path) {
-            Ok(_) => {}
-            Err(error) if error.error.kind() == std::io::ErrorKind::AlreadyExists => {}
-            Err(error) => return Err(io_error(error.error)),
-        }
+        self.publish_new_file(&path, date, content, false)?;
         let document = self.read_file(date, format)?;
         self.remember(&document);
         Ok(document)
     }
-    fn save_file(
+
+    fn publish_new_file(&self, path: &Path, date: &str, content: &str, strict: bool) -> Result<(), String> {
+        let directory = path.parent().ok_or("无法确定日报目录")?;
+        let relative = file_rules::relative_path(&self.root, directory)?;
+        let directory = file_rules::safe_directory(&self.root, &relative, true)?;
+        // Record identity before publishing, so even an interrupted write remains discoverable.
+        self.register_journal(path, date)?;
+        let mut temp = NamedTempFile::new_in(&directory).map_err(io_error)?;
+        temp.write_all(content.as_bytes()).map_err(io_error)?;
+        temp.as_file().sync_all().map_err(io_error)?;
+        match temp.persist_noclobber(path) {
+            Ok(_) => {}
+            Err(error) if error.error.kind() == std::io::ErrorKind::AlreadyExists => {
+                if strict { return Err(FILE_REVISION_CONFLICT.into()); }
+            }
+            Err(error) => return Err(io_error(error.error)),
+        }
+        Ok(())
+    }
+
+    pub(super) fn create_local_at(
         &mut self,
         date: &str,
         format: Format,
         content: &str,
-        expected_revision: &str,
+        automatic: bool,
+        path: &Path,
     ) -> Result<Document, String> {
-        let path = self.entry_path(date, format)?;
-        let current = self.read_file(date, format)?;
-        if current.revision != expected_revision {
-            return Err(
-                "文件已被其他程序修改。请先复制当前草稿，再重新载入磁盘内容，以免覆盖修改。".into(),
-            );
+        let _creation_lock = self.lock_journal_creation()?;
+        let path = self.checked_journal_path(path.to_path_buf())?;
+        let other = match format { Format::Md => Format::Txt, Format::Txt => Format::Md };
+        if self.managed_journal_files()?.iter().any(|record| record.date == date)
+            || path.exists() || self.entry_path(date, other)?.exists() {
+            return Err(FILE_REVISION_CONFLICT.into());
         }
+        let was_pending = self.begin_backup();
+        self.publish_new_file(&path, date, content, true)?;
+        let document = Document {
+            date: date.into(),
+            filename: path.file_name().ok_or("日报文件名无效")?.to_string_lossy().into_owned(),
+            format,
+            content: content.into(),
+            revision: revision(content),
+            backup_warning: self.backup_warning(),
+        };
+        self.remember(&document);
+        self.record_history_with_mode(date, format, content, automatic);
+        Ok(self.backup_document(document, was_pending))
+    }
+    fn replace_file_at(content: &str, path: &Path) -> Result<(), String> {
         let directory = path
             .parent()
             .ok_or_else(|| "无法确定日报目录".to_string())?
@@ -569,9 +660,7 @@ impl Workspace {
         temp.write_all(content.as_bytes()).map_err(io_error)?;
         temp.as_file().sync_all().map_err(io_error)?;
         temp.persist(path).map_err(|error| io_error(error.error))?;
-        let document = self.read_file(date, format)?;
-        self.remember(&document);
-        Ok(document)
+        Ok(())
     }
     fn switch_file_format(
         &mut self,
@@ -655,6 +744,10 @@ impl Workspace {
     }
 
     pub fn database_settings(&self) -> &DatabaseSettings { &self.database_settings }
+
+    pub(super) fn journal_file_rule(&self) -> &file_rules::Rule {
+        &self.file_settings.journal
+    }
 
     /// A disconnected database workspace must still open so its settings can be repaired.
     /// Document operations remain unavailable rather than silently creating local files.
@@ -938,6 +1031,7 @@ impl Workspace {
             self.record_history(date, format, content);
             return self.document_from_record(record);
         }
+        let _creation_lock = self.lock_journal_creation()?;
         let was_pending = self.begin_backup();
         let document = self.create_file_with_content(date, format, content)?;
         self.record_history(date, format, content);
@@ -957,8 +1051,29 @@ impl Workspace {
             self.record_history_with_mode(date, format, content, automatic);
             return self.document_from_record(record);
         }
+        let path = self.entry_path(date, format)?;
+        self.save_local_at(date, format, content, expected_revision, automatic, &path)
+    }
+
+    pub(super) fn save_local_at(
+        &mut self,
+        date: &str,
+        format: Format,
+        content: &str,
+        expected_revision: &str,
+        automatic: bool,
+        path: &Path,
+    ) -> Result<Document, String> {
+        let path = self.checked_journal_path(path.to_path_buf())?;
+        let mut document = self.read_file_at(date, format, &path)?;
+        if document.revision != expected_revision {
+            return Err(FILE_REVISION_CONFLICT.into());
+        }
         let was_pending = self.begin_backup();
-        let document = self.save_file(date, format, content, expected_revision)?;
+        Self::replace_file_at(content, &path)?;
+        document.content = content.to_owned();
+        document.revision = revision(content);
+        self.remember(&document);
         self.record_history_with_mode(date, format, content, automatic);
         Ok(self.backup_document(document, was_pending))
     }
@@ -1394,6 +1509,116 @@ mod tests {
         files.journal.filename_template = template.into();
         let files = file_rules::normalize(workspace.root(), &files).unwrap();
         workspace.accept_file_settings(files);
+    }
+
+    #[test]
+    fn journal_creation_lock_is_nonblocking_and_released_when_the_owner_exits() {
+        const ROOT_ENV: &str = "WORKREPORT_TEST_CREATE_LOCK_ROOT";
+        const EXIT_ENV: &str = "WORKREPORT_TEST_CREATE_LOCK_EXIT";
+        const TEST_NAME: &str = "workspace::tests::journal_creation_lock_is_nonblocking_and_released_when_the_owner_exits";
+
+        if let Some(root) = std::env::var_os(ROOT_ENV) {
+            let workspace = Workspace::open(PathBuf::from(root)).unwrap();
+            if std::env::var_os(EXIT_ENV).is_some() {
+                let _creation_lock = workspace.lock_journal_creation().unwrap();
+                // Exit without running File::drop to verify OS cleanup.
+                std::process::exit(0);
+            }
+            assert_eq!(workspace.lock_journal_creation().unwrap_err(), CREATE_BUSY);
+            return;
+        }
+
+        let (directory, mut workspace) = setup();
+        let lock = workspace.lock_journal_creation().unwrap();
+        let independent = fs::OpenOptions::new().read(true).write(true)
+            .open(directory.path().join(CREATE_LOCK_FILE)).unwrap();
+        assert!(matches!(independent.try_lock(), Err(fs::TryLockError::WouldBlock)));
+        assert_eq!(workspace.create_with_content("20261120", Format::Md, "竞争草稿").unwrap_err(), CREATE_BUSY);
+        assert!(!directory.path().join("2026").exists());
+
+        let child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", TEST_NAME]).env(ROOT_ENV, directory.path()).output().unwrap();
+        assert!(child.status.success(), "{}", String::from_utf8_lossy(&child.stderr));
+        drop(lock);
+        let child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", TEST_NAME]).env(ROOT_ENV, directory.path())
+            .env(EXIT_ENV, "1").output().unwrap();
+        assert!(child.status.success(), "{}", String::from_utf8_lossy(&child.stderr));
+        independent.try_lock().unwrap();
+        drop(independent);
+
+        let saved = workspace.create_with_content("20261120", Format::Txt, "锁释放后保存").unwrap();
+        assert_eq!(saved.content, "锁释放后保存");
+        assert!(directory.path().join(CREATE_LOCK_FILE).is_file());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn journal_creation_rejects_a_symlink_lock_without_touching_the_target() {
+        let (directory, mut workspace) = setup();
+        let outside = TempDir::new().unwrap();
+        let target = outside.path().join("outside.txt");
+        fs::write(&target, "保留原文").unwrap();
+        std::os::unix::fs::symlink(&target, directory.path().join(CREATE_LOCK_FILE)).unwrap();
+
+        assert!(workspace.create_with_content("20261120", Format::Md, "不写入").unwrap_err().contains("普通文件"));
+        assert_eq!(fs::read_to_string(&target).unwrap(), "保留原文");
+        assert!(!directory.path().join("2026").exists());
+    }
+
+    #[test]
+    fn gpui_migration_fixture_preserves_journal_identity_and_history() {
+        let fixture =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/gpui-migration/workspace");
+        let dir = TempDir::new().unwrap();
+        let journals = [
+            ("20261117", Format::Md, "日报/2026/旧版交接.md"),
+            ("20261118", Format::Txt, "2026/20261118.txt"),
+            ("20261119", Format::Md, "日报/2026/日报_20261119.md"),
+        ];
+        let snapshots = [
+            ".history/20261119/1795068300000-68a5053c.md",
+            ".history/20261119/1795051200000-cd476556.md",
+        ];
+        for relative in [crate::settings::FILE_NAME, file_rules::CATALOG_FILE]
+            .into_iter()
+            .chain(journals.iter().map(|(_, _, relative)| *relative))
+            .chain(snapshots)
+        {
+            let destination = dir.path().join(relative);
+            fs::create_dir_all(destination.parent().unwrap()).unwrap();
+            fs::copy(fixture.join(relative), &destination).unwrap();
+        }
+
+        let mut workspace = Workspace::open(dir.path().to_str().unwrap()).unwrap();
+        let entries = workspace.list().unwrap();
+        assert_eq!(entries.len(), journals.len());
+        for (entry, (date, format, relative)) in entries.iter().zip(journals) {
+            let stored_path = dir.path().join(relative);
+            let filename = stored_path.file_name().unwrap().to_str().unwrap();
+            assert_eq!(
+                (entry.date.as_str(), entry.format, entry.filename.as_str()),
+                (date, format, filename)
+            );
+
+            let document = workspace.read(date, format).unwrap();
+            let original = fs::read(fixture.join(relative)).unwrap();
+            assert_eq!(document.filename, filename);
+            assert_eq!(document.content.as_bytes(), original);
+            assert_eq!(fs::read(stored_path).unwrap(), original);
+        }
+
+        let versions = crate::history::list(workspace.root(), Some("20261119")).unwrap();
+        assert_eq!(versions.len(), snapshots.len());
+        for (version, relative) in versions.iter().zip(snapshots) {
+            let path = fixture.join(relative);
+            assert_eq!(version.id, path.file_name().unwrap().to_str().unwrap());
+            assert_eq!(version.format, Format::Md);
+            assert_eq!(
+                crate::history::read(workspace.root(), &version.date, &version.id).unwrap(),
+                fs::read_to_string(path).unwrap()
+            );
+        }
     }
 
     #[test]

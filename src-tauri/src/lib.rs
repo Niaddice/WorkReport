@@ -1,31 +1,17 @@
-mod ai;
-mod appearance;
-mod database;
-mod excel;
-mod git;
-mod git_auth;
 mod git_credentials;
 mod git_install;
 mod github_auth;
-mod git_client;
-mod history;
-mod holidays;
-mod report_export;
-mod settings;
-mod summary;
-mod ui;
-mod updates;
 mod network;
-mod workspace;
-mod file_rules;
-mod directory_ops;
-mod workspace_document;
-mod file_migration;
+mod updates;
 
 use std::{fs, io::Write, sync::{Arc, Mutex}};
 use tauri::{Emitter, Manager, State};
 use tauri_plugin_opener::OpenerExt;
-use workspace::{DailyActivity, Document, Entry, FileNode, Format, Preview, SearchResultItem, Workspace, WorkspaceInfo};
+use workreport_core::{
+    ai, appearance, database, directory_ops, excel, file_migration, file_rules, git, git_auth,
+    git_client, history, holidays, settings, summary, ui, workspace, workspace_document,
+    workspace::{DailyActivity, Document, Entry, FileNode, Format, Preview, SearchResultItem, Workspace, WorkspaceInfo},
+};
 
 #[derive(Default)]
 struct AppState(Arc<Mutex<Option<Workspace>>>);
@@ -1626,7 +1612,7 @@ mod excel_integration_tests {
         let decision = file_migration::Confirmation { token: plan.token, rename_existing: Default::default() };
         let saved = save_workspace_settings_confirmed(&mut workspace, root.path().to_str().unwrap(), proposed, Some(&decision), true).unwrap();
         assert_eq!(saved.summary.output_directory, "总结");
-        assert_eq!(workspace.file_settings(), &files);
+        assert_eq!(saved.files.as_ref(), Some(&files));
         assert_eq!(workspace.read("20261031", Format::Md).unwrap().filename, "20261031.md");
         assert!(root.path().join("日报/2026/20261031.md").is_file());
         assert_eq!(workspace.create_with_content("20261101", Format::Md, "new content").unwrap().filename, "工作_20261101.md");

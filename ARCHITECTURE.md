@@ -9,14 +9,14 @@ Vue 界面层      AppRail / ModuleBoard / ModulePanel / 模块内容组件 / �
       │
 状态编排层      useJournal  useAi  useExcel  useSummaryOutput  useAppearance  useModuleLayout
       │
-IPC（38 个）    文件读写 · 历史版本 · 模块布局 · AI 请求 · Excel 两阶段 · 设置与假日
+Tauri IPC       文件读写 · 历史版本 · 模块布局 · AI 请求 · Excel 两阶段 · 设置与假日
       │
-Rust 领域层     workspace  history  ui  ai  excel  database  holidays  settings  summary  appearance
+workreport-core workspace  history  ui  ai  excel  database  holidays  settings  summary  appearance
       │
 持久化          年份目录文件 / .history 版本快照 / SQLite / MySQL / PostgreSQL / 外部 AI 与 holiday-cn
 ```
 
-前端不直接访问文件系统或网络：所有 IO 都通过 `invoke` 交给 Rust，WebView 的 CSP 只允许 `self` 与 `ipc:`。
+Vue 通过 `invoke` 将文件和网络操作交给 Tauri 适配层，WebView 的 CSP 只允许 `self` 与 `ipc:`。`src-tauri/src/` 负责桌面插件、命令入口和跨用例编排，`src-tauri/core/` 实现数据格式、业务规则和持久化。GPUI 原型通过独立清单直接使用 `workreport-core` 的 Rust 接口。
 
 ## 模块化拖放界面
 
@@ -71,13 +71,13 @@ save_ui_preferences → workreport.json 的 ui.layout（原子写入）
 | `src/modules/useModuleLayout.ts`           | 布局状态、操作与串行持久化                                                                                      |
 | `src/lib/useJournal.ts`                    | 日报草稿、串行自动保存、撤销栈、格式切换、索引与预览失效                                                        |
 | `src/lib/useExcel.ts`                      | Excel 设置、日期范围校验、预览与确认两步调用                                                                    |
-| `src-tauri/src/workspace.rs`               | 年份目录索引、按需预览、原子保存、冲突检测、双存储与迁移                                                        |
-| `src-tauri/src/history.rs`                 | 日报版本快照：内容去重、按容量上限清理最旧日期、每天 100 份上限                                                 |
-| `src-tauri/src/ui.rs`                      | 模块布局偏好：layout 树透传、皮肤、旧布局迁移                                                                   |
-| `src-tauri/src/ai.rs`                      | CLI 检测与调用、HTTP 兼容接口、取消与超时、提示词拼装                                                           |
-| `src-tauri/src/excel.rs`                   | 模板解析、AI 填表计划校验、样式写入、预览缓存与发布                                                             |
-| `src-tauri/src/database.rs`                | SQLx 三库连接、工作空间隔离、按 revision 写入                                                                   |
-| `src-tauri/src/settings.rs`                | `workreport.json` 一次性读写，临时文件 + `persist` 原子替换                                                     |
+| `src-tauri/core/src/workspace.rs`          | 年份目录索引、按需预览、原子保存、冲突检测、双存储与迁移                                                        |
+| `src-tauri/core/src/history.rs`            | 日报版本快照：内容去重、按容量上限清理最旧日期、每天 100 份上限                                                 |
+| `src-tauri/core/src/ui.rs`                 | 模块布局偏好：layout 树透传、皮肤、旧布局迁移                                                                   |
+| `src-tauri/core/src/ai.rs`                 | CLI 检测与调用、HTTP 兼容接口、取消与超时、提示词拼装                                                           |
+| `src-tauri/core/src/excel.rs`              | 模板解析、AI 填表计划校验、样式写入、预览缓存与发布                                                             |
+| `src-tauri/core/src/database.rs`           | SQLx 三库连接、工作空间隔离、按 revision 写入                                                                   |
+| `src-tauri/core/src/settings.rs`           | `workreport.json` 一次性读写，临时文件 + `persist` 原子替换                                                     |
 
 基础组件样式位于 `src/style.css`，语义配色位于 `src/skins.css`；`src/main.ts` 最后加载 `src/desktop.css`，统一 Islands 外壳、工具窗口、Island 标签、设置与弹窗层级。标签容器通过 `.island-tabs` 共享视觉规范，保留各组件原有的 ARIA 与键盘交互；Git 等独立组件的局部 scoped 样式只负责内部布局。模块样式使用 `.module-*`、`.overview-*`、`.history-module-*`、`.summary-module-*`、`.excel-module-*` 前缀。
 
@@ -124,10 +124,10 @@ flush() → 若已有保存任务则排队 → 循环直到 draft 与已保存�
 
 ## 测试策略
 
-| 层                         | 数量 | 覆盖重点                                                                                                                                                                                                                                                                             |
-| -------------------------- | ---- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| 前端（Vitest）             | 280  | 分栏树归一化/迁移/几何、PointerEvent 拖放分栏与预览、间隙拖动比例、模块面板/模块板、布局动画、顶部 Message、历史/总结/Excel 内嵌模块、右侧功能栏集成、日历与农历、保存串行化、设置草稿、模块设置入口与弹窗（打开、保存载荷、校验失败、未保存确认、前往全局设置）、AI 生命周期、Excel |
-| Rust（`cargo test --lib`） | 165  | 路径穿越与符号链接、原子保存、冲突、双存储与迁移回滚、Excel 预览与发布、历史容量清理、UI 偏好迁移、AI 模拟接口                                                                                                                                                                       |
+| 层                          | 覆盖重点                                                                                                                                                                                                                                                                             |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 前端（Vitest）              | 分栏树归一化/迁移/几何、PointerEvent 拖放分栏与预览、间隙拖动比例、模块面板/模块板、布局动画、顶部 Message、历史/总结/Excel 内嵌模块、右侧功能栏集成、日历与农历、保存串行化、设置草稿、模块设置入口与弹窗（打开、保存载荷、校验失败、未保存确认、前往全局设置）、AI 生命周期、Excel |
+| Rust（`npm run test:rust`） | 共享核心和 Tauri 命令编排，包括路径穿越与符号链接、原子保存、冲突、双存储与迁移回滚、Excel 预览与发布、历史容量清理、UI 偏好迁移及 AI 模拟接口                                                                                                                                       |
 
 `tests/appModules.test.ts` 在模拟的 Tauri IPC 下打开工作空间、从右侧功能栏添加模块并核对写回的分栏布局载荷；`tests/inlineModules.test.ts` 覆盖历史版本预览、总结准备与内嵌面板、Excel 预览内嵌；`tests/moduleBoard.test.ts` 用真实 PointerEvent 覆盖拖放分栏、半区预览、Escape 取消、间隙拖动比例与浮层放大/还原；`tests/layout.test.ts` 覆盖几何与迁移纯函数；`tests/app.test.ts` 覆盖首页骨架、工作空间引导与设置页切换；`tests/moduleSettingsDialog.test.ts` 覆盖模块设置入口与弹窗，`tests/moduleSettings*.test.ts` 覆盖六个模块设置内容组件的草稿与校验。另外用无头 Chromium + CDP 做过拖动/键盘/取消的渲染验收，原生 WebKit 窗口仍建议人工复核。
 

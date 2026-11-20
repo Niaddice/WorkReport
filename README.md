@@ -226,7 +226,7 @@ npm run app:dev
 ```sh
 npm run build          # TypeScript 检查及前端构建
 npm test               # 日历、模块布局与拖放、设置草稿、存储配置、保存、格式切换及 AI 预览生命周期
-npm run test:rust      # 文件边界、数据库存储、格式切换、AI 配置与本地模拟接口
+npm run test:rust      # 共享 Rust 核心和 Tauri 适配层测试
 npm run lint           # ESLint（Vue 3 + TypeScript）
 npm run format         # Prettier 格式化
 npm run verify         # lint、格式检查、构建与前端测试一次跑完
@@ -236,7 +236,9 @@ npm run app:build      # 桌面安装包
 
 推送与合并请求会执行 `.github/workflows/ci.yml`：前端规范检查、类型检查、构建与单元测试，以及 Rust 侧单元与集成测试。
 
-macOS `.app` 输出到 `src-tauri/target/release/bundle/macos/`。`npm run dev` 仅提供浏览器界面预览；工作空间、剪贴板、CLI 和 AI 设置需要 Tauri 桌面环境。
+`src-tauri` 下的 Cargo workspace 默认测试 `workreport-core` 和 Tauri 适配层。GPUI 原型使用独立的 `src-gpui/Cargo.toml` 和锁文件，并以路径依赖复用 `workreport-core`。 [GPUI 原型开发说明](src-gpui/README.md)
+
+Tauri 的 macOS `.app` 输出到 `src-tauri/target/release/bundle/macos/`。`npm run dev` 提供 Vue 界面的浏览器预览，使用该界面的工作空间、剪贴板、CLI 和 AI 设置需要启动 Tauri 桌面应用。
 
 ## 应用自动更新
 
@@ -332,10 +334,11 @@ APPLE_TEAM_ID="TEAMID" \
 - `src/components/CalendarPane.vue`：日历；`JournalEditor.vue`：两种格式编辑和文字操作；`RangeOverview.vue`：框选合并预览。
 - `src/components/SettingsView.vue`：全局设置页（应用级分类）与手动统一保存；`DatabaseSettings.vue`：数据库连接与复制迁移；`ConfirmDialog.vue`、`SettingsLeaveDialog.vue`：二次确认。
 - `src/lib/useJournal.ts`：串行自动保存、文件格式切换和草稿保护；`src/lib/ai.ts`：AI 设置、请求及取消。
-- `src-tauri/src/workspace.rs`：按年目录索引、元数据缓存、按需预览、原子保存和格式切换，拒绝路径穿越、符号链接及重复格式。
-- `src-tauri/src/ui.rs`：模块化界面偏好（分栏树、皮肤）及旧布局迁移。
-- `src-tauri/src/ai.rs`：CLI 检测与调用、配置持久化、自定义 HTTP 接口及超时取消。
-- `src-tauri/src/settings.rs`：工作空间设置的读写与原子保存（`workreport.json`，界面与 AI 共用一份文件）。
-- `src-tauri/src/database.rs`：SQLite、MySQL、PostgreSQL 连接、工作空间隔离和日报读写。
+- `src-tauri/src/lib.rs` 负责 Tauri IPC、桌面插件和流程调度。`src-tauri/core/` 提供两个桌面入口共用的 Rust 业务实现。
+- `src-tauri/core/src/workspace.rs`：按年目录索引、元数据缓存、按需预览、原子保存和格式切换，拒绝路径穿越、符号链接及重复格式。
+- `src-tauri/core/src/ui.rs`：模块化界面偏好（分栏树、皮肤）及旧布局迁移。
+- `src-tauri/core/src/ai.rs`：CLI 检测与调用、配置持久化、自定义 HTTP 接口及超时取消。
+- `src-tauri/core/src/settings.rs`：工作空间设置的读写与原子保存（`workreport.json`，界面与 AI 共用一份文件）。
+- `src-tauri/core/src/database.rs`：SQLite、MySQL、PostgreSQL 连接、工作空间隔离和日报读写。
 
 Excel 模板输出已支持；邮件配置、独立的报告风格与模板管理、其他报告生成配置尚未包含。节假日可在日历模块的「日历设置」中手动同步，未同步年度继续使用内置安排。
