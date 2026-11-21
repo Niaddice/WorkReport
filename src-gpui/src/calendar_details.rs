@@ -63,7 +63,7 @@ impl CalendarDetails {
 
 impl Prototype {
     pub(super) fn ensure_calendar_previews(&mut self, window: &Window, cx: &mut Context<Self>) {
-        if !self.viewing_workspace || self.workspace_edit.is_some() {
+        if !self.viewing_workspace {
             return;
         }
         let Some(workspace) = &self.workspace else {

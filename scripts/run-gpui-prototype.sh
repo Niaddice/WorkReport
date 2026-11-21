@@ -74,7 +74,7 @@ build_flags=(--locked --target-dir "$target_dir")
 if [[ "$profile" == release ]]; then
   build_flags+=(--release)
 fi
-(cd "$project_dir" && env -u CARGO_BUILD_TARGET cargo build "${build_flags[@]}")
+(cd "$project_dir" && env -u CARGO_BUILD_TARGET RUSTUP_TOOLCHAIN="${RUSTUP_TOOLCHAIN:-1.99.1}" cargo build "${build_flags[@]}")
 
 mkdir -p "$bundle_dir"
 stage_dir="$(mktemp -d "$bundle_dir/.prototype.XXXXXX")"

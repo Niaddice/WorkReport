@@ -12,7 +12,7 @@ use std::{
     sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
-use tokio_util::sync::CancellationToken;
+pub use tokio_util::sync::CancellationToken;
 use umya_spreadsheet::{Border, CellValue, Color, Workbook, Worksheet};
 
 #[path = "excel_preview.rs"]
@@ -396,6 +396,152 @@ fn parse_date(value: &str) -> Result<NaiveDate, String> {
         return Err("日期无效，请重新选择日历范围".into());
     }
     Ok(date)
+}
+
+pub struct Snapshot {
+    pub file_rule: crate::file_rules::Rule,
+    pub settings: Settings,
+    pub provider: crate::ai::Provider,
+    pub content: String,
+    pub source_revision: String,
+    pub start: String,
+    pub end: String,
+}
+
+pub fn build_snapshot_with_reader<F>(
+    root: &Path,
+    workspace_path: &str,
+    stored: crate::settings::StoredSettings,
+    dates: &[String],
+    entries: &[crate::workspace::Entry],
+    mut read_entry: F,
+) -> Result<Snapshot, String>
+where
+    F: FnMut(&str, crate::workspace::Format) -> Result<crate::workspace::Document, String>,
+{
+    crate::summary::validate_workspace(root, workspace_path)?;
+    let (start, end) = validate_dates(dates)?;
+    if !stored.excel.enabled {
+        return Err("请先在设置中启用 Excel 输出".into());
+    }
+    crate::settings::validate_excel_settings(&stored.excel, &stored.ai)?;
+    let provider = crate::ai::default_provider(&stored.ai)?;
+    let mut selected = dates.to_vec();
+    selected.sort();
+    selected.dedup();
+    let mut reports = Vec::new();
+    let mut sources = Vec::new();
+    let mut content_bytes = 0;
+    for date in &selected {
+        let Some(entry) = entries.iter().find(|entry| entry.date == *date) else {
+            sources.push(json!({ "date": date, "report": null }));
+            continue;
+        };
+        let document = read_entry(date, entry.format)?;
+        sources.push(json!({
+            "date": document.date, "format": document.format, "content": document.content,
+        }));
+        if document.content.trim().is_empty() {
+            continue;
+        }
+        content_bytes += document.content.len();
+        if content_bytes > 500_000 {
+            return Err("所选日报内容超过 500 KB，请缩小范围后重试".into());
+        }
+        reports.push(json!({
+            "date": document.date,
+            "format": document.format,
+            "content": document.content,
+        }));
+    }
+    if reports.is_empty() {
+        return Err("所选日期没有可输出的日报内容".into());
+    }
+    let content = serde_json::to_string(&json!({
+        "selectedDates": selected,
+        "start": start,
+        "end": end,
+        "reports": reports,
+    }))
+    .map_err(|_| "无法准备 Excel 输出内容")?;
+    if content.len() > 500_000 {
+        return Err("所选日报内容超过 500 KB，请缩小范围后重试".into());
+    }
+    Ok(Snapshot {
+        file_rule: crate::file_rules::effective(&stored).excel,
+        settings: stored.excel,
+        provider,
+        content,
+        source_revision: format!(
+            "{:x}",
+            Sha256::digest(serde_json::to_vec(&sources).map_err(|_| "无法检查 Excel 日报内容")?)
+        ),
+        start,
+        end,
+    })
+}
+
+pub fn confirmed_content(dates: &[String], content: &str) -> Result<String, String> {
+    if content.trim().is_empty() || content.len() > 500_000 {
+        return Err("请确认需要填充的 Excel 内容，正文不能为空或超过 500 KB".into());
+    }
+    let (start, end) = validate_dates(dates)?;
+    let mut selected = dates.to_vec();
+    selected.sort();
+    selected.dedup();
+    let payload = serde_json::to_string(&json!({
+        "selectedDates": selected,
+        "start": start,
+        "end": end,
+        "confirmedContent": content,
+    }))
+    .map_err(|_| "无法准备已确认的 Excel 内容")?;
+    if payload.len() > 500_000 {
+        return Err("已确认的 Excel 内容超过 500 KB，请精简内容后重试".into());
+    }
+    Ok(payload)
+}
+
+pub fn validate_confirmation_with_reader<F>(
+    root: &Path,
+    mut stored: crate::settings::StoredSettings,
+    workspace_path: &str,
+    provenance: &Provenance,
+    entries: &[crate::workspace::Entry],
+    read_entry: F,
+) -> Result<(), String>
+where
+    F: FnMut(&str, crate::workspace::Format) -> Result<crate::workspace::Document, String>,
+{
+    let regenerate = |reason: String| format!("{reason}。请重新生成 Excel 预览");
+    if workspace_path != provenance.workspace_path {
+        return Err("工作空间已切换，请重新生成 Excel 预览".into());
+    }
+    crate::summary::validate_workspace(root, workspace_path).map_err(regenerate)?;
+    if stored.excel != provenance.settings {
+        return Err("Excel 输出设置已修改，请重新生成 Excel 预览".into());
+    }
+    if let Some(prompt) = &provenance.prompt {
+        stored.excel.prompt = prompt.clone();
+    }
+    let current = build_snapshot_with_reader(
+        root,
+        workspace_path,
+        stored,
+        &provenance.dates,
+        entries,
+        read_entry,
+    )
+    .map_err(regenerate)?;
+    if current.source_revision != provenance.source_revision {
+        return Err("所选日报内容已修改，请重新生成 Excel 预览".into());
+    }
+    let fingerprint = template_fingerprint(Path::new(provenance.settings.template_path.trim()))
+        .map_err(regenerate)?;
+    if fingerprint != provenance.template_fingerprint {
+        return Err("Excel 模板已修改，请重新生成 Excel 预览".into());
+    }
+    Ok(())
 }
 
 pub fn validate_dates(dates: &[String]) -> Result<(String, String), String> {

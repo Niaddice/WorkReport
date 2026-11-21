@@ -18,6 +18,7 @@ mod report_export;
 pub mod settings;
 pub mod summary;
 pub mod ui;
+pub mod updates;
 pub mod workspace;
 pub mod workspace_document;
 pub mod workspace_preview;

@@ -18,3 +18,21 @@ workreport-core = { path = "../src-tauri/core" }
 
 [dev-dependencies]
 gpui-kit = { version = "=0.10.0", features = ["test-support"] }
+
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 1
+
+[package.metadata.packager]
+product-name = "WorkReport"
+identifier = "com.workreport.desktop"
+publisher = "WorkReport"
+icons = [
+    "../src-tauri/icons/32x32.png",
+    "../src-tauri/icons/128x128.png",
+    "../src-tauri/icons/128x128@2x.png",
+    "../src-tauri/icons/icon.icns",
+    "../src-tauri/icons/icon.ico",
+]

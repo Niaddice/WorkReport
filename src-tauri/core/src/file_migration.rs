@@ -13,22 +13,22 @@ const FEATURES: [Feature; 3] = [Feature::Journal, Feature::Excel, Feature::Summa
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DirectoryChange {
-    feature: Feature,
-    label: String,
-    from: String,
-    to: String,
-    file_count: usize,
-    target_file_count: usize,
+    pub feature: Feature,
+    pub label: String,
+    pub from: String,
+    pub to: String,
+    pub file_count: usize,
+    pub target_file_count: usize,
 }
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FilenameChange {
-    feature: Feature,
-    label: String,
-    from: String,
-    to: String,
-    file_count: usize,
-    unrecognized_count: usize,
+    pub feature: Feature,
+    pub label: String,
+    pub from: String,
+    pub to: String,
+    pub file_count: usize,
+    pub unrecognized_count: usize,
 }
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]

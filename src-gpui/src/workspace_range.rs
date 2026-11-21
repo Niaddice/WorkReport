@@ -1,7 +1,7 @@
 use chrono::NaiveDate;
 use workreport_core::{
     workspace::{Document, Entry},
-    workspace_preview::WorkspacePreview,
+    workspace_preview::WorkspaceSession,
 };
 
 /// A read-only range keeps each document's format and exact source text.
@@ -14,7 +14,7 @@ pub(crate) struct WorkspaceRange {
 
 impl WorkspaceRange {
     pub(crate) fn read(
-        reader: &WorkspacePreview,
+        reader: &WorkspaceSession,
         entries: &[Entry],
         start: NaiveDate,
         end: NaiveDate,
@@ -98,7 +98,7 @@ mod tests {
         let config_before = fs::read(root.join(settings::FILE_NAME)).unwrap();
         let catalog_before = fs::read(root.join(file_rules::CATALOG_FILE)).unwrap();
 
-        let mut reader = WorkspacePreview::open(root).unwrap();
+        let reader = WorkspaceSession::open(root).unwrap();
         let mut entries = reader.list().unwrap();
         entries.reverse();
         let range =
@@ -140,7 +140,7 @@ mod tests {
     #[test]
     fn empty_range_keeps_selected_bounds_without_creating_journal_files() {
         let folder = tempfile::tempdir().unwrap();
-        let mut reader = WorkspacePreview::open(folder.path()).unwrap();
+        let reader = WorkspaceSession::open(folder.path()).unwrap();
         let entries = reader.list().unwrap();
         let range =
             WorkspaceRange::read(&reader, &entries, date("20261120"), date("20261122")).unwrap();
@@ -158,7 +158,7 @@ mod tests {
         let root = folder.path();
         add_file(root, "2026/20261120.txt", "有效日报");
         add_file(root, "2026/20261121.md", "即将移除");
-        let mut reader = WorkspacePreview::open(root).unwrap();
+        let reader = WorkspaceSession::open(root).unwrap();
         let entries = reader.list().unwrap();
         fs::remove_file(root.join("2026/20261121.md")).unwrap();
 

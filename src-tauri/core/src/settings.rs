@@ -86,6 +86,169 @@ pub fn save(path: &Path, settings: &StoredSettings) -> Result<(), String> {
         .map_err(|error| format!("无法保存设置文件，原设置保持不变：{}", error.error))
 }
 
+fn update_workspace_settings<F>(
+    root: &Path,
+    expected_path: &str,
+    update: F,
+) -> Result<StoredSettings, String>
+where
+    F: FnOnce(&mut StoredSettings) -> Result<(), String>,
+{
+    crate::summary::validate_workspace(root, expected_path)?;
+    let path = crate::file_rules::safe_file(root, FILE_NAME)?;
+    let mut stored = load(&path)?.unwrap_or_default();
+    update(&mut stored)?;
+    save(&path, &stored)?;
+    Ok(stored)
+}
+
+/// Validates that `root` still matches `expected_path`, checks the settings
+/// file boundary, and atomically updates only `StoredSettings::ui`.
+pub fn save_ui_preferences(
+    root: &Path,
+    expected_path: &str,
+    preferences: crate::ui::Preferences,
+) -> Result<(), String> {
+    update_workspace_settings(root, expected_path, |stored| {
+        stored.ui = Some(crate::ui::normalize(preferences));
+        Ok(())
+    })?;
+    Ok(())
+}
+
+/// Validates that `root` still matches `expected_path`, validates AI settings,
+/// and atomically updates only `StoredSettings::ai`.
+pub fn save_ai_settings(
+    root: &Path,
+    expected_path: &str,
+    ai_settings: crate::ai::Settings,
+) -> Result<(), String> {
+    crate::ai::validate(&ai_settings)?;
+    update_workspace_settings(root, expected_path, |stored| {
+        stored.ai = ai_settings;
+        Ok(())
+    })?;
+    Ok(())
+}
+
+/// Validates that `root` still matches `expected_path`, normalizes summary settings,
+/// and atomically updates only `StoredSettings::summary`.
+pub fn save_summary_settings(
+    root: &Path,
+    expected_path: &str,
+    summary_settings: crate::summary::Settings,
+) -> Result<crate::summary::Settings, String> {
+    let normalized = crate::summary::normalize_settings(root, &summary_settings)?;
+    update_workspace_settings(root, expected_path, |stored| {
+        stored.summary = normalized.clone();
+        Ok(())
+    })?;
+    Ok(normalized)
+}
+
+pub fn validate_excel_settings(
+    settings: &crate::excel::Settings,
+    ai_settings: &crate::ai::Settings,
+) -> Result<(), String> {
+    if settings.enabled {
+        crate::ai::default_provider(ai_settings)
+            .map_err(|error| format!("启用 Excel 输出需要先配置默认 AI：{error}"))?;
+    }
+    crate::excel::validate_settings(settings)?;
+    if settings.enabled {
+        let template = Path::new(settings.template_path.trim());
+        if !template.is_absolute() || !template.is_file() {
+            return Err("Excel 模板不存在，请重新选择模板文件".into());
+        }
+    }
+    Ok(())
+}
+
+pub fn effective_file_settings(
+    root: &Path,
+    stored: &StoredSettings,
+) -> Result<crate::file_rules::Settings, String> {
+    let mut files = crate::file_rules::effective(stored);
+    if stored.files.is_none() {
+        files.summary.directory =
+            crate::summary::normalize_settings(root, &stored.summary)?.output_directory;
+    }
+    Ok(files)
+}
+
+pub fn save_workspace_settings_confirmed(
+    workspace: &mut crate::workspace::Workspace,
+    workspace_path: &str,
+    mut stored: StoredSettings,
+    confirmation: Option<&crate::file_migration::Confirmation>,
+    migrate_files: bool,
+) -> Result<StoredSettings, String> {
+    crate::summary::validate_workspace(workspace.root(), workspace_path)
+        .map_err(|_| "工作空间已切换，请重新打开设置后重试".to_string())?;
+    crate::appearance::validate(&stored.appearance)?;
+    crate::ai::validate(&stored.ai)?;
+    crate::git::validate(&stored.git)?;
+    validate_editor_settings(&stored.editor)?;
+    validate_excel_settings(&stored.excel, &stored.ai)?;
+    let path = workspace.root().join(FILE_NAME);
+    let current = load(&path)?;
+    if let Some(current) = &current {
+        if current.database != *workspace.database_settings() {
+            return Err("数据库配置已被外部修改，请重新打开工作空间后重试".into());
+        }
+    }
+    if stored.ui.is_none() {
+        stored.ui = current.as_ref().and_then(|current| current.ui.clone());
+    }
+    if stored.files.is_none() {
+        stored.files = current.as_ref().and_then(|current| current.files.clone());
+    }
+    let before = current
+        .as_ref()
+        .map(|current| effective_file_settings(workspace.root(), current))
+        .transpose()?
+        .unwrap_or_default();
+    if let Some(files) = &stored.files {
+        stored.files = Some(crate::file_rules::normalize(workspace.root(), files)?);
+        stored.summary.output_directory = stored.files.as_ref().unwrap().summary.directory.clone();
+    } else {
+        stored.summary = crate::summary::normalize_settings(workspace.root(), &stored.summary)?;
+    }
+    let after = effective_file_settings(workspace.root(), &stored)?;
+    let (database_settings, connection) = workspace.prepare_database_settings(&stored.database)?;
+    stored.database = database_settings;
+    if stored.files.is_some() && migrate_files {
+        crate::file_migration::apply(workspace.root(), &before, &after, confirmation, || {
+            save(&path, &stored)
+        })?;
+    } else {
+        save(&path, &stored)?;
+    }
+    workspace.accept_file_settings(after);
+    workspace.accept_database(stored.database.clone(), connection);
+    crate::history::enforce(workspace.root(), stored.database.history_limit_bytes);
+    Ok(stored)
+}
+
+/// 将源工作空间的非日报配置（外观、AI、编辑器、摘要/Excel/Git、UI 布局/皮肤等）
+/// 同步到目标工作空间；目标工作空间保留独立的 `workspace_id` 与日报数据。
+pub fn sync_workspace_settings(
+    source_root: &Path,
+    target_root: &Path,
+) -> Result<StoredSettings, String> {
+    let mut stored = load(&source_root.join(FILE_NAME))?.unwrap_or_default();
+    stored.summary = crate::summary::normalize_settings(source_root, &stored.summary)?;
+    let mut target = crate::workspace::Workspace::open(target_root)?;
+    target.validate_open()?;
+    if target.root() == source_root {
+        return Ok(stored);
+    }
+    stored.database.workspace_id = target.database_settings().workspace_id.clone();
+    stored.ui = Some(crate::ui::normalize(stored.ui.unwrap_or_default()));
+    let target_path = target.root().to_string_lossy().into_owned();
+    save_workspace_settings_confirmed(&mut target, &target_path, stored, None, false)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

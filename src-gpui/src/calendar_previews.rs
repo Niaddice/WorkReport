@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use workreport_core::{workspace::Entry, workspace_preview::WorkspacePreview};
+use workreport_core::{workspace::Entry, workspace_preview::WorkspaceSession};
 
 /// Optional, per-day summaries. A failed day does not discard other previews.
 #[derive(Debug, Default)]
@@ -9,7 +9,7 @@ pub(crate) struct CalendarPreviews {
 }
 
 impl CalendarPreviews {
-    pub(crate) fn read(reader: &WorkspacePreview, entries: &[Entry], dates: &[String]) -> Self {
+    pub(crate) fn read(reader: &WorkspaceSession, entries: &[Entry], dates: &[String]) -> Self {
         let requested: BTreeSet<_> = dates.iter().map(String::as_str).collect();
         let values = entries
             .iter()
@@ -64,7 +64,7 @@ mod tests {
         .unwrap();
         let config = fs::read(root.join(settings::FILE_NAME)).unwrap();
         let catalog = fs::read(root.join(file_rules::CATALOG_FILE)).unwrap();
-        let mut reader = WorkspacePreview::open(root).unwrap();
+        let reader = WorkspaceSession::open(root).unwrap();
         let entries = reader.list().unwrap();
 
         let previews = CalendarPreviews::read(
@@ -100,7 +100,7 @@ mod tests {
         add_file(root, "2026/20261117.md", "有效内容 📝\n");
         add_file(root, "2026/20261118.txt", b"\xff\xfe\x00\x01");
         add_file(root, "2026/20261119.md", "待删除\n");
-        let mut reader = WorkspacePreview::open(root).unwrap();
+        let reader = WorkspaceSession::open(root).unwrap();
         let entries = reader.list().unwrap();
         fs::remove_file(root.join("2026/20261119.md")).unwrap();
 
@@ -131,7 +131,7 @@ mod tests {
         split_prefix.extend_from_slice("你".as_bytes());
         add_file(root, "2026/20261118.md", &split_prefix);
         add_file(root, "2026/20261119.txt", "# 日报\n\n \r\n");
-        let mut reader = WorkspacePreview::open(root).unwrap();
+        let reader = WorkspaceSession::open(root).unwrap();
         let entries = reader.list().unwrap();
 
         let previews = CalendarPreviews::read(
@@ -161,7 +161,7 @@ mod tests {
         let root = folder.path();
         add_file(root, "2026/20261117.md", "有效日报内容\n");
         add_file(root, "2026/20261118.txt", "原本在工作空间内\n");
-        let mut reader = WorkspacePreview::open(root).unwrap();
+        let reader = WorkspaceSession::open(root).unwrap();
         let entries = reader.list().unwrap();
         let replaced = root.join("2026/20261118.txt");
         fs::remove_file(&replaced).unwrap();

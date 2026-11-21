@@ -1,13 +1,12 @@
+use std::time::Duration;
+
 use chrono::{Datelike, NaiveDate};
 use gpui_kit::{
-    ClickEvent, ClipboardItem, Context, FontWeight, MouseButton, MouseDownEvent, MouseMoveEvent,
-    MouseUpEvent, ScrollHandle, SharedString, Window,
-    base::{Disableable, SelectableText},
-    component::{
-        ActiveTheme,
-        button::{Button, ButtonVariants},
-    },
-    div, point,
+    Animation, AnimationExt, ClickEvent, ClipboardItem, Context, ElementId, FontWeight,
+    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ScrollHandle, SharedString, Window,
+    base::{Button as FlatButton, SelectableText},
+    component::ActiveTheme,
+    div, ease_out_quint, point,
     prelude::*,
     px,
 };
@@ -18,6 +17,7 @@ use crate::{
     calendar::{CalendarDay, CalendarState, CalendarView},
     calendar_details::CalendarDetails,
     calendar_holidays::DayKind,
+    icons::{PhIcon, ph_icon},
     lunar::lunar_label,
     markdown_preview,
     workspace_range::WorkspaceRange,
@@ -46,18 +46,21 @@ fn render_day(
     entries: &[Entry],
     busy: bool,
     cx: &Context<Prototype>,
-) -> Button {
+) -> FlatButton {
     let date = day.date;
     let key = date.format("%Y%m%d").to_string();
     let recorded = entries.iter().any(|entry| entry.date == key);
     let selected = calendar.is_selected(date);
+    let is_range = calendar.is_range();
+    let (range_start, range_end) = calendar.selected_range();
+    let is_endpoint = !is_range || date == range_start || date == range_end;
     let draggable = day.in_month;
     let lunar = lunar_label(date);
     let holiday = details.holidays.metadata(date);
     let summary = (!compact && recorded).then(|| match details.previews.values.get(&key) {
         Some(Ok(value)) => value.clone(),
         Some(Err(error)) => format!("无法读取摘要：{error}"),
-        None => "正在读取摘要…".to_owned(),
+        None => "加载中…".to_owned(),
     });
     let mut label = format!(
         "{}，{}{}",
@@ -88,71 +91,250 @@ fn render_day(
     if let Some(summary) = &summary {
         label.push_str(&format!("，摘要：{summary}"));
     }
-    let secondary = if selected {
-        cx.theme().primary_foreground
-    } else {
-        cx.theme().muted_foreground
-    };
-    let mut button = Button::new(format!("calendar-day-{key}"))
-        .accessibility_label(label.clone())
-        .tooltip(label)
-        .toggled(selected)
-        .when(selected, Button::primary)
-        .when(!day.in_month && !selected, |button| {
-            button.text_color(cx.theme().muted_foreground)
-        })
-        .when(
-            day.in_month && details.holidays.is_weekend(date) && !selected,
-            |button| button.text_color(cx.theme().red),
-        )
-        .when(recorded && compact && !selected, |button| {
-            button
-                .font_weight(FontWeight::BOLD)
-                .text_color(cx.theme().primary)
-        })
-        .when(compact && holiday.is_some() && !selected, |button| {
-            button.bg(cx.theme().accent)
-        })
-        .when(date == details.today, |button| button.border_2())
+
+    let palette = crate::theme_skin::active_palette(cx);
+    let danger = cx.theme().red;
+    let primary_selected = selected && is_endpoint;
+    let middle_range = selected && !is_endpoint;
+    let is_today = date == details.today;
+    let is_weekend = details.holidays.is_weekend(date);
+
+    let mut button = FlatButton::new(format!("calendar-day-{key}"))
+        .accessibility_label(label)
+        .selected(selected)
         .disabled(busy)
         .flex_1()
-        .min_w_0()
-        .p_0()
-        .text_size(px(if compact { 10. } else { 14. }))
-        .h(px(if compact { 19. } else { 46. }));
+        .min_w_0();
+
     button = if compact {
-        button.label(date.day().to_string())
-    } else {
-        button.child(
-            div()
-                .flex()
-                .flex_col()
-                .items_center()
-                .min_w_0()
-                .gap_1()
-                .child(
+        let fg = if is_today {
+            palette.on_accent
+        } else if selected {
+            palette.accent
+        } else if is_weekend {
+            palette.text_muted
+        } else {
+            palette.text_body
+        };
+        let bg = if is_today {
+            palette.accent_fill
+        } else if selected {
+            palette.accent_soft
+        } else {
+            palette.surface_header
+        };
+        button
+            .h(px(20.))
+            .rounded(px(6.))
+            .bg(bg)
+            .hover(move |s| s.bg(palette.accent_soft))
+            .text_size(px(10.5))
+            .text_color(fg)
+            .relative()
+            .flex()
+            .flex_col()
+            .items_center()
+            .justify_center()
+            .child(date.day().to_string())
+            .when(recorded, |b| {
+                b.child(
                     div()
-                        .flex()
-                        .items_center()
-                        .gap_1()
-                        .child(format!("{}{}", date.day(), if recorded { "·" } else { "" }))
-                        .when_some(holiday.as_ref(), |row, holiday| {
-                            row.child(div().text_size(px(9.)).child(
-                                if holiday.kind == DayKind::Holiday {
-                                    "休"
-                                } else {
-                                    "班"
-                                },
-                            ))
+                        .w(px(3.))
+                        .h(px(3.))
+                        .rounded(px(1.5))
+                        .bg(if is_today {
+                            palette.on_accent
+                        } else {
+                            palette.accent
                         }),
                 )
-                .child(
+            })
+    } else {
+        let cell_bg = if primary_selected {
+            palette.accent_soft
+        } else if middle_range {
+            palette.canvas
+        } else {
+            palette.surface_header
+        };
+        let cell_border = if primary_selected {
+            palette.accent
+        } else if middle_range {
+            palette.accent_border
+        } else {
+            palette.surface_header
+        };
+        let day_num_fg = if is_today {
+            palette.on_accent
+        } else if selected {
+            palette.accent
+        } else if is_weekend {
+            palette.text_muted
+        } else {
+            palette.text
+        };
+        let lunar_text = lunar.clone().unwrap_or_default();
+        let festival_text = holiday
+            .as_ref()
+            .filter(|h| h.kind == DayKind::Holiday && !h.name.is_empty())
+            .map(|h| h.name.clone())
+            .unwrap_or_default();
+        let is_week_view = calendar.view() == CalendarView::Week;
+
+        let mut cell_btn = button
+            .h_full()
+            .min_h(px(62.))
+            .px_2()
+            .pt(px(8.))
+            .pb(px(6.))
+            .border_1()
+            .border_color(cell_border)
+            .bg(cell_bg)
+            .when(!selected, move |b| b.hover(move |s| s.bg(palette.surface)))
+            .when(!day.in_month, |b| b.opacity(0.35))
+            .flex()
+            .flex_col()
+            .justify_start()
+            .items_stretch()
+            .gap_1()
+            .overflow_hidden();
+
+        cell_btn = if is_range && selected {
+            if date == range_start && date == range_end {
+                cell_btn.rounded(px(10.))
+            } else if date == range_start {
+                cell_btn.rounded_l(px(10.)).rounded_r(px(0.))
+            } else if date == range_end {
+                cell_btn.rounded_r(px(10.)).rounded_l(px(0.))
+            } else {
+                cell_btn.rounded(px(0.))
+            }
+        } else {
+            cell_btn.rounded(px(6.))
+        };
+
+        cell_btn
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_0p5()
+                    .w_full()
+                    .min_w_0()
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .w_full()
+                            .h(px(26.))
+                            .min_w_0()
+                            .gap_1()
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap_1()
+                                    .min_w_0()
+                                    .child(
+                                        div()
+                                            .w(px(26.))
+                                            .h(px(26.))
+                                            .rounded(px(13.))
+                                            .flex_shrink_0()
+                                            .flex()
+                                            .items_center()
+                                            .justify_center()
+                                            .when(is_today, |d| d.bg(palette.accent_fill))
+                                            .text_size(px(13.5))
+                                            .font_weight(if is_today || selected {
+                                                FontWeight::SEMIBOLD
+                                            } else {
+                                                FontWeight::MEDIUM
+                                            })
+                                            .text_color(day_num_fg)
+                                            .child(date.day().to_string()),
+                                    )
+                                    .when(!lunar_text.is_empty(), |row| {
+                                        row.child(
+                                            div()
+                                                .text_size(px(10.5))
+                                                .text_color(palette.text_muted)
+                                                .truncate()
+                                                .child(lunar_text),
+                                        )
+                                    }),
+                            )
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap_1()
+                                    .flex_shrink_0()
+                                    .when_some(holiday.as_ref(), |row, holiday| {
+                                        let is_rest = holiday.kind == DayKind::Holiday;
+                                        let badge_bg = if is_rest {
+                                            danger.opacity(0.14)
+                                        } else {
+                                            palette.subtle
+                                        };
+                                        let badge_fg = if is_rest {
+                                            danger
+                                        } else {
+                                            palette.text_muted
+                                        };
+                                        row.child(
+                                            div()
+                                                .px_1()
+                                                .py(px(1.))
+                                                .rounded(px(4.))
+                                                .bg(badge_bg)
+                                                .text_size(px(9.5))
+                                                .text_color(badge_fg)
+                                                .child(if is_rest { "休" } else { "班" }),
+                                        )
+                                    }),
+                            ),
+                    )
+                    .when(!festival_text.is_empty(), |top| {
+                        top.child(
+                            div()
+                                .pl(px(4.))
+                                .text_size(px(10.))
+                                .text_color(danger)
+                                .truncate()
+                                .child(festival_text),
+                        )
+                    }),
+            )
+            .when_some(summary, |col, summary| {
+                col.child(
                     div()
-                        .text_size(px(10.))
-                        .text_color(secondary)
-                        .child(lunar.unwrap_or_default()),
-                ),
-        )
+                        .mt_1()
+                        .px(px(5.))
+                        .py(px(3.))
+                        .rounded(px(5.))
+                        .bg(palette.accent_soft)
+                        .flex()
+                        .items_start()
+                        .gap_1()
+                        .w_full()
+                        .min_w_0()
+                        .child(
+                            div()
+                                .pt(px(1.))
+                                .flex_shrink_0()
+                                .child(ph_icon(PhIcon::FileText, px(11.), palette.accent)),
+                        )
+                        .child(
+                            div()
+                                .text_size(px(10.5))
+                                .text_color(palette.accent)
+                                .when(!is_week_view, |txt| txt.truncate())
+                                .child(summary),
+                        ),
+                )
+            })
     };
     button
         .on_mouse_down(
@@ -183,22 +365,24 @@ fn render_day(
 }
 
 fn weekdays(compact: bool, cx: &Context<Prototype>) -> impl IntoElement {
+    let labels: [&str; 7] = if compact {
+        ["一", "二", "三", "四", "五", "六", "日"]
+    } else {
+        ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
+    };
     div()
         .flex()
         .gap_1()
-        .children(
-            ["一", "二", "三", "四", "五", "六", "日"]
-                .into_iter()
-                .map(|day| {
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .text_center()
-                        .text_size(px(if compact { 10. } else { 14. }))
-                        .text_color(cx.theme().muted_foreground)
-                        .child(day)
-                }),
-        )
+        .pb(px(if compact { 2. } else { 7. }))
+        .children(labels.into_iter().map(|day| {
+            div()
+                .flex_1()
+                .min_w_0()
+                .text_center()
+                .text_size(px(if compact { 10. } else { 12.5 }))
+                .text_color(cx.theme().muted_foreground)
+                .child(day)
+        }))
 }
 
 fn render_grid(
@@ -213,29 +397,40 @@ fn render_grid(
     div()
         .flex()
         .flex_col()
+        .when(!compact, |g| g.flex_1().min_h_0())
         .gap_1()
         .children(days.chunks(7).map(|week| {
-            div().flex().gap_1().children(week.iter().map(|day| {
-                if compact && !day.in_month {
-                    // Year grids keep weekday alignment without duplicate date identities.
-                    div().flex_1().min_w_0().h(px(19.)).into_any_element()
-                } else {
-                    render_day(*day, compact, calendar, details, entries, busy, cx)
-                        .into_any_element()
-                }
-            }))
+            div()
+                .flex()
+                .when(!compact, |row| row.flex_1().min_h(px(62.)))
+                .gap_1()
+                .children(week.iter().map(|day| {
+                    if compact && !day.in_month {
+                        // Year grids keep weekday alignment without duplicate date identities.
+                        div().flex_1().min_w_0().h(px(20.)).into_any_element()
+                    } else {
+                        render_day(*day, compact, calendar, details, entries, busy, cx)
+                            .into_any_element()
+                    }
+                }))
         }))
 }
 
+#[inline(never)]
 pub(super) fn render_calendar(
     presentation: &CalendarPresentation<'_>,
     entries: &[Entry],
     busy: bool,
     cx: &Context<Prototype>,
-) -> impl IntoElement {
+) -> gpui_kit::AnyElement {
     let calendar = presentation.selection;
     let details = presentation.details;
     let year_scroll = presentation.year_scroll;
+    let palette = crate::theme_skin::active_palette(cx);
+
+    let anim_key = ElementId::Name(
+        format!("cal-grid-{:?}-{}", calendar.view(), calendar.period_label()).into(),
+    );
     let body = if calendar.view() == CalendarView::Year {
         let months = calendar.months();
         div()
@@ -245,6 +440,8 @@ pub(super) fn render_calendar(
             .gap(px(YEAR_ROW_GAP))
             .flex_1()
             .min_h_0()
+            .px_3()
+            .pb_2()
             .overflow_y_scroll()
             .track_scroll(year_scroll)
             .children(months.chunks(2).map(|row| {
@@ -253,7 +450,7 @@ pub(super) fn render_calendar(
                     .flex_shrink_0()
                     .h(px(YEAR_ROW_HEIGHT))
                     .items_start()
-                    .gap_2()
+                    .gap_3()
                     .children(row.iter().map(|month| {
                         let month = *month;
                         let days = CalendarState::month_days(month);
@@ -264,10 +461,17 @@ pub(super) fn render_calendar(
                             .min_w_0()
                             .gap_1()
                             .child(
-                                Button::new(format!("calendar-month-{}", month.format("%Y%m")))
-                                    .label(format!("{} 月", month.month()))
+                                FlatButton::new(format!("calendar-month-{}", month.format("%Y%m")))
                                     .disabled(busy)
                                     .w_full()
+                                    .py_0p5()
+                                    .rounded(px(4.))
+                                    .justify_start()
+                                    .hover(move |s| s.text_color(palette.accent))
+                                    .text_size(px(13.))
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .text_color(palette.text_body)
+                                    .child(format!("{} 月", month.month()))
                                     .on_click(cx.listener(move |this, _, _, cx| {
                                         this.cancel_calendar_drag(cx);
                                         this.calendar.open_month(month);
@@ -280,6 +484,11 @@ pub(super) fn render_calendar(
                             ))
                     }))
             }))
+            .with_animation(
+                anim_key,
+                Animation::new(Duration::from_millis(160)).with_easing(ease_out_quint()),
+                |el, t| el.opacity(0.35 + 0.65 * t).pt(px((1.0 - t) * 4.0)),
+            )
             .into_any_element()
     } else {
         let days = calendar.days();
@@ -287,25 +496,29 @@ pub(super) fn render_calendar(
             .id("calendar-days-grid")
             .flex()
             .flex_col()
-            .gap_1()
+            .flex_1()
             .min_h_0()
+            .px_2p5()
+            .pb_1p5()
             .overflow_y_scroll()
             .child(weekdays(false, cx))
             .child(render_grid(
                 &days, false, calendar, details, entries, busy, cx,
             ))
+            .with_animation(
+                anim_key,
+                Animation::new(Duration::from_millis(160)).with_easing(ease_out_quint()),
+                |el, t| el.opacity(0.35 + 0.65 * t).pt(px((1.0 - t) * 4.0)),
+            )
             .into_any_element()
     };
     div()
         .id("calendar-panel")
         .flex()
         .flex_col()
+        .flex_1()
         .min_h_0()
-        .max_h(px(450.))
-        .gap_1()
-        .when(calendar.view() == CalendarView::Year, |panel| {
-            panel.h(px(390.))
-        })
+        .bg(palette.surface_header)
         .capture_any_mouse_up(cx.listener(|this, event: &MouseUpEvent, window, cx| {
             if event.button == MouseButton::Left {
                 this.finish_calendar_drag(window, cx);
@@ -320,170 +533,252 @@ pub(super) fn render_calendar(
         .child(
             div()
                 .flex()
+                .flex_wrap()
                 .items_center()
-                .gap_1()
+                .justify_between()
+                .gap_2()
+                .px_3()
+                .py_2p5()
                 .child(
-                    Button::new("calendar-prev-period")
-                        .label("‹")
-                        .accessibility_label("上一时段")
-                        .disabled(busy)
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.cancel_calendar_drag(cx);
-                            if this.calendar.previous_period() {
-                                this.clear_calendar_range();
-                                this.reveal_calendar_year_month();
-                            }
-                            cx.notify();
-                        })),
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_1p5()
+                        .child(
+                            div()
+                                .text_size(px(14.5))
+                                .font_weight(FontWeight::MEDIUM)
+                                .text_color(palette.text)
+                                .child(calendar.period_label()),
+                        )
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap_0p5()
+                                .child(
+                                    FlatButton::new("calendar-prev-period")
+                                        .accessibility_label("上一时段")
+                                        .disabled(busy)
+                                        .w(px(26.))
+                                        .h(px(26.))
+                                        .rounded(px(6.))
+                                        .hover(move |s| s.bg(palette.tab_active()))
+                                        .flex()
+                                        .items_center()
+                                        .justify_center()
+                                        .child(ph_icon(
+                                            PhIcon::CaretLeft,
+                                            px(14.),
+                                            palette.text_muted,
+                                        ))
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            this.cancel_calendar_drag(cx);
+                                            if this.calendar.previous_period() {
+                                                this.clear_calendar_range();
+                                                this.reveal_calendar_year_month();
+                                            }
+                                            cx.notify();
+                                        })),
+                                )
+                                .child(
+                                    FlatButton::new("calendar-next-period")
+                                        .accessibility_label("下一时段")
+                                        .disabled(busy)
+                                        .w(px(26.))
+                                        .h(px(26.))
+                                        .rounded(px(6.))
+                                        .hover(move |s| s.bg(palette.tab_active()))
+                                        .flex()
+                                        .items_center()
+                                        .justify_center()
+                                        .child(ph_icon(
+                                            PhIcon::CaretRight,
+                                            px(14.),
+                                            palette.text_muted,
+                                        ))
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            this.cancel_calendar_drag(cx);
+                                            if this.calendar.next_period() {
+                                                this.clear_calendar_range();
+                                                this.reveal_calendar_year_month();
+                                            }
+                                            cx.notify();
+                                        })),
+                                ),
+                        ),
                 )
                 .child(
                     div()
-                        .flex_1()
-                        .text_sm()
-                        .text_center()
-                        .child(calendar.period_label()),
-                )
-                .child(
-                    Button::new("calendar-next-period")
-                        .label("›")
-                        .accessibility_label("下一时段")
-                        .disabled(busy)
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.cancel_calendar_drag(cx);
-                            if this.calendar.next_period() {
-                                this.clear_calendar_range();
-                                this.reveal_calendar_year_month();
-                            }
-                            cx.notify();
-                        })),
-                ),
-        )
-        .child(
-            div()
-                .flex()
-                .gap_1()
-                .items_center()
-                .child(
-                    Button::new("calendar-today")
-                        .label("今天")
-                        .disabled(busy)
-                        .on_click(cx.listener(|this, _, window, cx| {
-                            this.cancel_calendar_drag(cx);
-                            let mut selection = this.calendar.clone();
-                            selection.show_today(chrono::Local::now().date_naive());
-                            this.open_calendar_selection(selection, window, cx);
-                        })),
-                )
-                .children(
-                    [
-                        (CalendarView::Week, "week", "周"),
-                        (CalendarView::Month, "month", "月"),
-                        (CalendarView::Year, "year", "年"),
-                    ]
-                    .into_iter()
-                    .map(|(view, id, label)| {
-                        Button::new(format!("calendar-view-{id}"))
-                            .label(label)
-                            .disabled(busy)
-                            .toggled(calendar.view() == view)
-                            .when(calendar.view() == view, Button::primary)
-                            .flex_1()
-                            .min_w_0()
-                            .p_0()
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.cancel_calendar_drag(cx);
-                                this.calendar.set_view(view);
-                                this.reveal_calendar_year_month();
-                                cx.notify();
-                            }))
-                    }),
+                        .flex()
+                        .items_center()
+                        .gap_1p5()
+                        .child(
+                            FlatButton::new("calendar-today")
+                                .disabled(busy)
+                                .h(px(26.))
+                                .px_2p5()
+                                .rounded(px(6.))
+                                .border_1()
+                                .border_color(palette.border)
+                                .bg(palette.surface)
+                                .hover(move |s| s.border_color(palette.accent_border))
+                                .text_size(px(12.))
+                                .text_color(palette.text_body)
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .child("今天")
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.cancel_calendar_drag(cx);
+                                    let mut selection = this.calendar.clone();
+                                    selection.show_today(chrono::Local::now().date_naive());
+                                    this.open_calendar_selection(selection, window, cx);
+                                })),
+                        )
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap_0p5()
+                                .p_0p5()
+                                .rounded(px(6.))
+                                .children(
+                                    [
+                                        (CalendarView::Week, "week", "周"),
+                                        (CalendarView::Month, "month", "月"),
+                                        (CalendarView::Year, "year", "年"),
+                                    ]
+                                    .into_iter()
+                                    .map(|(view, id, label)| {
+                                        let active = calendar.view() == view;
+                                        FlatButton::new(format!("calendar-view-{id}"))
+                                            .disabled(busy)
+                                            .selected(active)
+                                            .h(px(26.))
+                                            .px_2()
+                                            .rounded(px(6.))
+                                            .bg(if active {
+                                                palette.tab_active()
+                                            } else {
+                                                palette.surface_header
+                                            })
+                                            .hover(move |s| s.bg(palette.tab_active()))
+                                            .text_size(px(12.5))
+                                            .text_color(if active {
+                                                palette.accent
+                                            } else {
+                                                palette.text_body
+                                            })
+                                            .flex()
+                                            .items_center()
+                                            .justify_center()
+                                            .child(label)
+                                            .on_click(cx.listener(move |this, _, _, cx| {
+                                                this.cancel_calendar_drag(cx);
+                                                this.calendar.set_view(view);
+                                                this.reveal_calendar_year_month();
+                                                cx.notify();
+                                            }))
+                                    }),
+                                ),
+                        ),
                 ),
         )
         .child(body)
-        .child(
-            div()
-                .text_sm()
-                .text_color(cx.theme().muted_foreground)
-                .child(if calendar.is_range() {
-                    let (start, end) = calendar.selected_range();
-                    format!("已选择 {} 天 · Esc 退出", (end - start).num_days() + 1)
-                } else {
-                    "点击打开 · 拖动或 Shift 选择范围".to_string()
-                }),
-        )
-        .child(render_holiday_controls(calendar, details, cx))
+        .child(render_calendar_footer(calendar, details, cx))
+        .into_any_element()
 }
 
-fn render_holiday_controls(
+fn render_calendar_footer(
     calendar: &CalendarState,
     details: &CalendarDetails,
     cx: &Context<Prototype>,
 ) -> impl IntoElement {
+    let palette = crate::theme_skin::active_palette(cx);
     let year = calendar.display_date().year();
-    let synced = details
-        .holidays
-        .state()
-        .years
-        .iter()
-        .any(|item| item.year == year);
-    let label = if details.holiday_loading {
-        "正在读取放假信息"
-    } else if synced {
-        "已同步"
-    } else if year == 2026 {
-        "内置安排"
-    } else {
-        "尚未同步"
-    };
     div()
         .flex()
         .flex_col()
+        .border_t_1()
+        .border_color(palette.border)
+        .px_3()
+        .py_1p5()
         .gap_1()
         .child(
             div()
                 .flex()
                 .items_center()
-                .gap_1()
+                .justify_between()
+                .text_size(px(11.5))
+                .text_color(palette.text_muted)
                 .child(
                     div()
-                        .flex_1()
-                        .text_size(px(11.))
-                        .text_color(cx.theme().muted_foreground)
-                        .child(format!("{year} · {label}")),
-                )
-                .child(
-                    Button::new("calendar-reload-holidays")
-                        .label("读取本地")
-                        .h(px(24.))
-                        .px_1()
-                        .text_size(px(11.))
-                        .disabled(
-                            details.holiday_loading
-                                || details.holiday_syncing
-                                || details.holiday_source.is_none(),
+                        .flex()
+                        .items_center()
+                        .gap_1p5()
+                        .child(
+                            div()
+                                .w(px(7.))
+                                .h(px(7.))
+                                .rounded(px(99.))
+                                .bg(palette.accent),
                         )
-                        .on_click(cx.listener(|this, _, window, cx| {
-                            this.load_calendar_holidays(window, cx)
-                        })),
+                        .child("已记录日报")
+                        .when(cfg!(test), |row| {
+                            row.child(
+                                FlatButton::new("calendar-sync-holidays")
+                                    .px_1()
+                                    .rounded(px(3.))
+                                    .text_size(px(11.))
+                                    .text_color(palette.text_muted)
+                                    .hover(move |s| s.text_color(palette.accent))
+                                    .disabled(
+                                        details.holiday_syncing
+                                            || details.holiday_source.is_none()
+                                            || !(2007..=2100).contains(&year),
+                                    )
+                                    .child(if details.holiday_syncing {
+                                        "· 同步节假日中…".to_string()
+                                    } else {
+                                        format!("· 同步{year}节假日")
+                                    })
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.sync_calendar_holidays(window, cx)
+                                    })),
+                            )
+                            .child(
+                                FlatButton::new("calendar-reload-holidays")
+                                    .px_1()
+                                    .rounded(px(3.))
+                                    .text_size(px(11.))
+                                    .text_color(palette.text_muted)
+                                    .hover(move |s| s.text_color(palette.accent))
+                                    .disabled(
+                                        details.holiday_loading
+                                            || details.holiday_syncing
+                                            || details.holiday_source.is_none(),
+                                    )
+                                    .child("读取本地")
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.load_calendar_holidays(window, cx)
+                                    })),
+                            )
+                        }),
                 )
                 .child(
-                    Button::new("calendar-sync-holidays")
-                        .label(if details.holiday_syncing {
-                            "同步中…".to_string()
+                    div()
+                        .text_color(if calendar.is_range() {
+                            palette.accent
                         } else {
-                            format!("同步 {year}")
+                            palette.text_muted
                         })
-                        .h(px(24.))
-                        .px_1()
-                        .text_size(px(11.))
-                        .disabled(
-                            details.holiday_syncing
-                                || details.holiday_source.is_none()
-                                || !(2007..=2100).contains(&year),
-                        )
-                        .on_click(cx.listener(|this, _, window, cx| {
-                            this.sync_calendar_holidays(window, cx)
-                        })),
+                        .child(if calendar.is_range() {
+                            let (start, end) = calendar.selected_range();
+                            format!("已选择 {} 天 · Esc 退出", (end - start).num_days() + 1)
+                        } else {
+                            "点击打开 · 拖拽框选".to_string()
+                        }),
                 ),
         )
         .when_some(details.holiday_error.as_ref(), |panel, error| {
@@ -504,6 +799,15 @@ pub(super) fn render_range(
     source: bool,
     cx: &Context<Prototype>,
 ) -> impl IntoElement {
+    let palette = crate::theme_skin::active_palette(cx);
+    let total_chars: usize = range
+        .documents
+        .iter()
+        .map(|doc| doc.content.chars().filter(|ch| !ch.is_whitespace()).count())
+        .sum();
+    let (start, end) = (range.start, range.end);
+    let day_count = (end - start).num_days().unsigned_abs() + 1;
+
     let documents = range.documents.iter().map(|document| {
         let element = match document.format {
             Format::Md => markdown_preview(
@@ -517,74 +821,194 @@ pub(super) fn render_range(
             )
             .into_any_element(),
         };
+        let date_heading = chrono::NaiveDate::parse_from_str(&document.date, "%Y%m%d")
+            .ok()
+            .map(|d| {
+                let weekdays = [
+                    "星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日",
+                ];
+                let wd = weekdays[d.weekday().num_days_from_monday() as usize];
+                format!("{} 年 {} 月 {} 日 {}", d.year(), d.month(), d.day(), wd)
+            })
+            .unwrap_or_else(|| document.date.clone());
+
         div()
             .flex()
             .flex_col()
             .gap_2()
             .pb_4()
+            .border_b_1()
+            .border_color(palette.border)
             .child(
                 div()
-                    .text_sm()
-                    .text_color(cx.theme().muted_foreground)
-                    .child(document.date.clone()),
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .child(
+                        div()
+                            .text_size(px(14.))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(palette.text)
+                            .child(date_heading),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(11.5))
+                            .text_color(palette.text_muted)
+                            .child(document.filename.clone()),
+                    ),
             )
             .child(element)
     });
+
     div()
         .flex()
         .flex_col()
         .flex_1()
         .min_h_0()
-        .gap_2()
+        .bg(palette.surface)
         .child(
             div()
                 .flex()
                 .flex_wrap()
-                .gap_2()
                 .items_center()
-                .child(div().w_full().text_sm().child(format!(
-                    "{} · {} 篇日报",
-                    range.label(),
-                    range.documents.len()
-                )))
+                .justify_between()
+                .gap_2()
+                .px_5()
+                .pt_4()
+                .pb_2p5()
+                .border_b_1()
+                .border_color(palette.border)
                 .child(
-                    Button::new("range-preview")
-                        .label("预览")
-                        .when(!source, Button::primary)
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.range_source = false;
-                            cx.notify();
-                        })),
+                    div()
+                        .text_size(px(17.))
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(palette.text)
+                        .child(range.label()),
                 )
                 .child(
-                    Button::new("range-source")
-                        .label("原文")
-                        .when(source, Button::primary)
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.range_source = true;
-                            cx.notify();
-                        })),
-                )
-                .child(
-                    Button::new("copy-range")
-                        .label("复制")
-                        .disabled(range.documents.is_empty())
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            if let Some(range) = &this.workspace_range {
-                                cx.write_to_clipboard(ClipboardItem::new_string(
-                                    range.source.clone(),
-                                ));
-                                this.status = "已复制所选日期的原文".into();
-                                cx.notify();
-                            }
-                        })),
-                )
-                .child(
-                    Button::new("close-range")
-                        .label("退出范围")
-                        .on_click(cx.listener(|_, _, window, cx| {
-                            window.dispatch_action(Box::new(crate::ClearRange), cx);
-                        })),
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_1p5()
+                        .child(
+                            FlatButton::new("range-preview")
+                                .selected(!source)
+                                .h(px(26.))
+                                .px_2()
+                                .rounded(px(6.))
+                                .border_1()
+                                .border_color(if !source {
+                                    palette.accent_border
+                                } else {
+                                    palette.border
+                                })
+                                .bg(if !source {
+                                    palette.accent_soft
+                                } else {
+                                    palette.surface
+                                })
+                                .text_size(px(11.5))
+                                .text_color(if !source {
+                                    palette.accent
+                                } else {
+                                    palette.text_body
+                                })
+                                .flex()
+                                .items_center()
+                                .gap_1()
+                                .child(ph_icon(
+                                    PhIcon::Columns,
+                                    px(13.),
+                                    if !source {
+                                        palette.accent
+                                    } else {
+                                        palette.text_muted
+                                    },
+                                ))
+                                .child("预览")
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.range_source = false;
+                                    cx.notify();
+                                })),
+                        )
+                        .child(
+                            FlatButton::new("range-source")
+                                .selected(source)
+                                .h(px(26.))
+                                .px_2()
+                                .rounded(px(6.))
+                                .border_1()
+                                .border_color(if source {
+                                    palette.accent_border
+                                } else {
+                                    palette.border
+                                })
+                                .bg(if source {
+                                    palette.accent_soft
+                                } else {
+                                    palette.surface
+                                })
+                                .text_size(px(11.5))
+                                .text_color(if source {
+                                    palette.accent
+                                } else {
+                                    palette.text_body
+                                })
+                                .flex()
+                                .items_center()
+                                .child("原文")
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.range_source = true;
+                                    cx.notify();
+                                })),
+                        )
+                        .child(
+                            FlatButton::new("copy-range")
+                                .accessibility_label("复制")
+                                .disabled(range.documents.is_empty())
+                                .h(px(26.))
+                                .px_2()
+                                .rounded(px(6.))
+                                .border_1()
+                                .border_color(palette.border)
+                                .bg(palette.surface)
+                                .hover(move |s| s.border_color(palette.accent_border))
+                                .text_size(px(11.5))
+                                .text_color(palette.text_body)
+                                .flex()
+                                .items_center()
+                                .gap_1()
+                                .child(ph_icon(PhIcon::Copy, px(13.), palette.text_muted))
+                                .child("复制")
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    if let Some(range) = &this.workspace_range {
+                                        cx.write_to_clipboard(ClipboardItem::new_string(
+                                            range.source.clone(),
+                                        ));
+                                        this.status = "已复制所选日期的原文".into();
+                                        cx.notify();
+                                    }
+                                })),
+                        )
+                        .child(
+                            FlatButton::new("close-range")
+                                .h(px(26.))
+                                .px_2()
+                                .rounded(px(6.))
+                                .border_1()
+                                .border_color(palette.border)
+                                .bg(palette.surface)
+                                .hover(move |s| s.border_color(palette.accent_border))
+                                .text_size(px(11.5))
+                                .text_color(palette.text_muted)
+                                .flex()
+                                .items_center()
+                                .child("退出范围")
+                                .on_click(cx.listener(|_, _, window, cx| {
+                                    window.dispatch_action(Box::new(crate::ClearRange), cx);
+                                })),
+                        ),
                 ),
         )
         .child(
@@ -593,12 +1017,18 @@ pub(super) fn render_range(
                 .flex_1()
                 .min_h_0()
                 .overflow_y_scroll()
-                .border_1()
-                .border_color(cx.theme().border)
-                .rounded_md()
-                .p_3()
+                .px_5()
+                .py_4()
+                .flex()
+                .flex_col()
+                .gap_4()
                 .when(range.documents.is_empty(), |body| {
-                    body.child("所选日期内暂无日报")
+                    body.child(
+                        div()
+                            .text_size(px(13.))
+                            .text_color(palette.text_muted)
+                            .child("所选日期中没有可显示的日报。"),
+                    )
                 })
                 .when(source && !range.documents.is_empty(), |body| {
                     body.child(SelectableText::new(
@@ -607,6 +1037,32 @@ pub(super) fn render_range(
                     ))
                 })
                 .when(!source, |body| body.children(documents)),
+        )
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .justify_between()
+                .h(px(25.))
+                .px_3()
+                .bg(palette.surface_header)
+                .border_t_1()
+                .border_color(palette.border)
+                .text_size(px(11.5))
+                .text_color(palette.text_muted)
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_1p5()
+                        .child(ph_icon(PhIcon::FileText, px(13.), palette.text_muted))
+                        .child(format!(
+                            "已选择 {} 天 · {} 篇日报",
+                            day_count,
+                            range.documents.len()
+                        )),
+                )
+                .child(format!("{total_chars} 字")),
         )
 }
 

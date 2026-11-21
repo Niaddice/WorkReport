@@ -139,20 +139,15 @@ fn begin_new_journal(
     format: Format,
 ) {
     cx.update_window(window, |_, window, cx| {
-        let date_input = prototype.read(cx).new_journal_date.clone();
-        date_input.update(cx, |input, cx| input.set_value(date, window, cx));
+        prototype.update(cx, |app, cx| {
+            app.new_journal_date
+                .update(cx, |input, cx| input.set_value(date, window, cx));
+            app.new_journal_format = format;
+            app.start_new_workspace_journal(window, cx);
+        });
     })
     .unwrap();
-    click(
-        cx,
-        window,
-        if format == Format::Md {
-            "new-journal-md"
-        } else {
-            "new-journal-txt"
-        },
-    );
-    click(cx, window, "new-journal");
+    drain_ready_tasks(cx);
 }
 
 #[test]
@@ -259,7 +254,7 @@ fn new_journals_are_created_after_nonblank_input_and_reopen_from_the_date_list(
 
         click(cx, window, "close-journal-editor");
         assert!(cx.update(|cx| prototype.read(cx).workspace_edit.is_none()));
-        click(cx, window, "workspace-date-20261120");
+        click(cx, window, "calendar-day-20261120");
         click(cx, window, "edit-journal");
         assert_eq!(editor_text(cx, &prototype), content);
         click(cx, window, "close-journal-editor");
@@ -685,4 +680,206 @@ fn save_action_waits_until_composition_is_committed(cx: &mut TestAppContext) {
         fs::read_to_string(&path).unwrap(),
         format!("中文{original}")
     );
+}
+
+#[gpui_kit::test]
+fn database_only_sqlite_supports_browsing_previews_range_history_and_autosave(
+    cx: &mut TestAppContext,
+) {
+    use chrono::NaiveDate;
+    use workreport_core::{database, settings, workspace_preview::WorkspaceSession};
+
+    let temporary = tempfile::tempdir().unwrap();
+    let folder = temporary.path();
+    let stored = settings::StoredSettings {
+        database: database::Settings {
+            enabled: true,
+            mode: database::Mode::Database,
+            default_format: Format::Md,
+            workspace_id: "550e8400-e29b-41d4-a716-446655440000".into(),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    settings::save(&folder.join(settings::FILE_NAME), &stored).unwrap();
+
+    let mut seeded = Workspace::open(folder).unwrap();
+    seeded
+        .create_with_content("20261118", Format::Md, "# 第一天\n完成接口联调")
+        .unwrap();
+    seeded
+        .create_with_content("20261119", Format::Md, "# 第二天\n修复问题")
+        .unwrap();
+
+    let (window, prototype) = open_window(cx);
+    open_workspace(cx, window, &prototype, folder);
+    cx.update_window(window, |_, window, cx| window.render_frame(cx))
+        .unwrap();
+    drain_ready_tasks(cx);
+    cx.update(|cx| {
+        let app = prototype.read(cx);
+        let ws = app.workspace.as_ref().unwrap();
+        assert!(ws.reader.is_database_only());
+        assert_eq!(ws.entries.len(), 2);
+        let p = app
+            .calendar_details
+            .previews
+            .values
+            .get("20261118")
+            .and_then(|res| res.as_ref().ok())
+            .expect("20261118 preview");
+        assert!(p.contains("第一天") || p.contains("完成接口联调"), "preview={p}");
+    });
+
+    // Range preview in database-only mode reads inclusive dates from SQLite.
+    let d1 = NaiveDate::from_ymd_opt(2026, 11, 18).unwrap();
+    let d2 = NaiveDate::from_ymd_opt(2026, 11, 19).unwrap();
+    cx.update_window(window, |_, window, cx| {
+        prototype.update(cx, |app, cx| app.select_calendar_date(d1, false, window, cx));
+    })
+    .unwrap();
+    drain_ready_tasks(cx);
+    cx.update_window(window, |_, window, cx| {
+        prototype.update(cx, |app, cx| app.select_calendar_date(d2, true, window, cx));
+    })
+    .unwrap();
+    drain_ready_tasks(cx);
+    cx.update(|cx| {
+        let range = prototype.read(cx).workspace_range.as_ref().unwrap();
+        assert!(range.source.contains("完成接口联调"));
+        assert!(range.source.contains("修复问题"));
+    });
+
+    // Select a new day (opens new-draft editor), type & autosave into SQLite without creating local files.
+    let d3 = NaiveDate::from_ymd_opt(2026, 11, 20).unwrap();
+    cx.update_window(window, |_, window, cx| {
+        prototype.update(cx, |app, cx| app.select_calendar_date(d3, false, window, cx));
+    })
+    .unwrap();
+    drain_ready_tasks(cx);
+    let v1 = "# 第三天\n数据库自动保存\n";
+    replace_editor_text(cx, window, &prototype, v1);
+    advance_time(cx, 700);
+    assert!(!folder.join("2026").exists());
+    assert_eq!(
+        WorkspaceSession::open(folder)
+            .unwrap()
+            .read("20261120", Format::Md)
+            .unwrap()
+            .content,
+        v1
+    );
+
+    // Save a second manual revision, then restore the first history snapshot via History Diff.
+    let v2 = "# 第三天\n第二次保存\n";
+    replace_editor_text(cx, window, &prototype, v2);
+    click(cx, window, "save-journal");
+    click(cx, window, "close-journal-editor");
+    click(cx, window, "rail-module-history");
+    let versions = history::list(folder, Some("20261120")).unwrap();
+    assert_eq!(versions.len(), 2);
+    let older = &versions[1];
+    click(cx, window, format!("history-diff-{}", older.id));
+    click(cx, window, "history-diff-restore");
+    click(cx, window, "history-diff-confirm-restore");
+    assert_eq!(
+        WorkspaceSession::open(folder)
+            .unwrap()
+            .read("20261120", Format::Md)
+            .unwrap()
+            .content,
+        v1
+    );
+
+    // External SQLite edit causes revision conflict on save and preserves the local draft.
+    click(cx, window, "edit-journal");
+    let current_rev = WorkspaceSession::open(folder)
+        .unwrap()
+        .read("20261120", Format::Md)
+        .unwrap()
+        .revision;
+    let mut external_ws = Workspace::open(folder).unwrap();
+    let external_body = "# 第三天\n外部数据库写入\n";
+    external_ws
+        .save_with_mode(
+            "20261120",
+            Format::Md,
+            external_body,
+            &current_rev,
+            false,
+        )
+        .unwrap();
+
+    let draft_body = "# 第三天\n本地冲突草稿\n";
+    replace_editor_text(cx, window, &prototype, draft_body);
+    click(cx, window, "save-journal");
+    assert_eq!(editor_text(cx, &prototype), draft_body);
+    assert_eq!(
+        WorkspaceSession::open(folder)
+            .unwrap()
+            .read("20261120", Format::Md)
+            .unwrap()
+            .content,
+        external_body
+    );
+    assert!(!folder.join("2026").exists());
+}
+
+#[gpui_kit::test]
+fn workspace_switch_dialog_syncs_settings_without_copying_journals(cx: &mut TestAppContext) {
+    let dir_a = tempfile::tempdir().unwrap();
+    let dir_b = tempfile::tempdir().unwrap();
+
+    fs::create_dir_all(dir_a.path().join("2026")).unwrap();
+    fs::write(dir_a.path().join("2026/20261119.md"), "# A 日报\n").unwrap();
+    let mut settings_a = workreport_core::settings::StoredSettings::default();
+    settings_a.appearance.scale = 110;
+    settings_a.editor.default_template_id = "standard".into();
+    workreport_core::settings::save(&dir_a.path().join("workreport.json"), &settings_a).unwrap();
+
+    fs::create_dir_all(dir_b.path().join("2026")).unwrap();
+    fs::write(dir_b.path().join("2026/20261120.md"), "# B 日报\n").unwrap();
+    let mut settings_b = workreport_core::settings::StoredSettings::default();
+    settings_b.appearance.scale = 90;
+    workreport_core::settings::save(&dir_b.path().join("workreport.json"), &settings_b).unwrap();
+
+    let (window, prototype) = open_window(cx);
+    open_workspace(cx, window, &prototype, dir_a.path());
+
+    // Switch request opens confirmation dialog
+    cx.update_window(window, |_, window, cx| {
+        prototype.update(cx, |app, cx| {
+            app.request_workspace_switch(dir_b.path().to_path_buf(), window, cx);
+        });
+    })
+    .unwrap();
+    cx.update(|cx| {
+        assert!(prototype.read(cx).workspace_switch.is_some());
+    });
+
+    // Confirm sync + switch
+    click(cx, window, "workspace-switch-sync");
+    drain_ready_tasks(cx);
+
+    cx.update(|cx| {
+        let app = prototype.read(cx);
+        assert!(
+            app.workspace_switch.is_none(),
+            "workspace_switch={:?}",
+            app.workspace_switch
+                .as_ref()
+                .map(|s| (s.busy, s.error.clone()))
+        );
+        let ws = app.workspace.as_ref().expect("switched to workspace B");
+        assert_eq!(ws.reader.root(), dir_b.path().canonicalize().unwrap());
+    });
+
+    let reloaded_b = workreport_core::settings::load(&dir_b.path().join("workreport.json"))
+        .unwrap()
+        .unwrap();
+    assert_eq!(reloaded_b.appearance.scale, 110);
+    assert_eq!(reloaded_b.editor.default_template_id, "standard");
+    let opened_b = Workspace::open(dir_b.path()).unwrap();
+    assert!(opened_b.read("20261119", Format::Md).is_err());
+    assert_eq!(opened_b.read("20261120", Format::Md).unwrap().content, "# B 日报\n");
 }

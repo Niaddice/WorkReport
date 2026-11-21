@@ -53,7 +53,13 @@ fn selecting_an_existing_day_preserves_its_body_and_adjacent_month_navigation(
     assert_eq!(fs::read_to_string(&latest).unwrap(), "最新纯文本日报\n");
     assert_eq!(fs::read_dir(folder).unwrap().count(), 2);
 
-    click(cx, window, "workspace-date-20261230");
+    cx.update_window(window, |_, window, cx| {
+        prototype.update(cx, |app, cx| {
+            app.open_journal("20261230".into(), Format::Md, window, cx);
+        });
+    })
+    .unwrap();
+    drain_ready_tasks(cx);
     assert_eq!(
         cx.update(|cx| prototype.read(cx).calendar.month_label()),
         "2026 年 12 月"
@@ -215,7 +221,14 @@ fn escape_clears_an_empty_range_and_does_not_leave_the_sample_editor(cx: &mut Te
     .unwrap();
     drain_ready_tasks(cx);
     assert!(cx.update(|cx| prototype.read(cx).workspace_range.is_some()));
-    click(cx, window, "scratch-view");
+    cx.update_window(window, |_, _, cx| {
+        prototype.update(cx, |app, cx| {
+            app.viewing_workspace = false;
+            app.scratch_mode = true;
+            cx.notify();
+        });
+    })
+    .unwrap();
     cx.update_window(window, |_, window, cx| window.press("escape", cx))
         .unwrap();
     drain_ready_tasks(cx);
@@ -225,7 +238,14 @@ fn escape_clears_an_empty_range_and_does_not_leave_the_sample_editor(cx: &mut Te
         assert!(app.workspace_range.is_some());
         assert!(app.workspace_edit.is_none());
     });
-    click(cx, window, "workspace-view");
+    cx.update_window(window, |_, _, cx| {
+        prototype.update(cx, |app, cx| {
+            app.viewing_workspace = true;
+            app.scratch_mode = false;
+            cx.notify();
+        });
+    })
+    .unwrap();
     cx.update_window(window, |_, window, cx| window.press("escape", cx))
         .unwrap();
     drain_ready_tasks(cx);

@@ -1,18 +1,50 @@
-use std::path::{Path, PathBuf};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
 
 use crate::{
-    file_rules, history,
+    database, file_rules, history, settings,
     workspace::{Document, Format, Workspace, FILE_REVISION_CONFLICT},
 };
 
-/// An editing session pinned to a local journal path and storage configuration.
+/// An editing session pinned to a local journal path or database-only workspace.
 pub struct JournalEdit {
     workspace: Workspace,
     path: PathBuf,
+    filename: String,
     date: String,
     format: Format,
     revision: String,
     new_draft: bool,
+    database_only: bool,
+}
+
+fn open_edit_workspace(root: &Path) -> Result<(Workspace, bool), String> {
+    match Workspace::open_file_preview(root) {
+        Ok(workspace) => Ok((workspace, false)),
+        Err(preview_error) => {
+            let Ok(canonical) = fs::canonicalize(root) else {
+                return Err(preview_error);
+            };
+            let settings_path = canonical.join(settings::FILE_NAME);
+            let Ok(meta) = fs::symlink_metadata(&settings_path) else {
+                return Err(preview_error);
+            };
+            if !meta.is_file() || meta.file_type().is_symlink() {
+                return Err(preview_error);
+            }
+            let Ok(Some(stored)) = settings::load(&settings_path) else {
+                return Err(preview_error);
+            };
+            if !stored.database.enabled || stored.database.mode != database::Mode::Database {
+                return Err(preview_error);
+            }
+            let mut workspace = Workspace::open(canonical)?;
+            workspace.validate_open()?;
+            Ok((workspace, true))
+        }
+    }
 }
 
 impl JournalEdit {
@@ -22,45 +54,68 @@ impl JournalEdit {
         format: Format,
         expected_revision: &str,
     ) -> Result<(Self, Document), String> {
-        let workspace = Workspace::open_file_preview(root.as_ref())?;
-        let path = workspace.entry_path(date, format)?;
-        let document = workspace.read_file_at(date, format, &path)?;
+        let (workspace, database_only) = open_edit_workspace(root.as_ref())?;
+        let (path, document) = if database_only {
+            (PathBuf::new(), workspace.read(date, format)?)
+        } else {
+            let path = workspace.entry_path(date, format)?;
+            let document = workspace.read_file_at(date, format, &path)?;
+            (path, document)
+        };
         if document.revision != expected_revision {
             return Err(FILE_REVISION_CONFLICT.into());
         }
         let session = Self {
             workspace,
             path,
+            filename: document.filename.clone(),
             date: date.into(),
             format,
             revision: document.revision.clone(),
             new_draft: false,
+            database_only,
         };
         Ok((session, document))
     }
 
-    /// Prepare an empty journal without creating files, history or a database.
+    /// Prepare an empty journal without creating files, history or a database record.
     pub fn begin_new(
         root: impl AsRef<Path>,
         date: &str,
         format: Format,
     ) -> Result<(Self, Document), String> {
-        let workspace = Workspace::open_file_preview(root.as_ref())?;
-        let path = workspace.entry_path(date, format)?;
-        if workspace
-            .managed_journal_files()?
-            .iter()
-            .any(|record| record.date == date)
-        {
-            return Err("这一天已有日报，请刷新并打开现有日报。".into());
-        }
+        let (mut workspace, database_only) = open_edit_workspace(root.as_ref())?;
+        let (path, filename) = if database_only {
+            if workspace.list()?.iter().any(|entry| entry.date == date) {
+                return Err("这一天已有日报，请刷新并打开现有日报。".into());
+            }
+            let filename = workspace.journal_filename(date, format)?;
+            (PathBuf::new(), filename)
+        } else {
+            let path = workspace.entry_path(date, format)?;
+            if workspace
+                .managed_journal_files()?
+                .iter()
+                .any(|record| record.date == date)
+            {
+                return Err("这一天已有日报，请刷新并打开现有日报。".into());
+            }
+            let filename = path
+                .file_name()
+                .ok_or("日报文件名无效")?
+                .to_string_lossy()
+                .into_owned();
+            (path, filename)
+        };
         let session = Self {
             workspace,
             path,
+            filename,
             date: date.into(),
             format,
             revision: String::new(),
             new_draft: true,
+            database_only,
         };
         let document = session.empty_document("")?;
         Ok((session, document))
@@ -80,9 +135,12 @@ impl JournalEdit {
         if self.new_draft {
             return Ok(());
         }
-        let current = self
-            .workspace
-            .read_file_at(&self.date, self.format, &self.path)?;
+        let current = if self.database_only {
+            self.workspace.read(&self.date, self.format)?
+        } else {
+            self.workspace
+                .read_file_at(&self.date, self.format, &self.path)?
+        };
         if current.revision != self.revision {
             return Err(FILE_REVISION_CONFLICT.into());
         }
@@ -101,12 +159,25 @@ impl JournalEdit {
             if content.trim().is_empty() {
                 return self.empty_document(content);
             }
-            self.workspace.create_local_at(
+            if self.database_only {
+                self.workspace
+                    .create_database_strict(&self.date, self.format, content, automatic)?
+            } else {
+                self.workspace.create_local_at(
+                    &self.date,
+                    self.format,
+                    content,
+                    automatic,
+                    &self.path,
+                )?
+            }
+        } else if self.database_only {
+            self.workspace.save_with_mode(
                 &self.date,
                 self.format,
                 content,
+                &self.revision,
                 automatic,
-                &self.path,
             )?
         } else {
             self.workspace.save_local_at(
@@ -126,12 +197,7 @@ impl JournalEdit {
     fn empty_document(&self, content: &str) -> Result<Document, String> {
         Ok(Document {
             date: self.date.clone(),
-            filename: self
-                .path
-                .file_name()
-                .ok_or("日报文件名无效")?
-                .to_string_lossy()
-                .into_owned(),
+            filename: self.filename.clone(),
             format: self.format,
             content: content.into(),
             revision: String::new(),
@@ -140,6 +206,29 @@ impl JournalEdit {
     }
 
     fn validate_scope(&self) -> Result<(), String> {
+        if self.database_only {
+            let settings_path = file_rules::safe_file(self.workspace.root(), settings::FILE_NAME)?;
+            let stored = settings::load(&settings_path)?.unwrap_or_default();
+            let file_rules_now = file_rules::effective(&stored).journal;
+            let db_now = stored.database;
+            if file_rules_now != *self.workspace.journal_file_rule()
+                || db_now != *self.workspace.database_settings()
+                || !db_now.enabled
+                || db_now.mode != database::Mode::Database
+            {
+                return Err(
+                    "工作空间的存储配置或日报路径已变化。请先保留草稿，再重新打开日报。".into(),
+                );
+            }
+            if self.new_draft && self.workspace.database_record(&self.date)?.is_some() {
+                return Err(FILE_REVISION_CONFLICT.into());
+            }
+            file_rules::safe_file(
+                self.workspace.root(),
+                &format!("{}/{}", history::DIR, self.date),
+            )?;
+            return Ok(());
+        }
         // Recheck the current mapping even when the writer still has an indexed path.
         let current = Workspace::open_file_preview(self.workspace.root())?;
         if current.root() != self.workspace.root()
@@ -599,5 +688,98 @@ mod tests {
         assert!(edit.save("不可覆盖").unwrap_err().contains("符号链接"));
         assert_eq!(fs::read_to_string(&file).unwrap(), ORIGINAL);
         assert_eq!(fs::read_dir(outside.path()).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn database_only_begin_new_and_save_store_in_sqlite_without_local_journal_files() {
+        let directory = tempdir().unwrap();
+        let root = directory.path();
+        let stored = settings::StoredSettings {
+            database: database::Settings {
+                enabled: true,
+                mode: database::Mode::Database,
+                workspace_id: "550e8400-e29b-41d4-a716-446655440000".into(),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        settings::save(&root.join(settings::FILE_NAME), &stored).unwrap();
+
+        let (mut blank, doc) = JournalEdit::begin_new(root, DATE, Format::Md).unwrap();
+        assert!(blank.new_draft);
+        assert!(doc.content.is_empty());
+        let blank_saved = blank.save_automatic("   \n\t ").unwrap();
+        assert!(blank_saved.revision.is_empty());
+        assert!(blank.new_draft);
+        assert!(!root.join(history::DIR).exists());
+        assert!(!root.join("2026").exists());
+
+        let saved = blank.save("# 仅数据库日记\n第一版\n").unwrap();
+        assert!(!blank.new_draft);
+        assert!(saved.backup_warning.is_none());
+        assert!(!root.join("2026").exists());
+
+        let reopened = crate::workspace_preview::WorkspaceSession::open(root).unwrap();
+        assert!(reopened.is_database_only());
+        assert_eq!(
+            reopened.read(DATE, Format::Md).unwrap().content,
+            "# 仅数据库日记\n第一版\n"
+        );
+        let versions = reopened.list_history(Some(DATE)).unwrap();
+        assert_eq!(versions.len(), 1);
+
+        let db = database::run_blocking(|| {
+            database::Database::connect(root, &stored.database, &stored.database.workspace_id)
+        })
+        .unwrap();
+        let record = database::run_blocking(|| db.read(DATE)).unwrap().unwrap();
+        assert_eq!(record.content, "# 仅数据库日记\n第一版\n");
+        assert_eq!(record.revision, saved.revision);
+    }
+
+    #[test]
+    fn database_only_edit_detects_external_revision_conflict_and_preserves_db_content() {
+        let directory = tempdir().unwrap();
+        let root = directory.path();
+        let stored = settings::StoredSettings {
+            database: database::Settings {
+                enabled: true,
+                mode: database::Mode::Database,
+                workspace_id: "550e8400-e29b-41d4-a716-446655440000".into(),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        settings::save(&root.join(settings::FILE_NAME), &stored).unwrap();
+
+        let mut workspace = crate::workspace::Workspace::open(root).unwrap();
+        let initial = workspace
+            .create_with_content(DATE, Format::Md, "# 初始版本\n")
+            .unwrap();
+
+        let (mut edit, preview) =
+            JournalEdit::begin(root, DATE, Format::Md, &initial.revision).unwrap();
+        assert_eq!(preview.content, "# 初始版本\n");
+
+        workspace
+            .save_with_mode(
+                DATE,
+                Format::Md,
+                "# 外部修改版本\n",
+                &initial.revision,
+                false,
+            )
+            .unwrap();
+
+        let error = edit.save("# 本地草稿\n").unwrap_err();
+        assert!(!error.is_empty());
+        assert_eq!(
+            crate::workspace_preview::WorkspaceSession::open(root)
+                .unwrap()
+                .read(DATE, Format::Md)
+                .unwrap()
+                .content,
+            "# 外部修改版本\n"
+        );
     }
 }

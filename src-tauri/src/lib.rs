@@ -441,24 +441,6 @@ async fn load_excel_settings(state: State<'_, AppState>) -> Result<excel::Settin
     }).await
 }
 
-fn validate_excel_settings(
-    settings: &excel::Settings,
-    ai_settings: &ai::Settings,
-) -> Result<(), String> {
-    if settings.enabled {
-        ai::default_provider(ai_settings)
-            .map_err(|error| format!("启用 Excel 输出需要先配置默认 AI：{error}"))?;
-    }
-    excel::validate_settings(settings)?;
-    if settings.enabled {
-        let template = std::path::Path::new(settings.template_path.trim());
-        if !template.is_absolute() || !template.is_file() {
-            return Err("Excel 模板不存在，请重新选择模板文件".into());
-        }
-    }
-    Ok(())
-}
-
 #[tauri::command]
 async fn load_ui_preferences(state: State<'_, AppState>) -> Result<ui::Preferences, String> {
     with_workspace(&state, |workspace| {
@@ -476,21 +458,12 @@ async fn save_ui_preferences(
     preferences: ui::Preferences,
 ) -> Result<(), String> {
     with_workspace(&state, |workspace| {
-        // 迟到的布局保存不能写进已经切换的工作空间。
-        summary::validate_workspace(workspace.root(), &workspace_path)?;
-        let path = workspace.root().join(settings::FILE_NAME);
-        let mut stored = settings::load(&path)?.unwrap_or_default();
-        stored.ui = Some(ui::normalize(preferences));
-        settings::save(&path, &stored)
+        settings::save_ui_preferences(workspace.root(), &workspace_path, preferences)
     })
 }
 
 fn effective_file_settings(root: &std::path::Path, stored: &settings::StoredSettings) -> Result<file_rules::Settings, String> {
-    let mut files = file_rules::effective(stored);
-    if stored.files.is_none() {
-        files.summary.directory = summary::normalize_settings(root, &stored.summary)?.output_directory;
-    }
-    Ok(files)
+    settings::effective_file_settings(root, stored)
 }
 
 #[tauri::command]
@@ -519,55 +492,17 @@ fn save_workspace_settings_at(workspace: &mut Workspace, workspace_path: &str, s
 fn save_workspace_settings_confirmed(
     workspace: &mut Workspace,
     workspace_path: &str,
-    mut stored: settings::StoredSettings,
+    stored: settings::StoredSettings,
     confirmation: Option<&file_migration::Confirmation>,
     migrate_files: bool,
 ) -> Result<settings::StoredSettings, String> {
-    summary::validate_workspace(workspace.root(), workspace_path)
-        .map_err(|_| "工作空间已切换，请重新打开设置后重试".to_string())?;
-    appearance::validate(&stored.appearance)?;
-    ai::validate(&stored.ai)?;
-    git::validate(&stored.git)?;
-    settings::validate_editor_settings(&stored.editor)?;
-    // Validate the dependency against this same save, so enabling Excel and
-    // configuring its AI provider succeeds or fails as one transaction.
-    validate_excel_settings(&stored.excel, &stored.ai)?;
-    let path = workspace.root().join(settings::FILE_NAME);
-    let current = settings::load(&path)?;
-    // Match section saves: a damaged existing file must not be silently replaced.
-    if let Some(current) = &current {
-        if current.database != *workspace.database_settings() {
-            return Err("数据库配置已被外部修改，请重新打开工作空间后重试".into());
-        }
-    }
-    // 统一设置保存的载荷通常不带 ui 字段（反序列化为 None），此时沿用磁盘上已有的布局，
-    // 避免“保存一次设置就把首页拖放结果清空”。只有从未保存过布局时才保持 None。
-    if stored.ui.is_none() {
-        stored.ui = current.as_ref().and_then(|current| current.ui.clone());
-    }
-    if stored.files.is_none() {
-        stored.files = current.as_ref().and_then(|current| current.files.clone());
-    }
-    let before = current.as_ref().map(|current| effective_file_settings(workspace.root(), current)).transpose()?.unwrap_or_default();
-    if let Some(files) = &stored.files {
-        stored.files = Some(file_rules::normalize(workspace.root(), files)?);
-        stored.summary.output_directory = stored.files.as_ref().unwrap().summary.directory.clone();
-    } else {
-        stored.summary = summary::normalize_settings(workspace.root(), &stored.summary)?;
-    }
-    let after = effective_file_settings(workspace.root(), &stored)?;
-    let (database_settings, connection) = workspace.prepare_database_settings(&stored.database)?;
-    stored.database = database_settings;
-    if stored.files.is_some() && migrate_files {
-        file_migration::apply(workspace.root(), &before, &after, confirmation, || settings::save(&path, &stored))?;
-    } else {
-        settings::save(&path, &stored)?;
-    }
-    workspace.accept_file_settings(after);
-    workspace.accept_database(stored.database.clone(), connection);
-    // 上限调小后立即整理历史版本，不必等到下一次写日报。
-    crate::history::enforce(workspace.root(), stored.database.history_limit_bytes);
-    Ok(stored)
+    settings::save_workspace_settings_confirmed(
+        workspace,
+        workspace_path,
+        stored,
+        confirmation,
+        migrate_files,
+    )
 }
 
 /// Copy configuration only. The destination keeps its own database namespace,
@@ -831,15 +766,7 @@ async fn open_excel_output_directory(
         .map_err(|error| format!("无法打开 Excel 输出目录：{error}"))
 }
 
-struct ExcelSnapshot {
-    file_rule: file_rules::Rule,
-    settings: excel::Settings,
-    provider: ai::Provider,
-    content: String,
-    source_revision: String,
-    start: String,
-    end: String,
-}
+type ExcelSnapshot = excel::Snapshot;
 
 /// Read only the selected workspace reports for the Excel AI preview.
 /// Keep empty days in the selected range while reading only available reports.
@@ -849,67 +776,15 @@ fn excel_snapshot(
     dates: &[String],
     workspace_path: &str,
 ) -> Result<ExcelSnapshot, String> {
-    summary::validate_workspace(workspace.root(), workspace_path)?;
-    let (start, end) = excel::validate_dates(dates)?;
-    if !stored.excel.enabled {
-        return Err("请先在设置中启用 Excel 输出".into());
-    }
-    validate_excel_settings(&stored.excel, &stored.ai)?;
-    let provider = ai::default_provider(&stored.ai)?;
     let entries = workspace.list()?;
-    let mut selected = dates.to_vec();
-    selected.sort();
-    selected.dedup();
-    let mut reports = Vec::new();
-    let mut sources = Vec::new();
-    let mut content_bytes = 0;
-    for date in &selected {
-        let Some(entry) = entries.iter().find(|entry| entry.date == *date) else {
-            sources.push(serde_json::json!({ "date": date, "report": null }));
-            continue;
-        };
-        let document = workspace.read(date, entry.format)?;
-        sources.push(serde_json::json!({
-            "date": document.date, "format": document.format, "content": document.content,
-        }));
-        if document.content.trim().is_empty() {
-            continue;
-        }
-        content_bytes += document.content.len();
-        if content_bytes > 500_000 {
-            return Err("所选日报内容超过 500 KB，请缩小范围后重试".into());
-        }
-        reports.push(serde_json::json!({
-            "date": document.date,
-            "format": document.format,
-            "content": document.content,
-        }));
-    }
-    if reports.is_empty() {
-        return Err("所选日期没有可输出的日报内容".into());
-    }
-    let content = serde_json::to_string(&serde_json::json!({
-        "selectedDates": selected,
-        "start": start,
-        "end": end,
-        "reports": reports,
-    }))
-    .map_err(|_| "无法准备 Excel 输出内容")?;
-    if content.len() > 500_000 {
-        return Err("所选日报内容超过 500 KB，请缩小范围后重试".into());
-    }
-    Ok(ExcelSnapshot {
-        file_rule: file_rules::effective(&stored).excel,
-        settings: stored.excel,
-        provider,
-        content,
-        source_revision: {
-            use sha2::{Digest, Sha256};
-            format!("{:x}", Sha256::digest(serde_json::to_vec(&sources).map_err(|_| "无法检查 Excel 日报内容")?))
-        },
-        start,
-        end,
-    })
+    excel::build_snapshot_with_reader(
+        workspace.root(),
+        workspace_path,
+        stored,
+        dates,
+        &entries,
+        |date, format| workspace.read(date, format),
+    )
 }
 
 /// Apply one request's prompt to an in-memory snapshot, retaining the saved settings for confirmation checks.
@@ -944,23 +819,7 @@ fn excel_content_snapshot(
 
 /// Only the reviewed text and date context are exposed to the workbook-filling pass.
 fn excel_confirmed_content(dates: &[String], content: &str) -> Result<String, String> {
-    if content.trim().is_empty() || content.len() > 500_000 {
-        return Err("请确认需要填充的 Excel 内容，正文不能为空或超过 500 KB".into());
-    }
-    let (start, end) = excel::validate_dates(dates)?;
-    let mut selected = dates.to_vec();
-    selected.sort();
-    selected.dedup();
-    let payload = serde_json::to_string(&serde_json::json!({
-        "selectedDates": selected,
-        "start": start,
-        "end": end,
-        "confirmedContent": content,
-    })).map_err(|_| "无法准备已确认的 Excel 内容")?;
-    if payload.len() > 500_000 {
-        return Err("已确认的 Excel 内容超过 500 KB，请精简内容后重试".into());
-    }
-    Ok(payload)
+    excel::confirmed_content(dates, content)
 }
 
 #[tauri::command]
@@ -1061,31 +920,19 @@ async fn prepare_excel(
 
 fn validate_excel_confirmation(
     workspace: &mut Workspace,
-    mut stored: settings::StoredSettings,
+    stored: settings::StoredSettings,
     workspace_path: &str,
     provenance: &excel::Provenance,
 ) -> Result<(), String> {
-    let regenerate = |reason: String| format!("{reason}。请重新生成 Excel 预览");
-    if workspace_path != provenance.workspace_path {
-        return Err("工作空间已切换，请重新生成 Excel 预览".into());
-    }
-    summary::validate_workspace(workspace.root(), workspace_path).map_err(regenerate)?;
-    if stored.excel != provenance.settings {
-        return Err("Excel 输出设置已修改，请重新生成 Excel 预览".into());
-    }
-    if let Some(prompt) = &provenance.prompt {
-        stored.excel.prompt = prompt.clone();
-    }
-    let current = excel_snapshot(workspace, stored, &provenance.dates, workspace_path).map_err(regenerate)?;
-    if current.source_revision != provenance.source_revision {
-        return Err("所选日报内容已修改，请重新生成 Excel 预览".into());
-    }
-    let fingerprint = excel::template_fingerprint(std::path::Path::new(provenance.settings.template_path.trim()))
-        .map_err(regenerate)?;
-    if fingerprint != provenance.template_fingerprint {
-        return Err("Excel 模板已修改，请重新生成 Excel 预览".into());
-    }
-    Ok(())
+    let entries = workspace.list()?;
+    excel::validate_confirmation_with_reader(
+        workspace.root(),
+        stored,
+        workspace_path,
+        provenance,
+        &entries,
+        |date, format| workspace.read(date, format),
+    )
 }
 
 #[tauri::command]
@@ -1788,14 +1635,14 @@ mod excel_integration_tests {
     fn enabling_excel_requires_a_valid_default_ai() {
         let root = tempfile::tempdir().unwrap();
         let mut stored = configured_settings(root.path());
-        assert!(validate_excel_settings(&stored.excel, &stored.ai).is_ok());
+        assert!(workreport_core::settings::validate_excel_settings(&stored.excel, &stored.ai).is_ok());
         stored.ai.default_provider_id = None;
-        let error = validate_excel_settings(&stored.excel, &stored.ai).unwrap_err();
+        let error = workreport_core::settings::validate_excel_settings(&stored.excel, &stored.ai).unwrap_err();
         assert!(error.contains("默认 AI"));
         stored.excel.enabled = false;
         stored.excel.template_path.clear();
         stored.excel.prompt.clear();
-        assert!(validate_excel_settings(&stored.excel, &stored.ai).is_ok());
+        assert!(workreport_core::settings::validate_excel_settings(&stored.excel, &stored.ai).is_ok());
     }
 
     #[test]

@@ -45,7 +45,7 @@ pub struct Entry {
     pub filename: String,
     pub format: Format,
 }
-#[derive(Serialize)]
+#[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FileNode {
     /// 相对工作空间根目录的路径，用 `/` 分隔（根目录项不含前缀）。
@@ -337,9 +337,9 @@ impl Workspace {
     fn record_history_with_mode(&self, date: &str, format: Format, content: &str, automatic: bool) {
         let limit = self.database_settings.history_limit_bytes;
         let record = if automatic { crate::history::record_automatic } else { crate::history::record };
-        if let Err(error) = record(self.root(), date, format, content, limit) {
+        if let Err(_error) = record(self.root(), date, format, content, limit) {
             #[cfg(debug_assertions)]
-            eprintln!("[history] {error}");
+            eprintln!("[history] {_error}");
         }
     }
     pub fn checkpoint_history(&self, date: &str, format: Format) -> Result<(), String> {
@@ -739,7 +739,7 @@ const BACKUP_PENDING: &str = ".workreport-backup-pending";
 const BACKUP_WARNING: &str = "日报文件已保存，但数据库备份尚未完成。请在数据存储设置中重试备份。";
 
 impl Workspace {
-    fn database_only(&self) -> bool {
+    pub(super) fn database_only(&self) -> bool {
         self.database_settings.enabled && self.database_settings.mode == Mode::Database
     }
 
@@ -762,13 +762,20 @@ impl Workspace {
             .map_err(|error| format!("无法访问日报数据库：{error}。请进入数据存储设置修复连接。"))
     }
 
-    fn database_record(&self, date: &str) -> Result<Option<JournalRecord>, String> {
+    pub(super) fn database_record(&self, date: &str) -> Result<Option<JournalRecord>, String> {
         valid_date(date)?;
         let database = self.connected_database()?;
         database::run_blocking(|| database.read(date))
     }
 
-    fn journal_filename(&self, date: &str, format: Format) -> Result<String, String> {
+    pub(super) fn preview_database_entry(&self, date: &str) -> Result<String, String> {
+        let record = self
+            .database_record(date)?
+            .ok_or("数据库中没有这一天的日报，请刷新后重试")?;
+        Ok(preview_text(&record.content))
+    }
+
+    pub(super) fn journal_filename(&self, date: &str, format: Format) -> Result<String, String> {
         file_rules::render_filename(&self.file_settings.journal, &file_rules::Context::journal(date)?, format.extension())
     }
 
@@ -1036,6 +1043,21 @@ impl Workspace {
         let document = self.create_file_with_content(date, format, content)?;
         self.record_history(date, format, content);
         Ok(self.backup_document(document, was_pending))
+    }
+
+    pub(super) fn create_database_strict(
+        &mut self,
+        date: &str,
+        format: Format,
+        content: &str,
+        automatic: bool,
+    ) -> Result<Document, String> {
+        valid_date(date)?;
+        let database = self.connected_database()?;
+        let record = JournalRecord::new(date, format, content);
+        database::run_blocking(|| database.save(&record, None))?;
+        self.record_history_with_mode(date, format, content, automatic);
+        self.document_from_record(record)
     }
 
     pub fn save(&mut self, date: &str, format: Format, content: &str, expected_revision: &str) -> Result<Document, String> {

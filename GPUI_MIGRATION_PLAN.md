@@ -4,11 +4,10 @@
 
 ## 当前检查点
 
-本次保存位于 `feature-gpui`，阶段 2 仍在推进。共享核心抽离、GPUI 工作空间恢复、新建/编辑/自动保存、范围预览、历史浏览、周/月/年日历、拖动选择、农历、节假日与摘要已实现。当前默认发行入口仍为 Vue/Tauri。
+本次保存位于 `feature-gpui`，**阶段 2 与阶段 3 核心模块已全部迁移完成**（含工作空间欢迎引导页、`AppToolbar`、`AppRail` 及 12 套原版皮肤映射），并已推进**阶段 4 更新合同、打包元数据与旧版 Tauri 本机状态迁移落地**。阶段 3 覆盖数据概览与热力图、工作空间目录/文件编辑/回收站/全屏全文搜索、AI 模型配置/润色对比、直接汇总与 AI 总结导出、Excel 两阶段输出、多仓库 Git 工作台、全局与工作空间设置弹窗（含兼容 Vue 版的 JSON 备份与恢复、Git/GitHub CLI 环境检测、**更新渠道与旧版 Tauri 本机状态迁移**）、编辑器「引入上篇」「插入模板」快捷操作、以及块级所见即所得富文本 Markdown 编辑器。当前默认发行入口仍为 Vue/Tauri。
 
-- 最近验证通过 75 项 GPUI 测试、303 项共享核心测试、50 项 Tauri 测试及 1,086 项前端测试。macOS 调试原型包构建和本地签名校验通过。
-- 下一步先完成基础分栏和布局状态，再接历史 Diff/还原与仅数据库模式，随后按阶段 3 迁移其余工作台模块。
-- 真实年度联网下载、原生窗口视觉复核、系统输入法及屏幕阅读器实机验收仍待完成。Windows/Linux 编译工作流已配置，等待托管 CI 执行。
+- 最近验证通过 107 项 GPUI 测试（0 warnings）、310 项共享核心测试（0 warnings）、50 项 Tauri 库测试、以及前端完整校验（`npm run lint`、`npm run format:check`、`npm run build`、87 文件 / 1086 项 `vitest` 测试）。macOS 调试与 Release 原型包（[WorkReport GPUI Prototype.app](src-gpui/target/bundle/macos/WorkReport%20GPUI%20Prototype.app)）构建、`plutil -lint` 与 `codesign --verify --strict` 本地签名校验通过。
+- 下一步阶段 4 实机发布验收：在构建环境安装 `cargo-packager` 生成生产安装包并验证 Tauri 客户端真实升级与回退、真实年度节假日联网下载、真实 AI/GitHub CLI 联网调用、原生窗口视觉与系统输入法/屏幕阅读器实机验收。Windows/Linux 编译工作流已配置，等待托管 CI 执行。
 
 ## 技术路线
 
@@ -86,4 +85,26 @@
 - 回归扩展至 53 项 GPUI 测试，其中新增 5 项状态测试及 10 项原生事件测试，验证全年滚动、十一月首帧定位、跨视图日期同步、范围替换、取消和原文保真。
 - 已接入农历、休息/补班标记、周末样式及已有日报摘要。农历月初显示简体月名并保留闰月，支持范围外安全省略。周/月可见日期的摘要在后台使用共享核心的 16 KiB/80 Unicode 字符规则，年图不读取全年文件；保存及窗口重新激活后刷新，使用工作空间实例、请求编号和保存版本拒绝过期结果。当天标记在跨日和窗口激活时刷新，不移动原有选区。 [农历](src-gpui/src/lunar.rs) · [只读摘要](src-tauri/core/src/workspace_preview.rs) · [后台状态](src-gpui/src/calendar_details.rs)
 - 放假信息沿用共享核心的校验、手动同步与失败保留规则。启动只读优先原型缓存、缺失时回退旧版；首次显式同步前原子导入全部有效旧年度，写入仅限原型配置目录。新版年度通知优先覆盖前一年十二月，同步年度为权威，不复活旧离线日期。坏缓存与网络错误独立显示，不覆盖日报状态或选区。Vue 与 GPUI 现共用同一份离线安排，GPUI 沿用旧版代理配置。 [放假信息适配](src-gpui/src/calendar_holidays.rs) · [共享离线数据](shared/calendar/holidays.json)
-- 本轮 75 项 GPUI 测试全部通过，覆盖农历边界、旧年度导入、缓存错误、同步去重与失败重试、过期加载、快速切换和保存后的摘要刷新。共享核心 303 项及 Tauri 50 项测试继续通过，Vue 的规范检查、构建及 1,086 项测试通过。联网下载使用离线响应验证，尚未执行真实年度下载；分栏拖放、历史 Diff/还原及仅数据库模式仍待迁移。
+- 本轮 75 项 GPUI 测试全部通过，覆盖农历边界、旧年度导入、缓存错误、同步去重与失败重试、过期加载、快速切换和保存后的摘要刷新。共享核心 303 项及 Tauri 50 项测试继续通过，Vue 的规范检查、构建及 1,086 项测试通过。联网下载使用离线响应验证，尚未执行真实年度下载。
+- 已完成基础分栏与布局状态：支持左/右停靠模块栏、旧布局（`axis`/`order`/`columns`/`modules`/`editor-<n>`）迁移、标题栏拖放分栏/间隙插入/边缘移入、拖拽调整分栏比例、最大化/还原、紧凑写作预设、命名布局管理、皮肤切换（沿用外观 `rail` 停靠）及串行原子写回 `workreport.json`（不改写只读浏览时的旧文件）。其余工作台模块当前在面板内显示阶段 3 占位提示。[布局模型](src-gpui/src/layout.rs) · [分栏面板](src-gpui/src/module_board.rs)
+- 已完成历史 Diff/还原：在共享核心的快照读取与编辑会话基础上，实现 Myers 行级 Diff、并排/逐行视图弹窗、对比目标切换（当前最新内容或其余历史快照）、快照复制及带二次确认和冲突拦截的还原逻辑（浏览态直接落盘，编辑态同步草稿且阻塞未落盘冲突）。[行级 Diff](src-gpui/src/line_diff.rs) · [历史对比弹窗](src-gpui/src/history_diff.rs)
+- 已完成仅数据库模式（`Mode::Database`）核心会话打通：新增 `WorkspaceSession` 统一文件/双存储只读预览与仅数据库读写会话（保留 `WorkspacePreview` 对 `Mode::Database` 的拒绝语义），扩展 `JournalEdit` 支持数据库新建、保存、自动保存防抖、历史快照记录及外部 revision 冲突拦截，界面工具栏标注「仅数据库模式」。[会话封装](src-tauri/core/src/workspace_preview.rs) · [编辑会话](src-tauri/core/src/journal_edit.rs)
+- 本轮验证扩展至 88 项 GPUI 测试（含分栏布局、历史 Diff/还原与 SQLite 仅数据库端到端测试）与 306 项共享核心测试，50 项 Tauri 测试继续通过，macOS 调试原型包构建及本地签名校验通过。
+
+## 阶段 3 执行记录
+
+- 已完成数据概览模块：接入今日日报状态与放假/调休标记、本周/本月/本年日报统计与连续记录天数、近 365/90/30/7/1 天按字数着色的热力图；通过 `WorkspaceSession::daily_activity` 后台懒加载字数，点击热力图格子直接跳转对应日期日报。[概览模块](src-gpui/src/overview.rs)
+- 已完成工作空间目录与全局全文搜索：实现目录树展开/折叠、文件夹优先排序、新建文件/目录、重命名、回收站（`.trash`）删除预览与恢复；点击非日报文本/Markdown 文件直接在编辑器内打开编辑与冲突检测保存，点击 `.csv`/`.xls`/`.xlsx` 提供多工作表只读表格预览；支持面板内即时检索与全屏全局搜索弹窗。[目录与搜索](src-gpui/src/directory.rs)
+- 已完成 AI 配置、日报润色与总结导出模块：实现 AI 设置弹窗（OpenAI 兼容 HTTP、Anthropic 与本机 CLI 探测、模型拉取、连通性测试及原子保存至 `workreport.json`，缺失时读取旧版配置回退）、编辑器「AI 润色」并排/逐行差异对比弹窗，以及「总结」模块的直接编号汇总、AI 总结（支持 `CancellationToken` 取消）和导出为 `.md`/`.txt`（保留直接汇总格式、导出 `.txt` 自动清洗 AI Markdown 语法）。[AI 配置与润色](src-gpui/src/ai_panel.rs) · [总结与导出](src-gpui/src/summary_view.rs)
+- 已完成原版视觉对齐：从 `src/skins.css` 抽离 12 套皮肤调色板（[主题调色板](src-gpui/src/theme_skin.rs)），还原工作空间欢迎引导页（`WorkspaceGate`）、精简顶部工具栏（`W` 标识、工作空间切换、问候语、`⌘K` 搜索、`⌘/` 快捷键弹窗）、紧凑图标 `AppRail` 及 Islands 卡片分层。
+- 已完成 Excel 两阶段输出模块：接入 `workreport-core` 的 `excel::Snapshot` 与确认签名校验，实现「生成可核对正文（阶段 1）→ 人工微调 → 读取 `.xlsx` 模板生成填表预览（阶段 2）→ 校验 `Provenance` 后导出而不覆盖已有文件」，并提供已导出工作表只读预览。[Excel 视图](src-gpui/src/excel_view.rs) · [Excel 共享核心](src-tauri/core/src/excel.rs)
+- 已完成多仓库 Git 工作台：支持多仓库切换、工作区状态分组与单/批量暂存/取消暂存/丢弃、提交/修正/撤回、AI 生成提交说明（脱敏 `sanitize_diff_for_ai`）、分支创建/切换/快进合并/删除、Stash 管理、提交历史搜索分页、文件及提交 Diff 查看、按源保留并内联输入 HTTP 凭据的 Fetch/ff-only Pull/Push，以及「提交转日报」自动追加至当日日报。[Git 工作台](src-gpui/src/git_view.rs)
+- 已完成全局与工作空间设置弹窗：通过统一设置入口覆盖外观与导航停靠/缩放实时预览及未保存离开确认、文件规则及迁移计划预览确认、SQLite/MySQL/PostgreSQL 存储模式测试与文件↔数据库复制迁移、编辑器默认日报模板与变量插值自动填充、节假日同步与本机网络代理、总结目录、Excel 模板及双阶段提示词、Git 仓库管理，并在事务保存 `workreport.json` 后自动刷新全部模块。[设置界面](src-gpui/src/settings_view.rs)
+- 已完成块级所见即所得（WYSIWYG）Markdown 编辑器：提供「源码 + 预览」与「富文本块编辑」双向同步模式及格式化工具栏（H1–H3、加粗、斜体、行内代码、无序/待办交互勾选、引用、表格行列增删与块顺序调整），完整保留 YAML Frontmatter、原始 HTML、引用链接与带链接图片原文。[块级富文本编辑](src-gpui/src/rich_editor.rs)
+- 本轮验证扩展至 102 项 GPUI 测试（含工作空间备份导出与还原规划/覆盖/跳过测试、编辑器「引入上篇」「插入模板」快捷操作、Git `gh CLI` 凭据授权与环境检测、Excel 两阶段输出、真实本地+裸仓库 Git 工作台全流程、全局设置与模板应用、块级富文本往返及交互测试）、306 项共享核心测试、50 项 Tauri 库测试，以及前端 `eslint`、`vue-tsc && vite build` 与 87 文件 / 1086 项 `vitest` 测试；macOS 调试及 Release 原型包（`--release --bundle-only`）构建与 `plutil -lint` / `codesign --verify --strict` 本地签名校验全部通过。
+
+## 阶段 4 执行记录
+
+- 已抽出共享更新合同与渠道引擎：复用 `main`/`dev` 发布选择逻辑、支持 Tauri 与 `cargo-packager` 双格式清单（`signature`/`url`/可选 `format`）、严格拒绝空签名与未确认跨渠道降级，并通过本机回环 HTTP 服务与 `workreport_core::network` 代理集成测试。[共享更新模块](src-tauri/core/src/updates.rs)
+- 已在设置弹窗接入「更新与迁移」面板与旧版 Tauri（`com.workreport.desktop`）本机状态无损导入：支持持久化切换 `main`/`dev` 渠道与跨渠道回退确认、后台检查更新清单与手动下载页跳转、原子导入最近工作空间/全局 AI/代理/更新渠道与节假日年份缓存（不改动旧版目录），并在 [GPUI 清单](src-gpui/Cargo.toml) 补充 `[package.metadata.packager]` 跨平台打包元数据。[设置视图](src-gpui/src/settings_view.rs)
+- 阶段 4 本轮复核通过 107 项 GPUI 测试（含设置侧边栏实时搜索与 AI 模型配置直达、切换工作空间同步设置确认弹窗 `WorkspaceSwitchDialog` 与 `sync_workspace_settings`、启动后台更新检查与顶部更新提示徽章、`UpdateDialog` 发布说明弹窗、`⌘,` / `Ctrl+,` 与完整原生菜单项、Git 会话 HTTP 凭据清理、模块标题栏直达设置、GitHub CLI `--web` 设备授权码解析与网页登录流程、更新渠道切换持久化与旧版 `com.workreport.desktop` 本机状态迁移测试）、310 项共享核心测试（0 warnings）、50 项 Tauri 库测试，以及新版 GPUI Release `.app` 构建与 `plutil -lint` / `codesign --verify --strict` 本地签名校验。`cargo-packager` 安装包实测、GitHub Actions Windows/Linux 托管 CI 与真机联网/输入法/VoiceOver 验收待实机与发布环境执行。

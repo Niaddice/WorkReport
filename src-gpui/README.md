@@ -1,6 +1,6 @@
 # WorkReport GPUI 原型
 
-原型有两个入口。「编辑样本」用于检查中文、emoji、表格与 Markdown 保真，样本草稿只保存在内存中。「浏览工作空间」通过与 Tauri 共用的 `workreport-core` 打开本地 Markdown/TXT 日报，按日期查看正文和历史快照。点击「编辑日报」进入编辑，停笔 650 毫秒后自动保存，也可手动保存。双存储沿用本地文件优先和数据库备份规则，仅数据库模式暂由 Tauri 处理。 [迁移计划](../GPUI_MIGRATION_PLAN.md) · [脱敏日报样本](../fixtures/gpui-migration/README.md)
+原型有两个入口。「编辑样本」用于检查中文、emoji、表格与 Markdown 保真，样本草稿只保存在内存中。「浏览工作空间」通过与 Tauri 共用的 `workreport-core` 打开本地 Markdown/TXT 日报（含文件、双存储及 SQLite/MySQL/PostgreSQL 仅数据库模式），按日期查看正文和历史快照。点击「编辑日报」进入编辑，停笔 650 毫秒后自动保存，也可手动保存。双存储沿用本地文件优先和数据库备份规则，仅数据库模式工具栏显示「仅数据库模式」且不生成本地日报文件。 [迁移计划](../GPUI_MIGRATION_PLAN.md) · [脱敏日报样本](../fixtures/gpui-migration/README.md)
 
 工作空间顶部可输入日期、选择 TXT 或 Markdown 后新建日报。默认日期为本机今天，格式沿用工作空间设置。空白草稿在首次非空保存前保持在内存中，保存后显示在日期列表，文件路径遵循现有目录和命名规则。选择已有日期会打开原日报。
 
@@ -54,4 +54,4 @@ cp -R fixtures/gpui-migration/workspace "$fixture_copy/"
 
 单元格验证只针对第一个顶层表格的首个正文纯文本单元格。实现用 Markdown AST 定位 UTF-8 字节范围，替换后重新解析，保留范围外的原文。后续富文本实现还需解决多单元格编辑、结构变更、跨块选区、各块间的撤销，以及原生预览与编辑之间的滚动定位。
 
-分栏拖放、历史 Diff/还原和仅数据库模式仍待迁移。Windows 和 Linux 的编译检查由 [GPUI 原型工作流](../.github/workflows/gpui-prototype.yml) 执行。签名升级包、已安装 Tauri 客户端升级和回退验收在正式切换前完成。
+已对齐原版桌面外观（工作空间欢迎引导页、`AppToolbar`、`⌘K` 全局搜索与 `⌘/` 快捷键面板、紧凑图标 `AppRail` 及 12 套原版皮肤），并完整迁移全部 8 个工作台模块与设置能力：可缩放分栏与拖放布局/预设、历史 Diff/还原、数据概览与 365 天热力图、工作空间目录/文件编辑/回收站/多表预览、AI 配置/润色对比与直接/AI 总结导出、Excel 两阶段正文核对与 `.xlsx` 填表预览导出、多仓库 Git 状态/提交/分支/Stash/Diff/快进拉推与 `gh CLI` 授权及提交转日报、全局设置弹窗（含数据库迁移、文件规则迁移预览、兼容 Vue 版的 JSON 备份导出/恢复、Git/GitHub CLI 环境检测、节假日与本机代理、编辑器默认模板、以及 `main`/`dev` 更新检查与旧版 `com.workreport.desktop` 本机状态无损导入），以及支持「引入上篇」「插入模板」与「源码 + 预览」/「富文本块编辑」双向切换且保留 YAML Frontmatter/HTML/引用链接/带链接图片原文的 Markdown 编辑器。已在 [Cargo.toml](Cargo.toml) 配置 `[package.metadata.packager]` 元数据；Windows 和 Linux 的编译检查由 [GPUI 原型工作流](../.github/workflows/gpui-prototype.yml) 执行。`cargo-packager` 签名安装包、已安装 Tauri 客户端升级、实机联网/输入法及回退验收将在阶段 4 发布环境继续完成。
